@@ -1256,6 +1256,7 @@ export const ar: TranslationResources = {
   },
   newWorkspace: {
     title: "مساحة عمل جديدة",
+    roleTitle: "{{role}} جديد",
     create: "يخلق",
     isolation: {
       local: "محلي",

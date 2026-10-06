@@ -1270,6 +1270,7 @@ export const ja: TranslationResources = {
   },
   newWorkspace: {
     title: "新しいワークスペース",
+    roleTitle: "新しい {{role}}",
     create: "作成",
     isolation: {
       local: "ローカル",

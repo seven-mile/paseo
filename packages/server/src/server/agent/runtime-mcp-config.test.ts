@@ -20,6 +20,7 @@ describe("withRuntimePaseoMcpServer", () => {
     expect(result.mcpServers?.paseo).toEqual({
       type: "http",
       url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
+      alwaysLoad: true,
       headers: { Authorization: "Bearer cap-token" },
     });
   });
@@ -35,6 +36,7 @@ describe("withRuntimePaseoMcpServer", () => {
     expect(result.mcpServers?.paseo).toEqual({
       type: "http",
       url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
+      alwaysLoad: true,
     });
   });
 
@@ -44,6 +46,24 @@ describe("withRuntimePaseoMcpServer", () => {
       agentId: "agent-1",
       mcpBaseUrl: null,
       mcpAuthToken: "cap-token",
+    });
+
+    expect(result.mcpServers).toBeUndefined();
+  });
+});
+
+describe("stripInternalPaseoMcpServer", () => {
+  test("removes the retired Swarm gateway before native injection", async () => {
+    const { stripInternalPaseoMcpServer } = await import("./runtime-mcp-config.js");
+    const result = stripInternalPaseoMcpServer({
+      ...BASE_CONFIG,
+      mcpServers: {
+        "paseo-swarm": {
+          type: "http",
+          url: "http://127.0.0.1:6800/mcp?token=legacy-token",
+          alwaysLoad: true,
+        },
+      },
     });
 
     expect(result.mcpServers).toBeUndefined();

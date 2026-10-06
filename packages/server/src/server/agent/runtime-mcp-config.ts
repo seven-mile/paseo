@@ -10,12 +10,21 @@ export function stripInternalPaseoMcpServer(config: AgentSessionConfig): AgentSe
   }
 
   const paseoServer = mcpServers[PASEO_MCP_SERVER_NAME];
-  if (!paseoServer || !isInternalPaseoMcpServer(paseoServer)) {
+  const legacySwarmServer = mcpServers["paseo-swarm"];
+  if (
+    (!paseoServer || !isInternalPaseoMcpServer(paseoServer)) &&
+    (!legacySwarmServer || !isLegacySwarmMcpServer(legacySwarmServer))
+  ) {
     return config;
   }
 
   const nextMcpServers = { ...mcpServers };
-  delete nextMcpServers[PASEO_MCP_SERVER_NAME];
+  if (paseoServer && isInternalPaseoMcpServer(paseoServer)) {
+    delete nextMcpServers[PASEO_MCP_SERVER_NAME];
+  }
+  if (legacySwarmServer && isLegacySwarmMcpServer(legacySwarmServer)) {
+    delete nextMcpServers["paseo-swarm"];
+  }
 
   const next = { ...config };
   if (Object.keys(nextMcpServers).length > 0) {
@@ -48,6 +57,7 @@ export function withRuntimePaseoMcpServer(params: {
       [PASEO_MCP_SERVER_NAME]: {
         type: "http",
         url: `${params.mcpBaseUrl}?callerAgentId=${params.agentId}`,
+        alwaysLoad: true,
         ...(params.mcpAuthToken
           ? { headers: { Authorization: `Bearer ${params.mcpAuthToken}` } }
           : {}),
@@ -64,6 +74,19 @@ function isInternalPaseoMcpServer(config: McpServerConfig): boolean {
 
   try {
     return new URL(config.url).pathname === PASEO_MCP_PATHNAME;
+  } catch {
+    return false;
+  }
+}
+
+function isLegacySwarmMcpServer(config: McpServerConfig): boolean {
+  if (config.type !== "http" && config.type !== "sse") {
+    return false;
+  }
+
+  try {
+    const url = new URL(config.url);
+    return url.pathname === "/mcp" && url.searchParams.has("token");
   } catch {
     return false;
   }

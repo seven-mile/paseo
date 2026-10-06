@@ -135,6 +135,7 @@ export interface PaseoToolHostDependencies {
   ) => Promise<string>;
   browserToolsEnabled?: boolean;
   browserToolsBroker?: BrowserToolsBroker | null;
+  invokePlugin?: (pluginId: string, method: string, input: unknown) => Promise<unknown>;
   paseoToolPolicy?: ProviderPaseoToolsPolicy;
   paseoHome?: string;
   worktreesRoot?: string;
@@ -560,7 +561,9 @@ function resolveTerminalKeyToken(key: string, literal: boolean): string {
   }
 }
 
-export function createPaseoToolCatalog(options: PaseoToolHostDependencies): PaseoToolCatalog {
+export async function createPaseoToolCatalog(
+  options: PaseoToolHostDependencies,
+): Promise<PaseoToolCatalog> {
   const {
     agentManager,
     agentStorage,
@@ -592,6 +595,17 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
   };
 
   const tools = new Map<string, PaseoToolDefinition>();
+  let swarmRole: "planner" | "supervisor" | "worker" | null = null;
+  const swarmBypassTools = new Set(["create_agent", "send_agent_prompt"]);
+  const workerManagementTools = new Set([
+    "create_workspace",
+    "archive_workspace",
+    "archive_agent",
+    "kill_agent",
+    "update_agent",
+    "cancel_agent",
+    "create_schedule",
+  ]);
   const registerTool = (
     name: string,
     config: PaseoToolConfig,
@@ -599,6 +613,12 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     handler: (input: any, context: PaseoToolExecutionContext) => Promise<PaseoToolResult>,
   ) => {
     if (!isPaseoToolEnabled(options.paseoToolPolicy, name)) {
+      return;
+    }
+    if (swarmRole && swarmBypassTools.has(name)) {
+      return;
+    }
+    if (swarmRole === "worker" && workerManagementTools.has(name)) {
       return;
     }
     tools.set(name, {
@@ -610,6 +630,189 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       handler: handler as PaseoToolDefinition["handler"],
     });
   };
+  const invokePlugin = options.invokePlugin;
+  if (invokePlugin) {
+    swarmRole = await (async (): Promise<"planner" | "supervisor" | "worker" | null> => {
+      if (!callerAgentId) return null;
+      try {
+        const board = (await invokePlugin("paseo-swarm", "swarm.board.read", {})) as {
+          agents?: Array<{
+            paseoAgentId: string;
+            roleClass: "planner" | "supervisor" | "worker";
+            retired: boolean;
+          }>;
+        };
+        return (
+          board.agents?.find(
+            (candidate) => candidate.paseoAgentId === callerAgentId && !candidate.retired,
+          )?.roleClass ?? null
+        );
+      } catch {
+        return null;
+      }
+    })();
+    if (!swarmRole) {
+      // An unregistered Paseo agent must not receive Swarm tools, even if it can
+      // reach the native catalog.
+    } else {
+      const readSwarm = async () => {
+        if (!callerAgentId) throw new Error("Swarm tools require an agent caller");
+        const board = (await invokePlugin("paseo-swarm", "swarm.board.read", {})) as {
+          agents?: Array<{
+            paseoAgentId: string;
+            qualifiedName?: string;
+            name: string;
+            retired: boolean;
+            workspaceId: string | null;
+          }>;
+        };
+        const actor = board.agents?.find(
+          (candidate) => candidate.paseoAgentId === callerAgentId && !candidate.retired,
+        );
+        if (!actor) throw new Error(`Unknown active Swarm agent: ${callerAgentId}`);
+        return { board, actor, name: actor.qualifiedName ?? actor.name };
+      };
+      const invokeSwarm = async (method: string, input: Record<string, unknown>) => {
+        const { name } = await readSwarm();
+        return invokePlugin("paseo-swarm", method, { ...input, actorName: name });
+      };
+      const swarmResult = (value: unknown): PaseoToolResult => ({
+        content: [{ type: "text", text: JSON.stringify(value) }],
+        structuredContent: value,
+      });
+      registerTool(
+        "swarm_board_read",
+        { description: "Read the current Swarm tasks, activities, and named agents." },
+        async () => {
+          await readSwarm();
+          return swarmResult(await invokePlugin("paseo-swarm", "swarm.board.read", {}));
+        },
+      );
+      if (swarmRole !== "worker") {
+        registerTool(
+          "swarm_agent_create",
+          {
+            description:
+              "Create a named child through Swarm. Planners create supervisors; supervisors create workers.",
+            inputSchema: {
+              name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+              role: z.string().min(1),
+              provider: z.string().min(1),
+              brief: z.string().min(1),
+              title: z.string().optional(),
+            },
+          },
+          async (input) => {
+            if (!callerAgentId) throw new Error("Swarm agent creation requires an agent caller");
+            const { actor, name } = await readSwarm();
+            const roleClass = swarmRole === "planner" ? "supervisor" : "worker";
+            return swarmResult(
+              await invokePlugin("paseo-swarm", "swarm.agent.create", {
+                ...input,
+                roleClass,
+                actorPaseoAgentId: callerAgentId,
+                reportsTo: name,
+                workspaceId: roleClass === "worker" ? actor.workspaceId : null,
+              }),
+            );
+          },
+        );
+        registerTool(
+          "swarm_task_create",
+          {
+            description: "Create a Swarm task managed by the calling planner or supervisor.",
+            inputSchema: {
+              id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+              title: z.string().min(1),
+              brief: z.string().min(1),
+              status: z.string().min(1),
+              workerNames: z.array(z.string()).optional(),
+              data: z.record(z.string(), z.unknown()).optional(),
+            },
+          },
+          async (input) => {
+            const { name } = await readSwarm();
+            return swarmResult(
+              await invokePlugin("paseo-swarm", "swarm.task.create", {
+                ...input,
+                managerName: name,
+                createdBy: name,
+                workerNames: input.workerNames ?? [],
+                data: input.data ?? {},
+              }),
+            );
+          },
+        );
+        registerTool(
+          "swarm_task_update",
+          {
+            description: "Update a Swarm task owned by the calling planner or supervisor.",
+            inputSchema: {
+              taskId: z.string(),
+              status: z.string().min(1).optional(),
+              title: z.string().min(1).optional(),
+              brief: z.string().min(1).optional(),
+              data: z.record(z.string(), z.unknown()).optional(),
+            },
+          },
+          async (input) => swarmResult(await invokeSwarm("swarm.task.update", input)),
+        );
+        registerTool(
+          "swarm_activity_append",
+          {
+            description: "Append a manager activity to a Swarm task.",
+            inputSchema: {
+              taskId: z.string(),
+              kind: z.string().min(1),
+              body: z.string().min(1),
+              replyTo: z.string().nullable().optional(),
+              responseProfile: z.enum(["decision", "steering", "discussion"]).nullable().optional(),
+              data: z.record(z.string(), z.unknown()).optional(),
+            },
+          },
+          async (input) =>
+            swarmResult(
+              await invokeSwarm("swarm.activity.append", {
+                ...input,
+                replyTo: input.replyTo ?? null,
+                responseProfile: input.responseProfile ?? null,
+                data: input.data ?? {},
+              }),
+            ),
+        );
+      }
+      registerTool(
+        "swarm_message_send",
+        {
+          description: "Send an actionable message to a named Swarm agent.",
+          inputSchema: {
+            recipient: z.string().min(1),
+            body: z.string().min(1),
+            taskId: z.string().nullable().optional(),
+          },
+        },
+        async (input) => {
+          const { board, name } = await readSwarm();
+          const recipient = board.agents?.find(
+            (candidate) =>
+              !candidate.retired &&
+              (candidate.qualifiedName === input.recipient || candidate.name === input.recipient),
+          );
+          if (!recipient) throw new Error(`Unknown active Swarm agent: ${input.recipient}`);
+          return swarmResult(
+            await invokePlugin("paseo-swarm", "swarm.message.send", {
+              recipientPaseoAgentId: recipient.paseoAgentId,
+              recipientName: recipient.qualifiedName ?? recipient.name,
+              senderName: name,
+              actorName: name,
+              taskId: input.taskId ?? null,
+              body: input.body,
+            }),
+          );
+        },
+      );
+    }
+  }
   const toCatalog = (): PaseoToolCatalog => ({
     tools,
     getTool(name: string): PaseoToolDefinition | undefined {

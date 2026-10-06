@@ -14,7 +14,15 @@ import type { PressableStateCallbackType } from "react-native";
 import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
 import { createNameId } from "mnemonic-id";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Folder, FolderPlus, GitBranch, GitPullRequest } from "lucide-react-native";
+import {
+  ChevronDown,
+  FileText,
+  Folder,
+  FolderPlus,
+  GitBranch,
+  GitPullRequest,
+  Users,
+} from "lucide-react-native";
 import { Composer } from "@/composer";
 import { ComposerDock } from "@/composer/dock";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
@@ -25,6 +33,12 @@ import {
 import { HostStatusDot } from "@/components/host-status-dot";
 import { HostPicker } from "@/components/hosts/host-picker";
 import { ProjectIconView } from "@/components/project-icon-view";
+import { ProjectLeadingVisual } from "@/components/sidebar/project-leading-visual";
+import {
+  filterSwarmParents,
+  resolveSwarmParent,
+  type SwarmParentChoice,
+} from "@/swarm/parent-selection";
 import { Combobox, ComboboxItem } from "@/components/ui/combobox";
 import type { ComboboxOption as ComboboxOptionType, ComboboxProps } from "@/components/ui/combobox";
 import { ComboboxTrigger } from "@/components/ui/combobox-trigger";
@@ -87,6 +101,7 @@ import {
 } from "@/projects/host-projects";
 import { useProjectIcons } from "@/projects/icons";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
+import { EditingTextInput } from "@/components/ui/text-input";
 import type { ComposerAttachment } from "@/attachments/types";
 import { useDraftWorkspaceAttachmentScopeKey } from "@/attachments/workspace-attachments-store";
 import type { MessagePayload } from "@/composer/types";
@@ -184,12 +199,102 @@ function buildFirstAgentContext(input: {
   };
 }
 
+function resolveNewWorkspaceTitle(title: string | undefined, fallback: string): string {
+  return title ?? fallback;
+}
+
+export interface SwarmRoleChoice {
+  role: string;
+  title: string;
+  description: string;
+}
+
+export interface SwarmWorkspaceOptions {
+  roleClass: "planner" | "supervisor" | "worker";
+  roles: readonly SwarmRoleChoice[];
+  parents: readonly SwarmParentChoice[];
+  initialRole?: string;
+  initialParent?: string;
+  initialName?: string;
+  prepareAgent: (input: {
+    name: string;
+    role: string;
+    reportsTo: string | null;
+    brief: string;
+  }) => Promise<{ agentId: string; systemPrompt: string }>;
+  bindAgent: (input: { agentId: string; workspaceId: string }) => Promise<void>;
+}
+
+function useSwarmWorkspaceState(
+  options: SwarmWorkspaceOptions | undefined,
+  project: HostProjectListItem | null,
+  serverId: string,
+) {
+  const [role, setRole] = useState(options?.initialRole ?? options?.roles[0]?.role ?? "");
+  const [parent, setParent] = useState<string | null>(options?.initialParent ?? null);
+  const [name, setName] = useState(options?.initialName ?? options?.roleClass ?? "agent");
+  const parents = useMemo(
+    () =>
+      options
+        ? filterSwarmParents(
+            options.parents,
+            options.roleClass,
+            serverId,
+            project?.workspaceKeys ?? [],
+          )
+        : [],
+    [options, project, serverId],
+  );
+  const effectiveParent = resolveSwarmParent(parents, parent);
+  const form = useMemo(
+    () =>
+      options
+        ? {
+            roleClass: options.roleClass,
+            roles: options.roles,
+            parents,
+            role,
+            parent: effectiveParent,
+            name,
+            onRoleChange: setRole,
+            onParentChange: setParent,
+            onNameChange: setName,
+          }
+        : undefined,
+    [name, options, effectiveParent, parents, role],
+  );
+  const submission = useMemo(
+    () =>
+      options
+        ? {
+            prepareAgent: (input: Parameters<SwarmWorkspaceOptions["prepareAgent"]>[0]) => {
+              if (
+                options.roleClass !== "planner" &&
+                !parents.some((choice) => choice.name === input.reportsTo)
+              ) {
+                throw new Error("Choose a manager for the selected project and host.");
+              }
+              return options.prepareAgent(input);
+            },
+            role,
+            name,
+            reportsTo: effectiveParent,
+            brief: "",
+          }
+        : undefined,
+    [name, options, effectiveParent, parents, role],
+  );
+  return { form, submission, bindAgent: options?.bindAgent };
+}
+
 interface NewWorkspaceScreenProps {
   serverId: string;
   sourceDirectory?: string;
   projectId?: string;
   displayName?: string;
   draftId?: string;
+  title?: string;
+  swarm?: SwarmWorkspaceOptions;
 }
 
 // A terminal launch sends argv, not a message: there is nothing to attach and
@@ -697,6 +802,253 @@ function FormRow({ children }: { children: React.ReactNode }) {
   );
 }
 
+function SwarmDesktopFormRow({
+  swarm,
+  isPending,
+  badgePressableStyle,
+}: {
+  swarm: NewWorkspaceFormStackInput["swarm"];
+  isPending: boolean;
+  badgePressableStyle: React.ComponentProps<typeof Pressable>["style"];
+}) {
+  if (!swarm) return null;
+  return (
+    <View style={styles.formStackDesktop} pointerEvents="box-none">
+      <SwarmFormControls
+        input={swarm}
+        isPending={isPending}
+        badgePressableStyle={badgePressableStyle}
+      />
+    </View>
+  );
+}
+
+function SwarmFormControls({
+  input,
+  isPending,
+  badgePressableStyle,
+}: {
+  input: NewWorkspaceFormStackInput["swarm"];
+  isPending: boolean;
+  badgePressableStyle: React.ComponentProps<typeof Pressable>["style"];
+}) {
+  if (!input) return null;
+  return (
+    <SwarmFormControlsInner
+      input={input}
+      isPending={isPending}
+      badgePressableStyle={badgePressableStyle}
+    />
+  );
+}
+
+function SwarmFormControlsInner({
+  input,
+  isPending,
+  badgePressableStyle,
+}: {
+  input: NonNullable<NewWorkspaceFormStackInput["swarm"]>;
+  isPending: boolean;
+  badgePressableStyle: React.ComponentProps<typeof Pressable>["style"];
+}) {
+  const { theme } = useUnistyles();
+  const [openPicker, setOpenPicker] = useState<"role" | "parent" | null>(null);
+  const roleAnchorRef = useRef<View>(null);
+  const parentAnchorRef = useRef<View>(null);
+  const roleOptions = useMemo(
+    () => input.roles.map((choice) => ({ id: choice.role, label: choice.title })),
+    [input.roles],
+  );
+  const parentOptions = useMemo(
+    () => input.parents.map((choice) => ({ id: choice.name, label: choice.title })),
+    [input.parents],
+  );
+  const roleLabel =
+    input.roles.find((choice) => choice.role === input.role)?.title ?? input.role ?? "Role";
+  const parentLabel =
+    input.parents.find((choice) => choice.name === input.parent)?.title ??
+    (input.roleClass === "supervisor" ? "Choose planner" : "Choose supervisor");
+  const roleIcon = useMemo(
+    () => <FileText size={ICON_SIZE.sm} color={theme.colors.foregroundMuted} />,
+    [theme.colors.foregroundMuted],
+  );
+  const renderParentIcon = useCallback(
+    (parent: SwarmParentChoice | undefined) =>
+      input.roleClass === "supervisor" && parent ? (
+        <ProjectLeadingVisual
+          displayName={parent.displayName}
+          iconDataUri={null}
+          statusBucket={null}
+          projectViewKey={`swarm:${parent.paseoAgentId}`}
+          backdrop="surfaceSidebar"
+        />
+      ) : (
+        <Users size={ICON_SIZE.sm} color={theme.colors.foregroundMuted} />
+      ),
+    [input.roleClass, theme.colors.foregroundMuted],
+  );
+  const parentIcon = renderParentIcon(input.parents.find((choice) => choice.name === input.parent));
+  const renderOption = useCallback(
+    ({
+      option,
+      selected,
+      active,
+      onPress,
+    }: {
+      option: ComboboxOptionType;
+      selected: boolean;
+      active: boolean;
+      onPress: () => void;
+    }) => (
+      <ComboboxItem
+        label={option.label}
+        description={option.id}
+        selected={selected}
+        active={active}
+        disabled={isPending}
+        onPress={onPress}
+        leadingSlot={roleIcon}
+      />
+    ),
+    [isPending, roleIcon],
+  );
+  const handleRoleSelect = useCallback(
+    (value: string) => {
+      input.onRoleChange(value);
+      setOpenPicker(null);
+    },
+    [input],
+  );
+  const handleRoleOpenChange = useCallback(
+    (open: boolean) => setOpenPicker(open ? "role" : null),
+    [],
+  );
+  const renderParentOption = useCallback<NonNullable<ComboboxProps["renderOption"]>>(
+    ({ option, selected, active, onPress }) => (
+      <ComboboxItem
+        label={option.label}
+        description={option.id}
+        selected={selected}
+        active={active}
+        disabled={isPending}
+        onPress={onPress}
+        leadingSlot={renderParentIcon(input.parents.find((choice) => choice.name === option.id))}
+      />
+    ),
+    [input.parents, isPending, renderParentIcon],
+  );
+  const handleParentSelect = useCallback(
+    (value: string) => {
+      input.onParentChange(value);
+      setOpenPicker(null);
+    },
+    [input],
+  );
+  const handleParentOpenChange = useCallback(
+    (open: boolean) => setOpenPicker(open ? "parent" : null),
+    [],
+  );
+  const trigger = (
+    anchorRef: React.RefObject<View | null>,
+    label: string,
+    icon: React.ReactNode,
+    onPress: () => void,
+    accessibilityLabel: string,
+    tooltipLabel: string,
+  ) => (
+    <Tooltip>
+      <TooltipTrigger asChild triggerRefProp="ref">
+        <ComboboxTrigger
+          ref={anchorRef}
+          chevron={metaChevron}
+          style={badgePressableStyle}
+          onPress={onPress}
+          disabled={isPending}
+          accessibilityRole="button"
+          accessibilityLabel={accessibilityLabel}
+        >
+          <View style={styles.badgeIconBox}>{icon}</View>
+          <Text style={styles.badgeText} numberOfLines={1}>
+            {label}
+          </Text>
+        </ComboboxTrigger>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="center" offset={8}>
+        <Text style={styles.tooltipText}>{tooltipLabel}</Text>
+      </TooltipContent>
+    </Tooltip>
+  );
+  return (
+    <>
+      {trigger(
+        roleAnchorRef,
+        roleLabel,
+        roleIcon,
+        () => setOpenPicker("role"),
+        "Swarm role",
+        "Choose the agent's responsibilities from the PWA.",
+      )}
+      <Combobox
+        options={roleOptions}
+        value={input.role}
+        onSelect={handleRoleSelect}
+        title="Role"
+        open={openPicker === "role"}
+        onOpenChange={handleRoleOpenChange}
+        desktopPlacement="bottom-start"
+        anchorRef={roleAnchorRef}
+        renderOption={renderOption}
+      />
+      {input.roleClass !== "planner" ? (
+        <>
+          {trigger(
+            parentAnchorRef,
+            parentLabel,
+            parentIcon,
+            () => setOpenPicker("parent"),
+            input.roleClass === "supervisor" ? "Parent planner" : "Supervisor",
+            input.roleClass === "supervisor"
+              ? "Choose the planner this supervisor reports to."
+              : "Choose the supervisor this worker reports to.",
+          )}
+          <Combobox
+            options={parentOptions}
+            value={input.parent ?? ""}
+            onSelect={handleParentSelect}
+            title={input.roleClass === "supervisor" ? "Parent planner" : "Supervisor"}
+            open={openPicker === "parent"}
+            onOpenChange={handleParentOpenChange}
+            desktopPlacement="bottom-start"
+            anchorRef={parentAnchorRef}
+            renderOption={renderParentOption}
+          />
+        </>
+      ) : null}
+      <Tooltip>
+        <TooltipTrigger asChild triggerRefProp="ref">
+          <View>
+            <EditingTextInput
+              initialValue={input.name}
+              onChangeText={input.onNameChange}
+              placeholder={input.roleClass}
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!isPending}
+              accessibilityLabel="Agent name"
+              style={styles.agentNameInput}
+            />
+          </View>
+        </TooltipTrigger>
+        <TooltipContent side="top" align="center" offset={8}>
+          <Text style={styles.tooltipText}>
+            Give the agent a short name used to address it within its team, such as code-review.
+          </Text>
+        </TooltipContent>
+      </Tooltip>
+    </>
+  );
+}
+
 interface WorkspaceIsolationState {
   isolation: "local" | "worktree";
   setIsolation: (value: "local" | "worktree") => void;
@@ -882,6 +1234,13 @@ interface CreateChatAgentInput {
     composerStateRequired: string;
     selectModel: string;
   };
+  swarm?: {
+    prepareAgent: SwarmWorkspaceOptions["prepareAgent"];
+    role: string;
+    name: string;
+    reportsTo: string | null;
+    brief: string;
+  };
 }
 
 function buildWorkspaceDraftSetupFromComposer(input: {
@@ -968,7 +1327,16 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
   const images = await encodeImages(wirePayload.images);
   let navigated = false;
   let outcome: SubmitOutcome = "background";
+  const preparedSwarmAgent = input.swarm
+    ? await input.swarm.prepareAgent({
+        name: input.swarm.name,
+        role: input.swarm.role,
+        reportsTo: input.swarm.reportsTo,
+        brief: text,
+      })
+    : null;
   const initialAgent: NonNullable<CreateWorkspaceRequestOptions["agent"]> = {
+    ...(preparedSwarmAgent ? { agentId: preparedSwarmAgent.agentId } : {}),
     config: {
       provider,
       cwd,
@@ -976,6 +1344,7 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
       model: composerState.effectiveModelId || undefined,
       thinkingOptionId: composerState.effectiveThinkingOptionId || undefined,
       featureValues: composerState.featureValues,
+      ...(preparedSwarmAgent ? { systemPrompt: preparedSwarmAgent.systemPrompt } : {}),
     },
     initialPrompt: text,
     clientMessageId: `${input.draftId}:initial-message`,
@@ -1420,12 +1789,23 @@ interface NewWorkspaceFormStackInput {
     profiles: readonly TerminalProfile[];
     disabled: boolean;
   };
+  swarm?: {
+    roleClass: SwarmWorkspaceOptions["roleClass"];
+    roles: readonly SwarmRoleChoice[];
+    parents: readonly SwarmParentChoice[];
+    role: string;
+    parent: string | null;
+    name: string;
+    onRoleChange: (role: string) => void;
+    onParentChange: (parent: string) => void;
+    onNameChange: (name: string) => void;
+  };
 }
 
 function useNewWorkspaceFormStack(input: NewWorkspaceFormStackInput): ReactElement {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
-  const { isCompact, isPending, project, host, isolation, base, launch } = input;
+  const { isCompact, isPending, project, host, isolation, base, launch, swarm } = input;
 
   const selectedHostLabel =
     host.allHosts.find((h) => h.serverId === host.selectedServerId)?.label ?? "Host";
@@ -1598,29 +1978,44 @@ function useNewWorkspaceFormStack(input: NewWorkspaceFormStackInput): ReactEleme
     />
   );
 
+  const swarmControls = (
+    <SwarmFormControls
+      input={swarm}
+      isPending={isPending}
+      badgePressableStyle={badgePressableStyle}
+    />
+  );
+
   return isCompact ? (
     <View testID="new-workspace-ref-picker-row" style={styles.formStack} pointerEvents="box-none">
       <FormRow>{projectControl}</FormRow>
       {hostControl ? <FormRow>{hostControl}</FormRow> : null}
       {isolationControl ? <FormRow>{isolationControl}</FormRow> : null}
       {baseControl ? <FormRow>{baseControl}</FormRow> : null}
+      <FormRow>{swarmControls}</FormRow>
       <FormRow>{launchControl}</FormRow>
       {/* Keep fixed stack height without separating the visible controls. */}
       {isolationControl ? null : <View style={styles.baseSpacer} pointerEvents="none" />}
       {baseControl ? null : <View style={styles.baseSpacer} pointerEvents="none" />}
     </View>
   ) : (
-    <View
-      testID="new-workspace-ref-picker-row"
-      style={styles.formStackDesktop}
-      pointerEvents="box-none"
-    >
-      {projectControl}
-      {hostControl}
-      {isolationControl}
-      {baseControl}
-      <View style={styles.launchSpacer} pointerEvents="none" />
-      {launchControl}
+    <View testID="new-workspace-ref-picker-row" pointerEvents="box-none">
+      <View
+        style={[styles.formStackDesktop, swarm && styles.formStackBeforeSwarm]}
+        pointerEvents="box-none"
+      >
+        {projectControl}
+        {hostControl}
+        {isolationControl}
+        {baseControl}
+        <View style={styles.launchSpacer} pointerEvents="none" />
+        {launchControl}
+      </View>
+      <SwarmDesktopFormRow
+        swarm={swarm}
+        isPending={isPending}
+        badgePressableStyle={badgePressableStyle}
+      />
     </View>
   );
 }
@@ -1631,6 +2026,8 @@ export function NewWorkspaceScreen({
   projectId,
   displayName: displayNameProp,
   draftId,
+  title,
+  swarm,
 }: NewWorkspaceScreenProps) {
   const queryClient = useQueryClient();
   const { theme } = useUnistyles();
@@ -1761,6 +2158,7 @@ export function NewWorkspaceScreen({
   const projectIconDataByProjectViewKey = useProjectIcons({
     projects: projectIconTargets,
   });
+  const swarmState = useSwarmWorkspaceState(swarm, selectedProject, selectedServerId);
   const draftKey = buildNewWorkspaceDraftKey(draftId);
   const forkDraftSetup = usePendingWorkspaceDraftSetup(draftId);
   const draftContextScopeKey = useDraftWorkspaceAttachmentScopeKey(draftId);
@@ -2085,6 +2483,12 @@ export function NewWorkspaceScreen({
         serverId: selectedServerId,
         createFailedMessage: t("newWorkspace.errors.createWorktreeFailed"),
       });
+      if (swarmState.bindAgent && input.agent?.agentId) {
+        await swarmState.bindAgent({
+          agentId: input.agent.agentId,
+          workspaceId: normalizedWorkspace.workspace.id,
+        });
+      }
       setCreationResult(normalizedWorkspace);
       return normalizedWorkspace;
     },
@@ -2099,6 +2503,7 @@ export function NewWorkspaceScreen({
       selectedServerId,
       selectedSourceDirectory,
       supportsWorkspaceMultiplicity,
+      swarmState,
       t,
       withConnectedClient,
     ],
@@ -2151,6 +2556,9 @@ export function NewWorkspaceScreen({
             composerStateRequired: t("newWorkspace.errors.composerStateRequired"),
             selectModel: t("newWorkspace.errors.selectModel"),
           },
+          swarm: swarmState.submission
+            ? { ...swarmState.submission, brief: payload.text }
+            : undefined,
         });
         if (outcome === "background") {
           setPendingAction(null);
@@ -2174,6 +2582,7 @@ export function NewWorkspaceScreen({
       launchTarget,
       selectedServerId,
       supportsForgeSearch,
+      swarmState.submission,
       t,
       toast,
       updateFormPreferences,
@@ -2366,6 +2775,7 @@ export function NewWorkspaceScreen({
       profiles: terminalProfiles,
       disabled: isPending,
     },
+    swarm: swarmState.form,
   });
 
   const screenHeaderLeft = useMemo(() => <SidebarMenuToggle />, []);
@@ -2436,7 +2846,7 @@ export function NewWorkspaceScreen({
         <TitlebarDragRegion />
         <NewWorkspaceLayout
           isCompact={isCompact}
-          title={t("newWorkspace.title")}
+          title={resolveNewWorkspaceTitle(title, t("newWorkspace.title"))}
           formStack={formStack}
           onImportSession={importSession.open}
         >
@@ -2532,6 +2942,9 @@ const styles = StyleSheet.create((theme) => ({
     paddingRight: theme.spacing[4],
     gap: theme.spacing[2],
   },
+  formStackBeforeSwarm: {
+    marginBottom: theme.spacing[2],
+  },
   desktopControl: {
     minWidth: 0,
     flexShrink: 1,
@@ -2578,6 +2991,16 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
     color: theme.colors.foregroundMuted,
     flexShrink: 1,
+  },
+  agentNameInput: {
+    minWidth: 96,
+    maxWidth: 180,
+    height: BADGE_HEIGHT,
+    paddingHorizontal: theme.spacing[2],
+    borderRadius: theme.borderRadius["2xl"],
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.base,
+    backgroundColor: "transparent",
   },
   tooltipText: {
     fontSize: theme.fontSize.base,

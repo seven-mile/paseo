@@ -1264,6 +1264,7 @@ export const en = {
   },
   newWorkspace: {
     title: "New workspace",
+    roleTitle: "New {{role}}",
     create: "Create",
     isolation: {
       local: "Local",

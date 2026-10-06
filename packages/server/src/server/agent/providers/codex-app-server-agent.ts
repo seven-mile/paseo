@@ -873,6 +873,7 @@ function expandCodexCustomPrompt(template: string, args: string | undefined): st
 interface CodexMcpServerConfig {
   url?: string;
   http_headers?: Record<string, string>;
+  required?: boolean;
   command?: string;
   args?: string[];
   env?: Record<string, string>;
@@ -891,11 +892,13 @@ function toCodexMcpConfig(config: McpServerConfig): CodexMcpServerConfig {
       return {
         url: config.url,
         http_headers: config.headers,
+        ...(config.alwaysLoad ? { required: true } : {}),
       };
     case "sse":
       return {
         url: config.url,
         http_headers: config.headers,
+        ...(config.alwaysLoad ? { required: true } : {}),
       };
     default: {
       const _exhaustive = config as { type: never };

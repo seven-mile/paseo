@@ -1282,6 +1282,7 @@ export const ptBR: TranslationResources = {
   },
   newWorkspace: {
     title: "Novo workspace",
+    roleTitle: "Novo {{role}}",
     create: "Criar",
     isolation: {
       local: "Local",

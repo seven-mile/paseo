@@ -1263,6 +1263,7 @@ export const ko: TranslationResources = {
   },
   newWorkspace: {
     title: "새 워크스페이스",
+    roleTitle: "새 {{role}}",
     create: "생성",
     isolation: {
       local: "로컬",

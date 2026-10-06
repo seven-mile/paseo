@@ -1,6 +1,6 @@
 import { router, usePathname } from "expo-router";
 import { CalendarClock, History, Plus, Search } from "lucide-react-native";
-import { memo, useCallback, useMemo, useRef, type ComponentType } from "react";
+import { Fragment, memo, useCallback, useMemo, useRef, type ComponentType } from "react";
 import { useTranslation } from "react-i18next";
 import { View, type StyleProp, type ViewStyle } from "react-native";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
@@ -30,6 +30,10 @@ interface SidebarNavRowProps {
 interface SidebarNavRowsProps extends SidebarNavRowProps {
   /** Style for the group wrapper, which the sidebar owns. */
   style?: StyleProp<ViewStyle>;
+  /** Swarm supplies its own planner/supervisor creation entries. */
+  hideNewWorkspace?: boolean;
+  /** Semantic replacement for the global workspace action, rendered in the same slot. */
+  newWorkspaceReplacement?: ComponentType<SidebarNavRowProps>;
 }
 
 /**
@@ -37,9 +41,27 @@ interface SidebarNavRowsProps extends SidebarNavRowProps {
  * `sidebarNavItems` preference. Renders nothing — not even the bordered group
  * wrapper — when every item is hidden.
  */
-export function SidebarNavRows({ style, onBeforeNavigate }: SidebarNavRowsProps) {
+export function SidebarNavRows({
+  style,
+  onBeforeNavigate,
+  hideNewWorkspace = false,
+  newWorkspaceReplacement,
+}: SidebarNavRowsProps) {
   const { items } = useSidebarNavItems("header");
-  const visibleItems = useMemo(() => items.filter((item) => item.visible), [items]);
+  const visibleItems = useMemo(
+    () =>
+      items.filter(
+        (item) =>
+          item.visible &&
+          !(
+            hideNewWorkspace &&
+            !newWorkspaceReplacement &&
+            item.kind === "builtin" &&
+            item.id === "new-workspace"
+          ),
+      ),
+    [hideNewWorkspace, newWorkspaceReplacement, items],
+  );
   const groupRef = useRef<View | null>(null);
 
   if (visibleItems.length === 0) return null;
@@ -47,6 +69,14 @@ export function SidebarNavRows({ style, onBeforeNavigate }: SidebarNavRowsProps)
   return (
     <View ref={groupRef} collapsable={false} style={style}>
       {visibleItems.map((item) => {
+        if (newWorkspaceReplacement && item.kind === "builtin" && item.id === "new-workspace") {
+          const Replacement = newWorkspaceReplacement;
+          return (
+            <Fragment key={item.key}>
+              <Replacement onBeforeNavigate={onBeforeNavigate} />
+            </Fragment>
+          );
+        }
         if (item.kind === "plugin") {
           return (
             <PluginSidebarItem

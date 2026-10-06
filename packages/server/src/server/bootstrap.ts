@@ -1435,6 +1435,8 @@ export async function createPaseoDaemon(
     createPaseoWorktree: createAgentCommandDependencies.createPaseoWorktree,
     browserToolsEnabled: browserToolsPolicy.isEnabled(),
     browserToolsBroker,
+    invokePlugin: (pluginId, method, input) =>
+      pluginRuntime.invokePluginRpc(pluginId, method, input),
     paseoToolPolicy:
       runtime.paseoToolPolicy ??
       (runtime.callerAgentId ? agentManager.getPaseoToolPolicy(runtime.callerAgentId) : undefined),
@@ -1450,7 +1452,14 @@ export async function createPaseoDaemon(
   const createAgentToolCatalog = (runtime: PaseoToolRuntimeContext) =>
     createPaseoToolCatalog(createAgentToolHostDependencies(runtime));
   const setAgentProviderToolsEnabled = (enabled: boolean) => {
-    agentProviderRuntime.setPaseoToolCatalog(enabled ? createAgentToolCatalog({}) : null);
+    if (!enabled) {
+      agentProviderRuntime.setPaseoToolCatalog(null);
+      return;
+    }
+    void createAgentToolCatalog({}).then((catalog) => {
+      agentProviderRuntime.setPaseoToolCatalog(catalog);
+      return catalog;
+    });
   };
   agentManager.setPaseoToolCatalogFactory(createAgentToolCatalog);
   agentManager.setPaseoToolsEnabled(config.mcpInjectIntoAgents !== false);

@@ -1274,6 +1274,7 @@ export const ru: TranslationResources = {
   },
   newWorkspace: {
     title: "Новое рабочее пространство",
+    roleTitle: "Новый {{role}}",
     create: "Создать",
     isolation: {
       local: "Локально",

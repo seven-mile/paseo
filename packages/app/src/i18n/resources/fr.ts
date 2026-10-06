@@ -1292,6 +1292,7 @@ export const fr: TranslationResources = {
   },
   newWorkspace: {
     title: "Nouvel espace de travail",
+    roleTitle: "Nouveau {{role}}",
     create: "Créer",
     isolation: {
       local: "Local",
