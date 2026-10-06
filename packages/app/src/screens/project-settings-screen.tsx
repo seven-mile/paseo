@@ -25,6 +25,7 @@ import { ExternalLink } from "@/components/ui/external-link";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Switch } from "@/components/ui/switch";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
+import { ProjectPwaSettings } from "@/swarm/project-pwa-settings";
 import { ProjectEditSheet } from "@/components/project-edit-sheet";
 import { EditingTextInput as TextInput } from "@/components/ui/text-input";
 import { SettingsTextAreaCard } from "@/components/settings-textarea";
@@ -302,6 +303,12 @@ function ProjectSettingsBody({
         client={client}
         supportsCustomIcon={supportsCustomIcon}
         snapshot={editSnapshot}
+      />
+
+      <ProjectPwaSettings
+        key={`${selectedHost.serverId}:${selectedHost.projectId}`}
+        serverId={selectedHost.serverId}
+        projectId={selectedHost.projectId}
       />
 
       {renderContent({

@@ -7,13 +7,14 @@ import {
 } from "@/stores/workspace-layout-store";
 import type { WorkspaceTabTarget } from "@/workspace-tabs/model";
 
-export type ExplorerSidebarView = "changes" | "files" | "pr";
+export type ExplorerSidebarView = "changes" | "files" | "pr" | "tasks";
 export type ExplorerSidebarPresentation = "overlay" | "dock" | "pane";
 
 const VIEW_TARGETS: Record<ExplorerSidebarView, WorkspaceTabTarget> = {
   changes: { kind: "changes_tree" },
   files: { kind: "files" },
   pr: { kind: "pull_request" },
+  tasks: { kind: "swarm_tasks", instance: "explorer" },
 };
 
 export interface ExplorerSidebarQuery {
@@ -65,7 +66,7 @@ export function openExplorerSidebarView(
     workspaceKey: input.workspaceKey,
     target: VIEW_TARGETS[input.view],
     intent: "reveal",
-    placement: paneId ? { mode: "pane", paneId } : undefined,
+    placement: paneId ? { mode: input.view === "tasks" ? "prefer" : "pane", paneId } : undefined,
   });
 }
 

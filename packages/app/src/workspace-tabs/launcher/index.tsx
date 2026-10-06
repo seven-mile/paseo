@@ -83,6 +83,7 @@ const BUILT_IN_SELECTIONS = {
   changes: { kind: "target", target: { kind: "changes_tree" } },
   diff: { kind: "target", target: { kind: "working_diff" } },
   files: { kind: "target", target: { kind: "files" } },
+  tasks: { kind: "target", target: { kind: "swarm_tasks" } },
   browser: { kind: "browser" },
   pullRequest: { kind: "target", target: { kind: "pull_request" } },
 } satisfies Record<BuiltInLaunchItemId, NewTabSelection>;
@@ -124,6 +125,7 @@ export function useWorkspaceTabLaunchCatalog(input: {
     const changesPresentation = getLaunchPresentation("changes_tree");
     const diffPresentation = getLaunchPresentation("working_diff");
     const filesPresentation = getLaunchPresentation("files");
+    const tasksPresentation = getLaunchPresentation("swarm_tasks");
     const pullRequestPresentation = getLaunchPresentation("pull_request");
     const builtIns: Record<BuiltInLaunchItemId, WorkspaceTabLaunchItem & { hidden?: boolean }> = {
       agent: {
@@ -172,6 +174,20 @@ export function useWorkspaceTabLaunchCatalog(input: {
         disabled: false,
         panelKind: "files",
         launch: launchSelection(BUILT_IN_SELECTIONS.files),
+      },
+      tasks: {
+        id: "tasks",
+        label: tasksPresentation.label(t),
+        Icon: tasksPresentation.icon,
+        disabled: false,
+        panelKind: "swarm_tasks",
+        hidden: !plugins.some(
+          (plugin) => plugin.serverId === serverId && plugin.id === "paseo-swarm",
+        ),
+        launch: launchSelection({
+          ...BUILT_IN_SELECTIONS.tasks,
+          target: { kind: "swarm_tasks", instance: host },
+        }),
       },
       browser: {
         id: "browser",

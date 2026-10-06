@@ -1,17 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Text, View } from "react-native";
-import { StyleSheet } from "react-native-unistyles";
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import {
   NewWorkspaceScreen,
   type SwarmRoleChoice,
   type SwarmWorkspaceOptions,
 } from "@/screens/new-workspace-screen";
-import { useSwarmRpc, type SwarmAgentSummary, type SwarmRoleClass } from "./rpc";
+import { usePluginInstallations } from "@/plugins/registry";
+import { swarmTaskBoardSchema } from "./task-model";
+import { type SwarmRoleClass } from "./rpc";
+import { z } from "zod";
 
-interface SwarmBoardResponse {
-  agents: SwarmAgentSummary[];
-}
+const rolesSchema = z.array(
+  z.object({
+    role: z.string(),
+    roleClass: z.enum(["planner", "supervisor", "worker"]),
+    title: z.string(),
+    description: z.string(),
+  }),
+);
+const preparedAgentSchema = z.object({ agentId: z.string(), systemPrompt: z.string() });
 
 export interface SwarmNewWorkspaceScreenProps {
   serverId: string;
@@ -33,102 +40,59 @@ export function SwarmNewWorkspaceScreen({
   parentName,
 }: SwarmNewWorkspaceScreenProps) {
   const { t } = useTranslation();
-  const { plugin, invoke } = useSwarmRpc(serverId);
-  const [roles, setRoles] = useState<SwarmRoleChoice[]>([]);
-  const [agents, setAgents] = useState<SwarmAgentSummary[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    setError(null);
-    void Promise.all([
-      invoke<SwarmRoleChoice[]>("swarm.pwa_roles.read", { roleClass }),
-      invoke<SwarmBoardResponse>("swarm.board.read", {}),
-    ])
-      .then(([roleChoices, board]) => {
-        if (!active) return null;
-        setRoles(roleChoices);
-        setAgents(board.agents);
-        setLoaded(true);
-        return null;
-      })
-      .catch((cause) => {
-        if (active) setError(cause instanceof Error ? cause.message : String(cause));
-      });
-    return () => {
-      active = false;
-    };
-  }, [invoke, roleClass]);
-
-  const options = useMemo<SwarmWorkspaceOptions | null>(() => {
-    if (!plugin || roles.length === 0) return null;
-    let parentRoleClass: "planner" | "supervisor" | null = null;
-    if (roleClass === "supervisor") parentRoleClass = "planner";
-    if (roleClass === "worker") parentRoleClass = "supervisor";
-    const parents = agents
-      .filter(
-        (agent) =>
-          parentRoleClass !== null && agent.roleClass === parentRoleClass && !agent.retired,
-      )
-      .map((agent) => ({
-        name: agent.qualifiedName ?? agent.name,
-        title: agent.qualifiedName ?? agent.name,
-        displayName: agent.name,
-        paseoAgentId: agent.paseoAgentId,
-        serverId,
-        workspaceId: agent.workspaceId,
-      }));
+  const installations = usePluginInstallations("paseo-swarm");
+  const options = useMemo<SwarmWorkspaceOptions>(() => {
+    function installationFor(targetServerId: string) {
+      const installation = installations.find((plugin) => plugin.serverId === targetServerId);
+      if (!installation) throw new Error("Swarm is not installed on the selected host.");
+      return installation;
+    }
     return {
       roleClass,
-      roles,
-      parents,
-      initialRole: roles[0]?.role,
-      initialParent: parents.some((parent) => parent.name === parentName)
-        ? parentName
-        : parents[0]?.name,
+      initialParent: parentName,
       initialName: roleClass,
-      prepareAgent: async ({ name, role, reportsTo, brief }) => {
-        const prepared = await invoke<{
-          agentId: string;
-          systemPrompt: string;
-        }>("swarm.agent.prepare", {
-          name,
-          role,
-          roleClass,
-          reportsTo,
-          actorPaseoAgentId: null,
-          brief,
-        });
-        return prepared;
+      async loadTarget(target) {
+        const installation = installationFor(target.serverId);
+        const [roleResponse, boardResponse] = await Promise.all([
+          installation.invoke("swarm.pwa_roles.read", { roleClass, projectId: target.projectId }),
+          installation.invoke("swarm.board.read", {}),
+        ]);
+        const roles: SwarmRoleChoice[] = rolesSchema.parse(roleResponse);
+        const board = swarmTaskBoardSchema.parse(boardResponse);
+        let parentRoleClass: "planner" | "supervisor" | null = null;
+        if (roleClass === "supervisor") parentRoleClass = "planner";
+        if (roleClass === "worker") parentRoleClass = "supervisor";
+        const parents = board.agents
+          .filter((agent) => agent.roleClass === parentRoleClass && !agent.retired)
+          .map((agent) => ({
+            name: agent.qualifiedName ?? agent.name,
+            title: agent.qualifiedName ?? agent.name,
+            displayName: agent.name,
+            paseoAgentId: agent.paseoAgentId,
+            serverId: target.serverId,
+            workspaceId: agent.workspaceId,
+          }));
+        return { roles, parents };
       },
-      bindAgent: async ({ agentId, workspaceId }) => {
-        await invoke("swarm.agent.bind_workspace", { agentId, workspaceId });
+      async prepareAgent({ target, ...input }) {
+        const installation = installationFor(target.serverId);
+        return preparedAgentSchema.parse(
+          await installation.invoke("swarm.agent.prepare", {
+            ...input,
+            projectId: target.projectId,
+            roleClass,
+            actorPaseoAgentId: null,
+          }),
+        );
+      },
+      async bindAgent({ serverId: targetServerId, agentId, workspaceId }) {
+        await installationFor(targetServerId).invoke("swarm.agent.bind_workspace", {
+          agentId,
+          workspaceId,
+        });
       },
     };
-  }, [agents, invoke, parentName, plugin, roleClass, roles, serverId]);
-
-  if (error) {
-    return (
-      <View style={styles.centered}>
-        <Text style={styles.errorText}>{error}</Text>
-      </View>
-    );
-  }
-  if (!loaded) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator />
-      </View>
-    );
-  }
-  if (!options) {
-    return (
-      <View style={styles.centered}>
-        <Text style={styles.errorText}>No {roleClass} roles are configured in the active PWA.</Text>
-      </View>
-    );
-  }
+  }, [installations, parentName, roleClass]);
   return (
     <NewWorkspaceScreen
       serverId={serverId}
@@ -141,17 +105,3 @@ export function SwarmNewWorkspaceScreen({
     />
   );
 }
-
-const styles = StyleSheet.create((theme) => ({
-  centered: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: theme.colors.surface0,
-    padding: theme.spacing[6],
-  },
-  errorText: {
-    color: theme.colors.destructive,
-    textAlign: "center",
-  },
-}));

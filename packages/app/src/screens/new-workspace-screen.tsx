@@ -13,7 +13,7 @@ import { Pressable, Text, View } from "react-native";
 import type { PressableStateCallbackType } from "react-native";
 import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
 import { createNameId } from "mnemonic-id";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { skipToken, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import {
   ChevronDown,
   FileText,
@@ -23,6 +23,10 @@ import {
   GitPullRequest,
   Users,
 } from "lucide-react-native";
+import { useFetchQuery } from "@/data/query";
+import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
+import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Composer } from "@/composer";
 import { ComposerDock } from "@/composer/dock";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
@@ -209,20 +213,49 @@ export interface SwarmRoleChoice {
   description: string;
 }
 
-export interface SwarmWorkspaceOptions {
-  roleClass: "planner" | "supervisor" | "worker";
+export interface SwarmWorkspaceTarget {
+  serverId: string;
+  projectId: string;
+}
+
+export interface SwarmWorkspaceTargetOptions {
   roles: readonly SwarmRoleChoice[];
   parents: readonly SwarmParentChoice[];
-  initialRole?: string;
+}
+
+export interface SwarmWorkspaceOptions {
+  roleClass: "planner" | "supervisor" | "worker";
   initialParent?: string;
   initialName?: string;
+  loadTarget(target: SwarmWorkspaceTarget): Promise<SwarmWorkspaceTargetOptions>;
   prepareAgent: (input: {
+    target: SwarmWorkspaceTarget;
     name: string;
     role: string;
     reportsTo: string | null;
     brief: string;
   }) => Promise<{ agentId: string; systemPrompt: string }>;
-  bindAgent: (input: { agentId: string; workspaceId: string }) => Promise<void>;
+  bindAgent: (input: { serverId: string; agentId: string; workspaceId: string }) => Promise<void>;
+}
+
+function swarmTargetState(
+  target: SwarmWorkspaceTarget | null,
+  connected: boolean,
+  query: UseQueryResult<SwarmWorkspaceTargetOptions, Error>,
+  selectedRole: string,
+) {
+  const roles = query.data?.roles ?? [];
+  const role = roles.some((choice) => choice.role === selectedRole)
+    ? selectedRole
+    : (roles[0]?.role ?? "");
+  let targetError: string | null = null;
+  if (!target) targetError = "Choose a project on this host.";
+  else if (connected && query.isError) targetError = toErrorMessage(query.error);
+  else if (connected && query.data && roles.length === 0)
+    targetError = "No roles are configured in this project's PWA.";
+  const waitingForRoles = !query.data && !query.isError;
+  const targetPending = target !== null && (!connected || waitingForRoles);
+  return { roles, role, targetError, targetPending };
 }
 
 function useSwarmWorkspaceState(
@@ -230,60 +263,82 @@ function useSwarmWorkspaceState(
   project: HostProjectListItem | null,
   serverId: string,
 ) {
-  const [role, setRole] = useState(options?.initialRole ?? options?.roles[0]?.role ?? "");
+  const connected = useHostRuntimeIsConnected(serverId);
+  const [selectedRole, setRole] = useState("");
   const [parent, setParent] = useState<string | null>(options?.initialParent ?? null);
   const [name, setName] = useState(options?.initialName ?? options?.roleClass ?? "agent");
+  const placement = project?.hosts.find((host) => host.serverId === serverId);
+  const target = useMemo(
+    () => (placement ? { serverId, projectId: placement.projectId } : null),
+    [placement, serverId],
+  );
+  const query = useFetchQuery({
+    queryKey: ["swarm", "creation-target", serverId, target?.projectId, options?.roleClass],
+    queryFn: options && target ? () => options.loadTarget(target) : skipToken,
+    enabled: connected,
+    dataShape: "value",
+    staleTimeMs: 0,
+    retry: false,
+  });
+  const { roles, role, targetError, targetPending } = swarmTargetState(
+    target,
+    connected,
+    query,
+    selectedRole,
+  );
   const parents = useMemo(
     () =>
-      options
+      options && query.data
         ? filterSwarmParents(
-            options.parents,
+            query.data.parents,
             options.roleClass,
             serverId,
             project?.workspaceKeys ?? [],
           )
         : [],
-    [options, project, serverId],
+    [options, project, query.data, serverId],
   );
   const effectiveParent = resolveSwarmParent(parents, parent);
-  const form = useMemo(
-    () =>
-      options
-        ? {
-            roleClass: options.roleClass,
-            roles: options.roles,
-            parents,
-            role,
-            parent: effectiveParent,
-            name,
-            onRoleChange: setRole,
-            onParentChange: setParent,
-            onNameChange: setName,
+  const form = options
+    ? {
+        roleClass: options.roleClass,
+        roles,
+        parents,
+        role,
+        parent: effectiveParent,
+        name,
+        onRoleChange: setRole,
+        onParentChange: setParent,
+        onNameChange: setName,
+        targetError,
+        targetPending,
+        onRetry: target ? () => void query.refetch() : null,
+      }
+    : undefined;
+  const submission = options
+    ? {
+        prepareAgent: (input: Parameters<SwarmWorkspaceOptions["prepareAgent"]>[0]) => {
+          if (!target || targetError || targetPending) {
+            throw new Error(targetError ?? "Wait for the project's PWA roles to load.");
           }
-        : undefined,
-    [name, options, effectiveParent, parents, role],
-  );
-  const submission = useMemo(
-    () =>
-      options
-        ? {
-            prepareAgent: (input: Parameters<SwarmWorkspaceOptions["prepareAgent"]>[0]) => {
-              if (
-                options.roleClass !== "planner" &&
-                !parents.some((choice) => choice.name === input.reportsTo)
-              ) {
-                throw new Error("Choose a manager for the selected project and host.");
-              }
-              return options.prepareAgent(input);
-            },
-            role,
-            name,
-            reportsTo: effectiveParent,
-            brief: "",
+          if (!roles.some((choice) => choice.role === input.role)) {
+            throw new Error("Choose a role from the selected project's PWA.");
           }
-        : undefined,
-    [name, options, effectiveParent, parents, role],
-  );
+          if (
+            options.roleClass !== "planner" &&
+            !parents.some((choice) => choice.name === input.reportsTo)
+          ) {
+            throw new Error("Choose a manager for the selected project and host.");
+          }
+          return options.prepareAgent({ ...input, target });
+        },
+        target,
+        role,
+        name,
+        reportsTo: effectiveParent,
+        brief: "",
+      }
+    : undefined;
   return { form, submission, bindAgent: options?.bindAgent };
 }
 
@@ -833,6 +888,18 @@ function SwarmFormControls({
   badgePressableStyle: React.ComponentProps<typeof Pressable>["style"];
 }) {
   if (!input) return null;
+  if (input.targetPending) return <LoadingSpinner color={styles.swarmSpinnerColor.color} />;
+  if (input.targetError) {
+    return (
+      <Alert variant="error" title={input.targetError} testID="swarm-target-error">
+        {input.onRetry ? (
+          <Button variant="outline" size="sm" onPress={input.onRetry} testID="swarm-target-retry">
+            Retry
+          </Button>
+        ) : null}
+      </Alert>
+    );
+  }
   return (
     <SwarmFormControlsInner
       input={input}
@@ -1236,6 +1303,7 @@ interface CreateChatAgentInput {
   };
   swarm?: {
     prepareAgent: SwarmWorkspaceOptions["prepareAgent"];
+    target: SwarmWorkspaceTarget | null;
     role: string;
     name: string;
     reportsTo: string | null;
@@ -1327,14 +1395,18 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
   const images = await encodeImages(wirePayload.images);
   let navigated = false;
   let outcome: SubmitOutcome = "background";
-  const preparedSwarmAgent = input.swarm
-    ? await input.swarm.prepareAgent({
-        name: input.swarm.name,
-        role: input.swarm.role,
-        reportsTo: input.swarm.reportsTo,
-        brief: text,
-      })
-    : null;
+  const swarmTarget = input.swarm?.target;
+  if (input.swarm && !swarmTarget) throw new Error("Choose a project on this host.");
+  const preparedSwarmAgent =
+    input.swarm && swarmTarget
+      ? await input.swarm.prepareAgent({
+          target: swarmTarget,
+          name: input.swarm.name,
+          role: input.swarm.role,
+          reportsTo: input.swarm.reportsTo,
+          brief: text,
+        })
+      : null;
   const initialAgent: NonNullable<CreateWorkspaceRequestOptions["agent"]> = {
     ...(preparedSwarmAgent ? { agentId: preparedSwarmAgent.agentId } : {}),
     config: {
@@ -1799,6 +1871,9 @@ interface NewWorkspaceFormStackInput {
     onRoleChange: (role: string) => void;
     onParentChange: (parent: string) => void;
     onNameChange: (name: string) => void;
+    targetError: string | null;
+    targetPending: boolean;
+    onRetry: (() => void) | null;
   };
 }
 
@@ -2485,6 +2560,7 @@ export function NewWorkspaceScreen({
       });
       if (swarmState.bindAgent && input.agent?.agentId) {
         await swarmState.bindAgent({
+          serverId: selectedServerId,
           agentId: input.agent.agentId,
           workspaceId: normalizedWorkspace.workspace.id,
         });
@@ -2895,6 +2971,7 @@ function NewWorkspaceLayout({
 }
 
 const styles = StyleSheet.create((theme) => ({
+  swarmSpinnerColor: { color: theme.colors.foregroundMuted },
   container: {
     flex: 1,
     backgroundColor: theme.colors.surface0,

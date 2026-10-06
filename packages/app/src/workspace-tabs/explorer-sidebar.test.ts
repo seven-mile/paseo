@@ -78,6 +78,74 @@ describe("Explorer sidebar", () => {
     expect(layout && collectAllTabs(layout.root).map((tab) => tab.target.kind)).toContain("files");
   });
 
+  it("opens Tasks beside Files and Changes while preserving the main agent", () => {
+    const agentTabId = useWorkspaceLayoutStore.getState().openTab({
+      workspaceKey: WORKSPACE_KEY,
+      target: { kind: "agent", agentId: "agent-1" },
+      intent: "reveal",
+    });
+    openExplorerSidebarView({
+      isCompact: false,
+      supportsPaneSplits: true,
+      workspaceKey: WORKSPACE_KEY,
+      checkout: CHECKOUT,
+      view: "tasks",
+    });
+    const state = useWorkspaceLayoutStore.getState();
+    const layout = state.layoutByWorkspace[WORKSPACE_KEY];
+    const explorerId = selectExplorerSidebarPaneId(state, WORKSPACE_KEY);
+    const explorer = findPaneById(layout.root, explorerId);
+    expect(findPaneById(layout.root, "main")?.focusedTabId).toBe(agentTabId);
+    expect(layout.focusedPaneId).toBe("main");
+    expect(
+      collectAllTabs(layout.root)
+        .filter((tab) => explorer?.tabIds.includes(tab.tabId))
+        .map((tab) => tab.target.kind),
+    ).toEqual(["files", "changes_tree", "swarm_tasks"]);
+    expect(explorer?.focusedTabId).toBe("swarm_tasks_explorer");
+  });
+
+  it("keeps main and Explorer Tasks simultaneously selected", () => {
+    const mainTabId = useWorkspaceLayoutStore.getState().openTab({
+      workspaceKey: WORKSPACE_KEY,
+      target: { kind: "swarm_tasks", instance: "main" },
+      intent: "reveal",
+    });
+    openExplorerSidebarView({
+      isCompact: false,
+      supportsPaneSplits: true,
+      workspaceKey: WORKSPACE_KEY,
+      checkout: CHECKOUT,
+      view: "tasks",
+    });
+
+    const state = useWorkspaceLayoutStore.getState();
+    const layout = state.layoutByWorkspace[WORKSPACE_KEY];
+    expect(findPaneById(layout.root, "main")?.focusedTabId).toBe(mainTabId);
+    expect(
+      findPaneById(layout.root, selectExplorerSidebarPaneId(state, WORKSPACE_KEY))?.focusedTabId,
+    ).toBe("swarm_tasks_explorer");
+    expect(
+      collectAllTabs(layout.root).filter((tab) => tab.target.kind === "swarm_tasks"),
+    ).toHaveLength(2);
+    expect(layout.focusedPaneId).toBe("main");
+  });
+
+  it("selects Tasks in the native Explorer dock and keeps that view when toggled", () => {
+    const input = {
+      isCompact: false,
+      supportsPaneSplits: false,
+      workspaceKey: WORKSPACE_KEY,
+      checkout: CHECKOUT,
+    };
+    openExplorerSidebarView({ ...input, view: "tasks" });
+    toggleExplorerSidebar(input);
+    toggleExplorerSidebar(input);
+    expect(usePanelStore.getState().mobilePanel.target).toBe("file-explorer");
+    expect(usePanelStore.getState().explorerTab).toBe("tasks");
+    expect(useWorkspaceLayoutStore.getState().layoutByWorkspace[WORKSPACE_KEY]).toBeUndefined();
+  });
+
   it("toggles the desktop Explorer independently of ordinary panes", () => {
     const input = {
       isCompact: false,

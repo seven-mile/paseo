@@ -47,6 +47,8 @@ import {
 import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
 import { mutedIconColorMapping } from "@/components/ui/icon-button-chrome";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
+import { usePluginInstallations } from "@/plugins/registry";
+import { SwarmTasksContent } from "@/swarm/tasks-panel";
 
 const ThemedX = withUnistyles(X);
 
@@ -330,6 +332,10 @@ function ExplorerSidebarContent({
   const { t } = useTranslation();
   const isCompact = useIsCompactFormFactor();
   const closeButtonLayout = explorerSidebarCloseButtonLayout(isCompact);
+  const swarmInstallations = usePluginInstallations("paseo-swarm");
+  const showTasksTab = Boolean(
+    workspaceId && swarmInstallations.some((plugin) => plugin.serverId === serverId),
+  );
   const closeButtonStyle = useMemo(
     () => ({ width: closeButtonLayout.size, height: closeButtonLayout.size }),
     [closeButtonLayout.size],
@@ -349,13 +355,16 @@ function ExplorerSidebarContent({
   });
   const requestedTab: ExplorerTab =
     !isGit && (activeTab === "changes" || activeTab === "pr") ? "files" : activeTab;
-  const resolvedTab: ExplorerTab = requestedTab === "pr" && !showPrTab ? "changes" : requestedTab;
+  let resolvedTab = requestedTab;
+  if (requestedTab === "tasks" && !showTasksTab) resolvedTab = "files";
+  else if (requestedTab === "pr" && !showPrTab) resolvedTab = "changes";
   const prTabLabel = formatPrTabLabel(prPane.prNumber);
   const availableTabs = useMemo<ExplorerTab[]>(() => {
     const tabs: ExplorerTab[] = isGit ? ["changes", "files"] : ["files"];
     if (isGit && showPrTab) tabs.push("pr");
+    if (showTasksTab) tabs.push("tasks");
     return tabs;
-  }, [isGit, showPrTab]);
+  }, [isGit, showPrTab, showTasksTab]);
   const { mountedTabIds } = useMountedTabSet({
     activeTabId: resolvedTab,
     allTabIds: availableTabs,
@@ -384,6 +393,15 @@ function ExplorerSidebarContent({
             onTabPress={onTabPress}
             testID="explorer-tab-files"
           />
+          {showTasksTab ? (
+            <ExplorerTabButton
+              tab="tasks"
+              active={resolvedTab === "tasks"}
+              label="Tasks"
+              onTabPress={onTabPress}
+              testID="explorer-tab-tasks"
+            />
+          ) : null}
           {isGit && showPrTab && (
             <ExplorerTabButton
               tab="pr"
@@ -419,6 +437,15 @@ function ExplorerSidebarContent({
 
       {/* Content based on active tab */}
       <View style={styles.contentArea} testID="explorer-content-area">
+        {workspaceId && mountedTabIds.has("tasks") ? (
+          <RetainedPanel active={resolvedTab === "tasks"}>
+            <SwarmTasksContent
+              serverId={serverId}
+              workspaceId={workspaceId}
+              keyboardInsetHandled={isCompact}
+            />
+          </RetainedPanel>
+        ) : null}
         {mountedTabIds.has("changes") ? (
           <RetainedPanel active={resolvedTab === "changes"}>
             <ChangedFilesPane

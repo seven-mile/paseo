@@ -59,6 +59,12 @@ function normalizeSimpleWorkspaceTabTarget(value: WorkspaceTabTarget): Workspace
     case "files":
     case "pull_request":
       return { kind: value.kind };
+    case "swarm_tasks":
+      return value.instance === undefined ||
+        value.instance === "main" ||
+        value.instance === "explorer"
+        ? { kind: "swarm_tasks", instance: value.instance ?? "main" }
+        : null;
     case "setup": {
       const workspaceId = trimNonEmpty(value.workspaceId);
       return workspaceId ? { kind: "setup", workspaceId } : null;
@@ -131,31 +137,41 @@ function secondaryWorkspaceTabTargetsEqual(
   left: WorkspaceTabTarget,
   right: WorkspaceTabTarget,
 ): boolean {
-  if (left.kind === "browser" && right.kind === "browser") {
-    return left.browserId === right.browserId;
+  switch (left.kind) {
+    case "browser":
+      return (
+        left.browserId === (right as Extract<WorkspaceTabTarget, { kind: "browser" }>).browserId
+      );
+    case "file":
+      return workspaceFileLocationsEqual(
+        left,
+        right as Extract<WorkspaceTabTarget, { kind: "file" }>,
+      );
+    case "working_diff": {
+      const matchingRight = right as Extract<WorkspaceTabTarget, { kind: "working_diff" }>;
+      return (
+        left.focusPath === matchingRight.focusPath &&
+        left.focusRequestId === matchingRight.focusRequestId
+      );
+    }
+    case "files":
+    case "changes_tree":
+    case "pull_request":
+      return true;
+    case "swarm_tasks":
+      return (
+        (left.instance ?? "main") ===
+        ((right as Extract<WorkspaceTabTarget, { kind: "swarm_tasks" }>).instance ?? "main")
+      );
+    case "setup":
+      return (
+        left.workspaceId === (right as Extract<WorkspaceTabTarget, { kind: "setup" }>).workspaceId
+      );
+    case "commit_diff":
+      return left.sha === (right as Extract<WorkspaceTabTarget, { kind: "commit_diff" }>).sha;
+    default:
+      return false;
   }
-  if (left.kind === "file" && right.kind === "file") {
-    return workspaceFileLocationsEqual(left, right);
-  }
-  if (left.kind === "working_diff" && right.kind === "working_diff") {
-    return left.focusPath === right.focusPath && left.focusRequestId === right.focusRequestId;
-  }
-  if (left.kind === "files" && right.kind === "files") {
-    return true;
-  }
-  if (left.kind === "changes_tree" && right.kind === "changes_tree") {
-    return true;
-  }
-  if (left.kind === "pull_request" && right.kind === "pull_request") {
-    return true;
-  }
-  if (left.kind === "setup" && right.kind === "setup") {
-    return left.workspaceId === right.workspaceId;
-  }
-  if (left.kind === "commit_diff" && right.kind === "commit_diff") {
-    return left.sha === right.sha;
-  }
-  return false;
 }
 
 function workspaceDraftTabSetupsEqual(
@@ -222,6 +238,7 @@ export function buildDeterministicWorkspaceTabId(target: WorkspaceTabTarget): st
   if (target.kind === "changes_tree" || target.kind === "files" || target.kind === "pull_request") {
     return target.kind;
   }
+  if (target.kind === "swarm_tasks") return `swarm_tasks_${target.instance ?? "main"}`;
   if (target.kind === "plugin") {
     const identity = `${target.pluginId.length}_${target.pluginId}_${target.panelId.length}_${target.panelId}`;
     return target.context === "workspace"

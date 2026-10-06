@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { LayoutDashboard, Plus, Users } from "lucide-react-native";
+import { ListTodo, Plus, Users } from "lucide-react-native";
 import { router } from "expo-router";
 import { useCallback, useState, type ReactNode } from "react";
 import {
@@ -24,7 +24,15 @@ import type { Theme } from "@/styles/theme";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { useFetchQuery } from "@/data/query";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { buildPluginSurfaceRoute } from "@/plugins/routes";
+import { isWeb } from "@/constants/platform";
+import { useIsCompactFormFactor } from "@/constants/layout";
+import { openSwarmTasks } from "./navigation";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { getSidebarRowBackdrop } from "@/components/sidebar/sidebar-row-backdrop";
 import { ProjectLeadingVisual } from "@/components/sidebar/project-leading-visual";
@@ -63,7 +71,7 @@ const modes: Array<{ value: Mode; label: string; testID: string }> = [
   { value: "swarm", label: "Swarm", testID: "swarm-sidebar-swarm" },
 ];
 const ThemedUsers = withUnistyles(Users);
-const ThemedLayoutDashboard = withUnistyles(LayoutDashboard);
+const ThemedListTodo = withUnistyles(ListTodo);
 const ThemedPlus = withUnistyles(Plus);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
@@ -109,14 +117,14 @@ function PlannerGroup({
   agents,
   serverId,
   selectedAgent,
-  onOpenBoard,
+  onOpenTasks,
   onOpenSurface,
 }: {
   planner: Agent;
   agents: Agent[];
   serverId: string;
   selectedAgent?: Agent;
-  onOpenBoard: () => void;
+  onOpenTasks: (agent: Agent, planner: Agent) => void;
   onOpenSurface: (surfaceId: string, params?: Record<string, string>) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -140,6 +148,11 @@ function PlannerGroup({
     [selectedAgent],
   );
   const openPlanner = useCallback(() => openAgent(planner), [openAgent, planner]);
+  const openPlannerTasks = useCallback(() => onOpenTasks(planner, planner), [onOpenTasks, planner]);
+  const openAgentTasks = useCallback(
+    (agent: Agent) => onOpenTasks(agent, planner),
+    [onOpenTasks, planner],
+  );
   const openCreateSupervisor = useCallback(
     () =>
       onOpenSurface("native-create-supervisor", { parent: planner.qualifiedName ?? planner.name }),
@@ -158,7 +171,7 @@ function PlannerGroup({
         expanded={expanded}
         onToggle={toggleExpanded}
         onOpen={openPlanner}
-        onOpenBoard={onOpenBoard}
+        onOpenTasks={openPlannerTasks}
         onAddSupervisor={openCreateSupervisor}
       />
       {expanded ? (
@@ -172,6 +185,7 @@ function PlannerGroup({
                 (member) => member.reportsTo === (agent.qualifiedName ?? agent.name),
               )}
               onOpen={openAgent}
+              onOpenTasks={openAgentTasks}
               onAddWorker={openCreateWorker}
             />
           ))}
@@ -195,7 +209,7 @@ function PlannerRow({
   expanded,
   onToggle,
   onOpen,
-  onOpenBoard,
+  onOpenTasks,
   onAddSupervisor,
 }: {
   planner: Agent;
@@ -203,7 +217,7 @@ function PlannerRow({
   expanded: boolean;
   onToggle: () => void;
   onOpen: () => void;
-  onOpenBoard: () => void;
+  onOpenTasks: () => void;
   onAddSupervisor: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
@@ -231,12 +245,12 @@ function PlannerRow({
     },
     [onAddSupervisor],
   );
-  const handleOpenBoard = useCallback(
+  const handleOpenTasks = useCallback(
     (event: GestureResponderEvent) => {
       event.stopPropagation();
-      onOpenBoard();
+      onOpenTasks();
     },
-    [onOpenBoard],
+    [onOpenTasks],
   );
   const rowStyle = useCallback(
     ({ pressed: rowPressed }: PressableStateCallbackType) => [
@@ -276,7 +290,7 @@ function PlannerRow({
               projectViewKey={`swarm:${planner.paseoAgentId}`}
               backdrop={getSidebarRowBackdrop({ isHovered: hovered, isPressed: pressed, selected })}
               chevron={expanded ? "collapse" : "expand"}
-              showChevron={hovered || pressed}
+              showChevron
             />
           </Pressable>
           <Text style={styles.projectTitle} numberOfLines={1}>
@@ -284,30 +298,26 @@ function PlannerRow({
           </Text>
         </View>
         <View style={styles.projectTrailingActions}>
-          {hovered ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Add supervisor under ${planner.name}`}
-              onTouchStart={handleControlPressStart}
-              onPointerDown={handleControlPressStart}
-              onPress={handleAddSupervisor}
-              style={styles.projectIconActionButton}
-            >
-              <ThemedPlus size={14} uniProps={mutedColorMapping} />
-            </Pressable>
-          ) : null}
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Open ${planner.name} board`}
+            accessibilityLabel={`Add supervisor under ${planner.name}`}
             onTouchStart={handleControlPressStart}
             onPointerDown={handleControlPressStart}
-            onPress={handleOpenBoard}
-            style={[
-              styles.projectIconActionButton,
-              !hovered && styles.projectIconActionButtonHidden,
-            ]}
+            onPress={handleAddSupervisor}
+            style={styles.projectIconActionButton}
           >
-            <ThemedLayoutDashboard size={14} uniProps={mutedColorMapping} />
+            <ThemedPlus size={14} uniProps={mutedColorMapping} />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${planner.name} Tasks`}
+            testID={`swarm-planner-tasks-${planner.paseoAgentId}`}
+            onTouchStart={handleControlPressStart}
+            onPointerDown={handleControlPressStart}
+            onPress={handleOpenTasks}
+            style={styles.projectIconActionButton}
+          >
+            <ThemedListTodo size={14} uniProps={mutedColorMapping} />
           </Pressable>
         </View>
       </PressHighlight>
@@ -320,56 +330,70 @@ function AgentRow({
   members,
   selected,
   onOpen,
+  onOpenTasks,
   onAddWorker,
 }: {
   agent: Agent;
   members: Agent[];
   selected: boolean;
   onOpen: (agent: Agent) => void;
+  onOpenTasks: (agent: Agent) => void;
   onAddWorker: (agent: Agent) => void;
 }) {
   const [hovered, setHovered] = useState(false);
-  const handlePress = useCallback(() => onOpen(agent), [agent, onOpen]);
   const handlePointerEnter = useCallback(() => setHovered(true), []);
   const handlePointerLeave = useCallback(() => setHovered(false), []);
-  const handleAddWorker = useCallback(() => onAddWorker(agent), [agent, onAddWorker]);
-  const rowStyle = useCallback(
-    ({ pressed }: PressableStateCallbackType) => [
-      styles.workspaceRow,
-      selected && styles.workspaceRowSelected,
-      hovered && styles.workspaceRowHovered,
-      pressed && styles.workspaceRowPressed,
-    ],
-    [hovered, selected],
+  const handlePress = useCallback(() => onOpen(agent), [agent, onOpen]);
+  const handleTasks = useCallback(
+    (event: GestureResponderEvent) => {
+      event.stopPropagation();
+      onOpenTasks(agent);
+    },
+    [agent, onOpenTasks],
   );
+  const handleAddWorker = useCallback(() => onAddWorker(agent), [agent, onAddWorker]);
   return (
-    <View onPointerEnter={handlePointerEnter} onPointerLeave={handlePointerLeave}>
+    <View
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
+      style={[
+        styles.workspaceRow,
+        selected && styles.workspaceRowSelected,
+        hovered && styles.workspaceRowHovered,
+      ]}
+    >
       <PressHighlight
         accessibilityRole="button"
         accessibilityLabel={agent.name}
-        style={rowStyle}
+        style={styles.workspaceRowMain}
         highlightStyle={styles.workspaceRowPressed}
         onPress={handlePress}
       >
-        <View style={styles.workspaceRowMain}>
-          <View style={styles.supervisorStatusSlot}>
-            <View style={styles.supervisorStatusDot} />
-          </View>
-          <Text
-            style={[styles.workspaceTitle, hovered && styles.workspaceTitleHovered]}
-            numberOfLines={1}
-          >
-            {agent.name}
-          </Text>
+        <View style={styles.supervisorStatusSlot}>
+          <View style={styles.supervisorStatusDot} />
         </View>
+        <Text style={styles.workspaceTitle} numberOfLines={1}>
+          {agent.name}
+        </Text>
+      </PressHighlight>
+      <View style={styles.projectTrailingActions}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Open ${agent.name} Tasks`}
+          testID={`swarm-agent-tasks-${agent.paseoAgentId}`}
+          onPress={handleTasks}
+          style={styles.projectIconActionButton}
+        >
+          <ThemedListTodo size={14} uniProps={mutedColorMapping} />
+        </Pressable>
         <RosterHoverCard
           agent={agent}
           members={members}
           onOpen={onOpen}
+          onOpenTasks={onOpenTasks}
           onAddWorker={handleAddWorker}
-          visible={hovered}
         />
-      </PressHighlight>
+      </View>
     </View>
   );
 }
@@ -378,27 +402,55 @@ function RosterHoverCard({
   agent,
   members,
   onOpen,
+  onOpenTasks,
   onAddWorker,
-  visible,
 }: {
   agent: Agent;
   members: Agent[];
   onOpen: (agent: Agent) => void;
+  onOpenTasks: (agent: Agent) => void;
   onAddWorker: () => void;
-  visible: boolean;
 }) {
+  const isCompact = useIsCompactFormFactor();
+  if (isCompact || !isWeb)
+    return (
+      <DropdownMenu compactMode="sheet">
+        <DropdownMenuTrigger
+          accessibilityLabel={`Open ${agent.name} team`}
+          style={styles.teamTrigger}
+        >
+          <ThemedUsers size={14} uniProps={mutedColorMapping} />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent sheetTitle="Agent team">
+          {[agent, ...members].map((member) => (
+            <RosterMenuEntry
+              key={member.paseoAgentId}
+              agent={member}
+              onOpen={onOpen}
+              onOpenTasks={onOpenTasks}
+            />
+          ))}
+          <DropdownMenuItem onSelect={onAddWorker}>Add worker</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
   return (
     <HoverCard>
       <HoverCardTrigger focusable accessibilityLabel={`Open ${agent.name} team`}>
-        <View style={[styles.teamTrigger, !visible && styles.teamTriggerHidden]}>
+        <View style={styles.teamTrigger}>
           <ThemedUsers size={14} uniProps={mutedColorMapping} />
         </View>
       </HoverCardTrigger>
       <HoverCardContent placement="right" role="menu" style={styles.rosterCard}>
         <Text style={styles.rosterTitle}>Agent team</Text>
-        <RosterEntry agent={agent} current onOpen={onOpen} />
+        <RosterEntry agent={agent} current onOpen={onOpen} onOpenTasks={onOpenTasks} />
         {members.map((member) => (
-          <RosterEntry key={member.paseoAgentId} agent={member} onOpen={onOpen} />
+          <RosterEntry
+            key={member.paseoAgentId}
+            agent={member}
+            onOpen={onOpen}
+            onOpenTasks={onOpenTasks}
+          />
         ))}
         {members.length === 0 ? <Text style={styles.hint}>No workers yet</Text> : null}
         <Pressable
@@ -419,25 +471,59 @@ function RosterEntry({
   agent,
   current = false,
   onOpen,
+  onOpenTasks,
 }: {
   agent: Agent;
   current?: boolean;
   onOpen: (agent: Agent) => void;
+  onOpenTasks: (agent: Agent) => void;
 }) {
   const handlePress = useCallback(() => onOpen(agent), [agent, onOpen]);
+  const handleTasks = useCallback(() => onOpenTasks(agent), [agent, onOpenTasks]);
   return (
-    <Pressable style={styles.rosterEntry} onPress={handlePress} accessibilityRole="menuitem">
-      <ThemedUsers size={14} uniProps={mutedColorMapping} />
-      <View style={styles.rosterEntryText}>
-        <Text style={styles.rosterName}>{agent.name}</Text>
-        <Text style={styles.rosterMeta}>{current ? "supervisor" : agent.roleClass}</Text>
-      </View>
-    </Pressable>
+    <View style={styles.rosterEntry}>
+      <Pressable style={styles.rosterEntryMain} onPress={handlePress} accessibilityRole="menuitem">
+        <ThemedUsers size={14} uniProps={mutedColorMapping} />
+        <View style={styles.rosterEntryText}>
+          <Text style={styles.rosterName}>{agent.name}</Text>
+          <Text style={styles.rosterMeta}>{current ? "supervisor" : agent.roleClass}</Text>
+        </View>
+      </Pressable>
+      <Button
+        variant="ghost"
+        size="xs"
+        onPress={handleTasks}
+        accessibilityLabel={`Open ${agent.name} Tasks`}
+        testID={`swarm-roster-tasks-${agent.paseoAgentId}`}
+      >
+        Tasks
+      </Button>
+    </View>
+  );
+}
+
+function RosterMenuEntry({
+  agent,
+  onOpen,
+  onOpenTasks,
+}: {
+  agent: Agent;
+  onOpen: (agent: Agent) => void;
+  onOpenTasks: (agent: Agent) => void;
+}) {
+  const open = useCallback(() => onOpen(agent), [agent, onOpen]);
+  const tasks = useCallback(() => onOpenTasks(agent), [agent, onOpenTasks]);
+  return (
+    <>
+      <DropdownMenuItem onSelect={open}>{agent.name}</DropdownMenuItem>
+      <DropdownMenuItem onSelect={tasks}>Tasks for {agent.name}</DropdownMenuItem>
+    </>
   );
 }
 
 function HostRoster({ plugin }: { plugin: InstalledPlugin }) {
   const selection = useActiveWorkspaceSelection();
+  const isCompact = useIsCompactFormFactor();
   const query = useFetchQuery(
     {
       queryKey: ["swarm", "roster", plugin.serverId],
@@ -463,16 +549,24 @@ function HostRoster({ plugin }: { plugin: InstalledPlugin }) {
         });
         return;
       }
-      router.push(
-        buildPluginSurfaceRoute(plugin.serverId, plugin.id, {
-          kind: "surface",
-          id: surfaceId,
-        }),
-      );
     },
-    [plugin.id, plugin.serverId],
+    [plugin.serverId],
   );
-  const openBoard = useCallback(() => openSurface("board"), [openSurface]);
+  const openTasks = useCallback(
+    (agent: Agent, planner: Agent) => {
+      const workspaceId = agent.workspaceId ?? planner.workspaceId;
+      if (!workspaceId) return;
+      openSwarmTasks({
+        serverId: plugin.serverId,
+        workspaceId,
+        plannerName: planner.qualifiedName ?? planner.name,
+        agentName: agent.roleClass === "planner" ? undefined : (agent.qualifiedName ?? agent.name),
+        host: agent.roleClass === "planner" ? "main" : "explorer",
+        isCompact,
+      });
+    },
+    [isCompact, plugin.serverId],
+  );
   if (query.isPending) return <Text style={styles.hint}>Loading agents…</Text>;
   if (query.isError)
     return (
@@ -499,7 +593,7 @@ function HostRoster({ plugin }: { plugin: InstalledPlugin }) {
           agents={agents}
           serverId={plugin.serverId}
           selectedAgent={selectedAgent}
-          onOpenBoard={openBoard}
+          onOpenTasks={openTasks}
           onOpenSurface={openSurface}
         />
       ))}
@@ -623,7 +717,6 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "center",
     flexShrink: 0,
   },
-  projectIconActionButtonHidden: { opacity: 0 },
   workspaceRow: {
     minHeight: 36,
     marginBottom: theme.spacing[0.5],
@@ -636,8 +729,8 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[2],
     userSelect: "none",
   },
-  workspaceRowHovered: { backgroundColor: theme.colors.surfaceSidebarHover },
   workspaceRowSelected: { backgroundColor: theme.colors.surfaceSidebarSelected },
+  workspaceRowHovered: { backgroundColor: theme.colors.surfaceSidebarHover },
   workspaceRowPressed: { backgroundColor: theme.colors.surface2 },
   workspaceRowMain: {
     flexDirection: "row",
@@ -667,7 +760,6 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minWidth: 0,
   },
-  workspaceTitleHovered: { opacity: 1 },
   teamTrigger: {
     width: 24,
     height: 24,
@@ -675,7 +767,6 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "center",
     borderRadius: theme.borderRadius.md,
   },
-  teamTriggerHidden: { opacity: 0 },
   rosterAction: {
     flexDirection: "row",
     alignItems: "center",
@@ -700,6 +791,13 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.md,
   },
   rosterEntryText: { flex: 1, minWidth: 0 },
+  rosterEntryMain: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
   rosterName: { color: theme.colors.foreground, fontSize: theme.fontSize.sm },
   rosterMeta: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
   hint: {

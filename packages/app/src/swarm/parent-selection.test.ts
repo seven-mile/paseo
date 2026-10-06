@@ -56,11 +56,17 @@ describe("Swarm parent selection", () => {
     ).toBeNull();
   });
 
-  it("allows supervisors to dispatch workers across workspaces", () => {
+  it("excludes other projects and unbound supervisors when creating a worker", () => {
+    const available = filterSwarmParents(parents, "worker", "host", ["host:workspace-b"]);
+    expect(available.map((parent) => parent.name)).toEqual(["beta"]);
+    expect(resolveSwarmParent(available, "alpha")).toBe("beta");
+  });
+
+  it("allows supervisors to dispatch workers across workspaces in the selected project", () => {
     expect(
-      filterSwarmParents(parents, "worker", "host", ["host:workspace-a"]).map(
+      filterSwarmParents(parents, "worker", "host", ["host:workspace-a", "host:workspace-b"]).map(
         (parent) => parent.name,
       ),
-    ).toEqual(["alpha", "beta", "unbound"]);
+    ).toEqual(["alpha", "beta"]);
   });
 });

@@ -41,6 +41,7 @@ export type WorkspaceTabTarget =
   | { kind: "browser"; browserId: string }
   | { kind: "changes_tree" }
   | { kind: "files" }
+  | { kind: "swarm_tasks"; instance?: "main" | "explorer" }
   | { kind: "pull_request" }
   | WorkspaceFileTabTarget
   | WorkspaceWorkingDiffTabTarget

@@ -16,7 +16,7 @@ export function filterSwarmParents(
   return parents.filter(
     (parent) =>
       parent.serverId === serverId &&
-      (roleClass !== "supervisor" ||
+      (roleClass === "planner" ||
         (parent.workspaceId !== null &&
           workspaceKeys.includes(`${serverId}:${parent.workspaceId}`))),
   );

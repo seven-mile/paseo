@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import { z } from "zod";
+import { pageSwarmItems, summarizeSwarmBoard, type SwarmBoard } from "./swarm-context.js";
 import { ensureValidJson } from "../../json-utils.js";
 import type { Logger } from "pino";
 
@@ -579,6 +580,16 @@ export async function createPaseoToolCatalog(
   } = options;
   const childLogger = logger.child({ module: "agent", component: "paseo-tool-catalog" });
   const callerContext = callerAgentId ? (resolveCallerContext?.(callerAgentId) ?? null) : null;
+  const CreateAgentSettingsInputSchema = z
+    .object({
+      modeId: z.string().optional().describe("Session mode to configure before the first run."),
+      thinkingOptionId: z.string().optional().describe("Thinking option ID."),
+      features: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe("Provider-specific feature values, for example { fast_mode: true } for Codex."),
+    })
+    .strict();
 
   const parseToolInput = async (tool: PaseoToolDefinition, input: unknown): Promise<unknown> => {
     const inputSchema = tool.inputSchema;
@@ -657,15 +668,7 @@ export async function createPaseoToolCatalog(
     } else {
       const readSwarm = async () => {
         if (!callerAgentId) throw new Error("Swarm tools require an agent caller");
-        const board = (await invokePlugin("paseo-swarm", "swarm.board.read", {})) as {
-          agents?: Array<{
-            paseoAgentId: string;
-            qualifiedName?: string;
-            name: string;
-            retired: boolean;
-            workspaceId: string | null;
-          }>;
-        };
+        const board = (await invokePlugin("paseo-swarm", "swarm.board.read", {})) as SwarmBoard;
         const actor = board.agents?.find(
           (candidate) => candidate.paseoAgentId === callerAgentId && !candidate.retired,
         );
@@ -682,22 +685,104 @@ export async function createPaseoToolCatalog(
       });
       registerTool(
         "swarm_board_read",
-        { description: "Read the current Swarm tasks, activities, and named agents." },
-        async () => {
-          await readSwarm();
-          return swarmResult(await invokePlugin("paseo-swarm", "swarm.board.read", {}));
+        {
+          description:
+            "Read paginated summaries of your team and workset, including descendant-managed Tasks and Tasks naming you as a worker. No briefs, metadata or Activity bodies. Use swarm_task_read for details and swarm_activity_read for an Activity.",
+          inputSchema: {
+            limit: z.number().int().min(1).max(50).default(20),
+            taskCursor: z.string().optional(),
+            agentCursor: z.string().optional(),
+            status: z.string().optional(),
+          },
+        },
+        async (input) => {
+          const { board, actor } = await readSwarm();
+          return swarmResult(summarizeSwarmBoard(board, actor, input));
+        },
+      );
+      registerTool(
+        "swarm_task_read",
+        {
+          description:
+            "Read one Task's brief and metadata plus a page of newest-first Activity previews. Use nextActivityCursor for older previews and swarm_activity_read for full Activity content. This read does not change Task state.",
+          inputSchema: {
+            taskId: z.string(),
+            activityLimit: z.number().int().min(1).max(20).default(5),
+            activityCursor: z.string().optional(),
+          },
+        },
+        async (input) => {
+          const { board } = await readSwarm();
+          const task = board.tasks?.find((candidate) => candidate.id === input.taskId);
+          if (!task) throw new Error(`Unknown Task: ${input.taskId}`);
+          const activities = (board.activities ?? [])
+            .filter((activity) => activity.taskId === task.id)
+            .toReversed()
+            .map((activity) => ({
+              id: activity.id,
+              actorName: activity.actorName,
+              actorKind: activity.actorKind,
+              kind: activity.kind,
+              replyTo: activity.replyTo,
+              responseProfile: activity.responseProfile,
+              createdAt: activity.createdAt,
+              bodyPreview: activity.body.slice(0, 600),
+              bodyTruncated: activity.body.length > 600,
+            }));
+          const page = pageSwarmItems(activities, input.activityCursor, input.activityLimit);
+          return swarmResult({
+            task,
+            activities: page.items,
+            totalActivities: page.total,
+            nextActivityCursor: page.nextCursor,
+          });
+        },
+      );
+      registerTool(
+        "swarm_activity_read",
+        {
+          description:
+            "Read one selected Activity, including its full body, decision metadata and canonical references. Use the Activity id from swarm_task_read; do not fetch entire histories to find one report.",
+          inputSchema: { activityId: z.string() },
+        },
+        async (input) => {
+          const { board } = await readSwarm();
+          const activity = board.activities?.find((candidate) => candidate.id === input.activityId);
+          if (!activity) throw new Error(`Unknown Activity: ${input.activityId}`);
+          return swarmResult({ activity });
         },
       );
       if (swarmRole !== "worker") {
         registerTool(
+          "swarm_roles_read",
+          {
+            description:
+              "List the current project PWA roles available for your next-level members. Choose a returned role slug before creating a child.",
+          },
+          async () => {
+            const { actor } = await readSwarm();
+            const projectId =
+              actor.projectId ??
+              (actor.workspaceId
+                ? (await options.workspaceRegistry?.get(actor.workspaceId))?.projectId
+                : undefined);
+            const roles = await invokePlugin("paseo-swarm", "swarm.pwa_roles.read", {
+              roleClass: swarmRole === "planner" ? "supervisor" : "worker",
+              ...(projectId ? { projectId } : {}),
+            });
+            return swarmResult({ roles });
+          },
+        );
+        registerTool(
           "swarm_agent_create",
           {
             description:
-              "Create a named child through Swarm. Planners create supervisors; supervisors create workers.",
+              "Create a named child through Swarm using a role from swarm_roles_read. Planners create supervisors; supervisors create workers. settings configures the child before its first turn.",
             inputSchema: {
               name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
               role: z.string().min(1),
               provider: z.string().min(1),
+              settings: CreateAgentSettingsInputSchema.optional(),
               brief: z.string().min(1),
               title: z.string().optional(),
             },
@@ -709,6 +794,9 @@ export async function createPaseoToolCatalog(
             return swarmResult(
               await invokePlugin("paseo-swarm", "swarm.agent.create", {
                 ...input,
+                modeId: input.settings?.modeId,
+                thinkingOptionId: input.settings?.thinkingOptionId,
+                featureValues: input.settings?.features,
                 roleClass,
                 actorPaseoAgentId: callerAgentId,
                 reportsTo: name,
@@ -746,12 +834,14 @@ export async function createPaseoToolCatalog(
         registerTool(
           "swarm_task_update",
           {
-            description: "Update a Swarm task owned by the calling planner or supervisor.",
+            description:
+              "Update a Swarm task owned by the calling planner or supervisor, including its named workers after team creation.",
             inputSchema: {
               taskId: z.string(),
               status: z.string().min(1).optional(),
               title: z.string().min(1).optional(),
               brief: z.string().min(1).optional(),
+              workerNames: z.array(z.string()).optional(),
               data: z.record(z.string(), z.unknown()).optional(),
             },
           },
@@ -792,12 +882,26 @@ export async function createPaseoToolCatalog(
           },
         },
         async (input) => {
-          const { board, name } = await readSwarm();
-          const recipient = board.agents?.find(
-            (candidate) =>
-              !candidate.retired &&
-              (candidate.qualifiedName === input.recipient || candidate.name === input.recipient),
-          );
+          const { board, actor, name } = await readSwarm();
+          const agents = board.agents?.filter((candidate) => !candidate.retired) ?? [];
+          const scopes = [name, actor.reportsTo].filter(Boolean);
+          const recipient =
+            scopes
+              .map((scope) =>
+                agents.find(
+                  (candidate) =>
+                    (candidate.qualifiedName ?? candidate.name) === `${scope}.${input.recipient}`,
+                ),
+              )
+              .find(Boolean) ??
+            agents.find(
+              (candidate) =>
+                (candidate.qualifiedName ?? candidate.name) === actor.reportsTo &&
+                candidate.name === input.recipient,
+            ) ??
+            agents.find(
+              (candidate) => (candidate.qualifiedName ?? candidate.name) === input.recipient,
+            );
           if (!recipient) throw new Error(`Unknown active Swarm agent: ${input.recipient}`);
           return swarmResult(
             await invokePlugin("paseo-swarm", "swarm.message.send", {
@@ -1070,16 +1174,6 @@ export async function createPaseoToolCatalog(
       },
       { message: "provider must be provider or provider/model, for example codex/gpt-5.4" },
     );
-  const CreateAgentSettingsInputSchema = z
-    .object({
-      modeId: z.string().optional().describe("Session mode to configure before the first run."),
-      thinkingOptionId: z.string().optional().describe("Thinking option ID."),
-      features: z
-        .record(z.string(), z.unknown())
-        .optional()
-        .describe("Provider-specific feature values, for example { fast_mode: true } for Codex."),
-    })
-    .strict();
   const UpdateAgentSettingsInputSchema = z
     .object({
       modeId: z.string().optional().describe("Session mode ID."),

@@ -785,6 +785,94 @@ describe("workspace-layout-store tree transforms", () => {
 });
 
 describe("workspace-layout-store actions", () => {
+  it("keeps main and Explorer Tasks scope and selection independent", () => {
+    const workspaceKey = createWorkspaceKey();
+    const store = workspaceLayoutStore.getState();
+    const main = store.openTab({
+      workspaceKey,
+      target: { kind: "swarm_tasks", instance: "main" },
+      intent: "reveal",
+    })!;
+    const explorerPaneId = store.showExplorerSidebar(workspaceKey)!;
+    const explorer = store.openTab({
+      workspaceKey,
+      target: { kind: "swarm_tasks", instance: "explorer" },
+      intent: "reveal",
+      placement: { mode: "prefer", paneId: explorerPaneId },
+    })!;
+    const mainState = { plannerName: "team.planner", taskId: "task-main" };
+    const explorerState = { agentName: "team.planner.supervisor", taskId: "task-explorer" };
+    store.setTabState(workspaceKey, main, mainState);
+    store.setTabState(workspaceKey, explorer, explorerState);
+
+    let layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+    expect(main).toBe("swarm_tasks_main");
+    expect(explorer).toBe("swarm_tasks_explorer");
+    expect(findPaneById(layout.root, "main")?.focusedTabId).toBe(main);
+    expect(findPaneById(layout.root, explorerPaneId)?.focusedTabId).toBe(explorer);
+    expect(collectAllTabs(layout.root).find((tab) => tab.tabId === main)?.state).toEqual(mainState);
+    expect(collectAllTabs(layout.root).find((tab) => tab.tabId === explorer)?.state).toEqual(
+      explorerState,
+    );
+
+    store.setTabState(workspaceKey, explorer, { agentName: explorerState.agentName });
+    layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+    expect(collectAllTabs(layout.root).find((tab) => tab.tabId === main)?.state).toEqual(mainState);
+    expect(collectAllTabs(layout.root).find((tab) => tab.tabId === explorer)?.state).toEqual({
+      agentName: explorerState.agentName,
+    });
+  });
+
+  it.each(["main", "explorer"] as const)(
+    "closing %s Tasks clears launch scope and detail on generic reopen",
+    (instance) => {
+      const workspaceKey = createWorkspaceKey();
+      const store = workspaceLayoutStore.getState();
+      const target = { kind: "swarm_tasks", instance } as const;
+      const tabId = store.openTab({ workspaceKey, target, intent: "reveal" })!;
+      store.setTabState(workspaceKey, tabId, {
+        agentName: "team.supervisor",
+        taskId: "task-selected",
+      });
+      store.closeTab(workspaceKey, tabId);
+      const reopened = store.openTab({ workspaceKey, target, intent: "reveal" });
+
+      expect(reopened).toBe(tabId);
+      const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+      expect(
+        collectAllTabs(layout.root).find((tab) => tab.tabId === reopened)?.state,
+      ).toBeUndefined();
+    },
+  );
+
+  it("preserves a moved Tasks instance when reopening its preferred host", () => {
+    const workspaceKey = createWorkspaceKey();
+    const store = workspaceLayoutStore.getState();
+    const explorerPaneId = store.showExplorerSidebar(workspaceKey)!;
+    const target = { kind: "swarm_tasks", instance: "explorer" } as const;
+    const tabId = store.openTab({
+      workspaceKey,
+      target,
+      intent: "reveal",
+      placement: { mode: "prefer", paneId: explorerPaneId },
+    })!;
+    store.setTabState(workspaceKey, tabId, { taskId: "keep-detail" });
+    store.moveTabToPane(workspaceKey, tabId, "main");
+
+    const reopened = store.openTab({
+      workspaceKey,
+      target,
+      intent: "reveal",
+      placement: { mode: "prefer", paneId: explorerPaneId },
+    });
+    const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+    expect(reopened).toBe(tabId);
+    expect(findPaneContainingTab(layout.root, tabId)?.id).toBe("main");
+    expect(collectAllTabs(layout.root).find((tab) => tab.tabId === tabId)?.state).toEqual({
+      taskId: "keep-detail",
+    });
+  });
+
   it("creates duplicate Changes instances while reveal keeps the first instance", () => {
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
@@ -1364,6 +1452,12 @@ describe("workspace-layout-store actions", () => {
       intent: "background",
       placement: { mode: "prefer", paneId: explorerSidebarPaneId as string },
     });
+    source.getState().openTab({
+      workspaceKey,
+      target: { kind: "swarm_tasks" },
+      intent: "background",
+      placement: { mode: "prefer", paneId: explorerSidebarPaneId as string },
+    });
     source.getState().hideExplorerSidebar(workspaceKey);
 
     await vi.waitFor(async () => {
@@ -1384,6 +1478,7 @@ describe("workspace-layout-store actions", () => {
       "files",
       "changes_tree",
       "pull_request",
+      "swarm_tasks",
     ]);
     expect(state.explorerSidebarPaneIdByWorkspace[workspaceKey]).toBe(explorerSidebarPaneId);
   });

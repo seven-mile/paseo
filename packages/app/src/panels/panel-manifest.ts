@@ -71,6 +71,13 @@ const manifests = {
     singleton: true,
     resourceKey: () => "files",
   },
+  swarm_tasks: {
+    kind: "swarm_tasks",
+    supportedHosts: ["main", "explorer"],
+    showCloseButton: true,
+    singleton: true,
+    resourceKey: (target) => target.instance ?? "main",
+  },
   pull_request: {
     kind: "pull_request",
     supportedHosts: ["main", "explorer"],

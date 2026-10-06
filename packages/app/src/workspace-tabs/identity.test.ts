@@ -105,6 +105,19 @@ describe("workspace utility panel identity", () => {
   );
 });
 
+describe("Tasks panel identity", () => {
+  it("defaults to main while keeping Explorer a distinct stable instance", () => {
+    const main = { kind: "swarm_tasks", instance: "main" } as const;
+    const explorer = { kind: "swarm_tasks", instance: "explorer" } as const;
+
+    expect(normalizeWorkspaceTabTarget({ kind: "swarm_tasks" })).toEqual(main);
+    expect(buildDeterministicWorkspaceTabId(main)).toBe("swarm_tasks_main");
+    expect(buildDeterministicWorkspaceTabId(explorer)).toBe("swarm_tasks_explorer");
+    expect(workspaceTabTargetsEqual(main, explorer)).toBe(false);
+    expect(workspaceTabTargetsEqual({ kind: "swarm_tasks" }, main)).toBe(true);
+  });
+});
+
 describe("commit diff tab identity", () => {
   it("keys a commit diff tab by its sha", () => {
     expect(buildDeterministicWorkspaceTabId({ kind: "commit_diff", sha: "abc123" })).toBe(

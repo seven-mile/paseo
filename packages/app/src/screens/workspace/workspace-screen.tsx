@@ -339,6 +339,9 @@ function getFallbackTabOptionLabel(
   if (tab.target.kind === "files") {
     return labels.files;
   }
+  if (tab.target.kind === "swarm_tasks") {
+    return "Tasks";
+  }
   if (tab.target.kind === "pull_request") {
     return labels.pullRequest;
   }
@@ -397,6 +400,9 @@ function getFallbackTabOptionDescription(
   }
   if (tab.target.kind === "plugin") {
     return tab.target.panelId;
+  }
+  if (tab.target.kind === "swarm_tasks") {
+    return "Tasks and activity";
   }
   return tab.target.path;
 }

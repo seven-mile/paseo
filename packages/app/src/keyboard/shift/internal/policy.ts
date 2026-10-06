@@ -32,7 +32,7 @@ export function resolveStreamKeyboardInset(input: {
 
 export function shouldUseCompactExplorerKeyboardPadding(input: {
   isGit: boolean;
-  explorerTab: "changes" | "files" | "pr";
+  explorerTab: "changes" | "files" | "pr" | "tasks";
 }): boolean {
   return !input.isGit || input.explorerTab !== "changes";
 }

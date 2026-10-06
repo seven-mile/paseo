@@ -832,6 +832,260 @@ function createPaseoWorktreeForMcpTest(options: {
   };
 }
 
+describe("Swarm MCP coordination", () => {
+  it("pages caller worksets and reads selected Task and Activity content on demand", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const actor = {
+      paseoAgentId: "caller",
+      name: "lead",
+      qualifiedName: "lead",
+      roleClass: "planner",
+      reportsTo: null,
+      workspaceId: "workspace",
+      retired: false,
+    };
+    const task = (id: string, managerName: string) => ({
+      id,
+      title: id,
+      managerName,
+      workerNames: [],
+      brief: "private long brief",
+      status: "review",
+      updatedAt: "2026-10-06",
+      data: { evidence: "long metadata" },
+    });
+    const activities = ["older", "newer"].map((id) => ({
+      id,
+      taskId: "alpha",
+      actorName: "lead",
+      actorKind: "agent",
+      kind: "report",
+      body: "evidence".repeat(200),
+      replyTo: null,
+      responseProfile: null,
+      createdAt: "2026-10-06",
+      data: { decisions: ["approve"] },
+      refs: ["file-reference"],
+    }));
+    const board = {
+      agents: [actor],
+      tasks: [task("alpha", "lead.team"), task("beta", "lead"), task("other", "another")],
+      activities,
+    };
+    const invokePlugin = vi.fn(async () => board);
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      callerAgentId: actor.paseoAgentId,
+      invokePlugin,
+      logger: createTestLogger(),
+    });
+    try {
+      const read = async (name: string, input: Record<string, unknown>) =>
+        (await invokeToolWithParsedInput(registeredTool(server, name), input)).structuredContent;
+      expect(await read("swarm_board_read", { limit: 1 })).toMatchObject({
+        totalTasks: 2,
+        nextTaskCursor: "alpha",
+        tasks: [{ id: "alpha", activityCount: 2 }],
+      });
+      const summary = JSON.stringify(await read("swarm_board_read", {}));
+      expect(summary).not.toContain("private long brief");
+      expect(summary).not.toContain("long metadata");
+      expect(summary).not.toContain("evidenceevidence");
+      expect(await read("swarm_board_read", { limit: 1, taskCursor: "alpha" })).toMatchObject({
+        tasks: [{ id: "beta" }],
+        nextTaskCursor: null,
+      });
+      expect(await read("swarm_board_read", { status: "absent" })).toMatchObject({
+        tasks: [],
+        totalTasks: 0,
+      });
+      expect(await read("swarm_task_read", { taskId: "alpha", activityLimit: 1 })).toMatchObject({
+        task: board.tasks[0],
+        totalActivities: 2,
+        nextActivityCursor: "newer",
+        activities: [
+          { id: "newer", bodyPreview: activities[1].body.slice(0, 600), bodyTruncated: true },
+        ],
+      });
+      expect(
+        await read("swarm_task_read", { taskId: "alpha", activityCursor: "newer" }),
+      ).toMatchObject({
+        activities: [{ id: "older" }],
+        nextActivityCursor: null,
+      });
+      expect(await read("swarm_activity_read", { activityId: "newer" })).toEqual({
+        activity: activities[1],
+      });
+      await expect(read("swarm_task_read", { taskId: "missing" })).rejects.toThrow("Unknown Task");
+      await expect(read("swarm_board_read", { taskCursor: "missing" })).rejects.toThrow(
+        "Unknown cursor",
+      );
+      await expect(read("swarm_board_read", { limit: 51 })).rejects.toThrow();
+      expect(board.activities).toEqual(activities);
+    } finally {
+      await server.close();
+    }
+  });
+  it.each(["planner", "supervisor"] as const)(
+    "configures a %s child before its first turn",
+    async (roleClass) => {
+      const { agentManager, agentStorage } = createTestDeps();
+      const actor = {
+        paseoAgentId: "swarm-parent",
+        name: "parent",
+        qualifiedName: "parent",
+        roleClass,
+        retired: false,
+        reportsTo: null,
+        projectId: "parent-project",
+        workspaceId: "parent-workspace",
+      };
+      const invokePlugin = vi.fn(async (_pluginId: string, method: string) => {
+        if (method === "swarm.board.read") return { agents: [actor] };
+        if (method === "swarm.pwa_roles.read") return [{ slug: "researcher", roleClass: "worker" }];
+        return { name: "child" };
+      });
+      const server = await createAgentMcpServer({
+        agentManager,
+        agentStorage,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        callerAgentId: actor.paseoAgentId,
+        invokePlugin,
+        logger: createTestLogger(),
+      });
+      try {
+        const rolesResult = await registeredTool(server, "swarm_roles_read").handler({});
+        expect(rolesResult.structuredContent).toEqual({
+          roles: [{ slug: "researcher", roleClass: "worker" }],
+        });
+        expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.pwa_roles.read", {
+          roleClass: roleClass === "planner" ? "supervisor" : "worker",
+          projectId: "parent-project",
+        });
+        await invokeToolWithParsedInput(registeredTool(server, "swarm_agent_create"), {
+          name: "child",
+          role: "researcher",
+          provider: "codex/gpt-6.1-sol",
+          brief: "Survey the local repository",
+          settings: {
+            modeId: "auto-review",
+            thinkingOptionId: "high",
+            features: { fast_mode: true },
+          },
+        });
+        expect(invokePlugin).toHaveBeenCalledWith(
+          "paseo-swarm",
+          "swarm.agent.create",
+          expect.objectContaining({
+            provider: "codex/gpt-6.1-sol",
+            modeId: "auto-review",
+            thinkingOptionId: "high",
+            featureValues: { fast_mode: true },
+            actorPaseoAgentId: actor.paseoAgentId,
+            reportsTo: "parent",
+            roleClass: roleClass === "planner" ? "supervisor" : "worker",
+          }),
+        );
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
+  it.each(["planner", "supervisor", "worker"] as const)(
+    "uses the actual %s caller for Task participant changes",
+    async (roleClass) => {
+      const { agentManager, agentStorage } = createTestDeps();
+      const actor = {
+        paseoAgentId: "actual-caller",
+        qualifiedName: "planner.supervisor",
+        name: "supervisor",
+        roleClass,
+        retired: false,
+      };
+      const invokePlugin = vi.fn(async (_pluginId: string, method: string) =>
+        method === "swarm.board.read" ? { agents: [actor] } : { id: "review-api" },
+      );
+      const server = await createAgentMcpServer({
+        agentManager,
+        agentStorage,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        callerAgentId: actor.paseoAgentId,
+        invokePlugin,
+        logger: createTestLogger(),
+      });
+      try {
+        if (roleClass === "worker") {
+          expect(lookupTool(server, "swarm_task_update")).toBeUndefined();
+          return;
+        }
+        await invokeToolWithParsedInput(registeredTool(server, "swarm_task_update"), {
+          taskId: "review-api",
+          workerNames: ["reviewer"],
+          actorName: "someone-else",
+        });
+        expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.task.update", {
+          taskId: "review-api",
+          workerNames: ["reviewer"],
+          actorName: actor.qualifiedName,
+        });
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
+  it.each([
+    ["alpha.team", "review", "alpha.team.review"],
+    ["alpha.team.scout", "review", "alpha.team.review"],
+    ["alpha.team.scout", "team", "alpha.team"],
+    ["alpha.team.scout", "beta.team.review", "beta.team.review"],
+  ])("resolves %s addressing %s to %s", async (sender, reference, expected) => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const agents = ["beta.team.review", "alpha.team.review", "alpha.team", "alpha.team.scout"].map(
+      (qualifiedName) => ({
+        paseoAgentId: qualifiedName,
+        qualifiedName,
+        name: qualifiedName.split(".").at(-1),
+        reportsTo: qualifiedName.split(".").slice(0, -1).join("."),
+        roleClass: qualifiedName.endsWith("team") ? "supervisor" : "worker",
+        retired: false,
+        workspaceId: "test-workspace",
+      }),
+    );
+    const invokePlugin = vi.fn(async (_pluginId: string, method: string) =>
+      method === "swarm.board.read" ? { agents } : { delivered: true },
+    );
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      callerAgentId: sender,
+      invokePlugin,
+      logger: createTestLogger(),
+    });
+    try {
+      await invokeToolWithParsedInput(registeredTool(server, "swarm_message_send"), {
+        recipient: reference,
+        body: "Concrete findings",
+      });
+      expect(invokePlugin).toHaveBeenCalledWith(
+        "paseo-swarm",
+        "swarm.message.send",
+        expect.objectContaining({
+          senderName: sender,
+          recipientName: expected,
+          recipientPaseoAgentId: expected,
+        }),
+      );
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 describe("browser MCP tools", () => {
   const logger = createTestLogger();
 
