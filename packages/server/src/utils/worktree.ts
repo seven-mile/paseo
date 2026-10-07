@@ -38,7 +38,7 @@ import {
   writePaseoWorktreeMetadata,
   writePaseoWorktreeRuntimeMetadata,
 } from "./worktree-metadata.js";
-import { runGitCommand } from "./run-git-command.js";
+import { GIT_TIMEOUT_CLEANUP_ERROR_NAME, runGitCommand } from "./run-git-command.js";
 import { spawnProcess } from "./spawn.js";
 import { resolvePaseoHome } from "../server/paseo-home.js";
 import { createExternalProcessEnv } from "../server/paseo-env.js";
@@ -1733,7 +1733,9 @@ async function refreshRemoteTrackingBaseRef(cwd: string, baseRef: string): Promi
       timeout: REMOTE_BASE_REFRESH_TIMEOUT_MS,
       acceptExitCodes: [0, 1, 128],
     });
-  } catch {
+  } catch (error) {
+    // Failed tree cleanup must surface; ordinary fetch failures still use the cached ref.
+    if (error instanceof Error && error.name === GIT_TIMEOUT_CLEANUP_ERROR_NAME) throw error;
     // The fetch timed out; branch from the cached ref.
   }
 }

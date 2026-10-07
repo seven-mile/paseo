@@ -2,6 +2,8 @@
 const { appendFileSync, readFileSync } = require("node:fs");
 const { createHash } = require("node:crypto");
 const path = require("node:path");
+const os = require("node:os");
+const v8 = require("node:v8");
 const config = require("../packages/app/metro.config.cjs");
 const WorkerFarm = require("@expo/metro/metro/DeltaBundler/WorkerFarm").default;
 const Server = require("@expo/metro/metro/Server").default;
@@ -33,6 +35,20 @@ function hashFile(filename) {
     return createHash("sha256").update(readFileSync(filename)).digest("hex");
   } catch {
     return null;
+  }
+}
+
+// Parent process snapshots include prior graph work and exclude any separate worker's RSS.
+function parentMemory() {
+  try {
+    const { rss, heapUsed } = process.memoryUsage();
+    return {
+      parentRssBytes: rss,
+      parentHeapUsedBytes: heapUsed,
+      parentMaxRssKiB: process.resourceUsage().maxRSS,
+    };
+  } catch {
+    return {};
   }
 }
 
@@ -114,6 +130,7 @@ WorkerFarm.prototype.transform = function (...args) {
       absoluteFilename,
       requests: [...requests],
       generatedValidator,
+      ...(generatedValidator ? parentMemory() : {}),
       options: {
         platform: options.platform,
         dev: options.dev,
@@ -140,6 +157,7 @@ WorkerFarm.prototype.transform = function (...args) {
           elapsedMs,
           sourceSHA1: status === "success" ? value?.sha1 : undefined,
           errorName: status === "error" ? value?.name : undefined,
+          ...(generatedValidator ? parentMemory() : {}),
         },
         generatedValidator || elapsedMs >= 200,
       );
@@ -219,6 +237,10 @@ record(
     configStage: "before-Expo-overrides",
     node: process.version,
     platform: process.platform,
+    webPlatform: process.env.PASEO_WEB_PLATFORM ?? "",
+    availableParallelism: os.availableParallelism(),
+    totalMemoryBytes: os.totalmem(),
+    heapLimitBytes: v8.getHeapStatistics().heap_size_limit,
     commit: process.env.GITHUB_SHA,
     maxWorkers: config.maxWorkers,
     transformerPath: config.transformerPath,

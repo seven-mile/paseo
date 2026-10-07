@@ -176,10 +176,15 @@ jobs:
       - name: Build server dependencies
         run: npm run build:server-deps
 
+      - name: Observe baseline Windows Git descendant ownership
+        if: ${{ runner.os == 'Windows' && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
+        run: node scripts/ci-windows-git-ownership.mjs
+
       - name: Run server tests
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
         run: npm run test --workspace=@getpaseo/server
         env:
+          PASEO_GIT_OWNERSHIP_LOG: ${{ runner.temp }}/windows-git-ownership/new.ndjson
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -191,6 +196,15 @@ jobs:
       - name: Run Hub CLI/daemon contract
         if: ${{ needs.changes.outputs.full == 'false' && needs.changes.outputs.server == 'false' && needs.changes.outputs.hub != 'false' }}
         run: npm run test:hub-cli-contract --workspace=@getpaseo/server
+
+      - name: Upload Windows Git ownership evidence
+        if: ${{ runner.os == 'Windows' && (success() || failure() || cancelled()) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-git-ownership
+          path: ${{ runner.temp }}/windows-git-ownership/
+          if-no-files-found: ignore
+          retention-days: 7
 
   server-tests-windows:
     name: server-tests (windows-latest)

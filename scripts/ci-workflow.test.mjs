@@ -220,6 +220,35 @@ test("focused contracts stay inside existing required checks", () => {
   assert.match(server, /npm run test --workspace=@getpaseo\/server/);
   assert.ok(!jobs.has("hub-cli-contract"));
 
+  const baselineStep =
+    server
+      .split("      - name: Observe baseline Windows Git descendant ownership\n")[1]
+      ?.split("      - name:")[0] ?? "";
+  assert.match(baselineStep, /runner\.os == 'Windows'/);
+  assert.match(
+    baselineStep,
+    /needs\.changes\.outputs\.full != 'false' \|\| needs\.changes\.outputs\.server != 'false'/,
+  );
+  assert.match(baselineStep, /run: node scripts\/ci-windows-git-ownership\.mjs/);
+  assert.ok(
+    server.indexOf("Observe baseline Windows Git descendant ownership") <
+      server.indexOf("Run server tests"),
+  );
+  const candidateStep =
+    server.split("      - name: Run server tests\n")[1]?.split("      - name:")[0] ?? "";
+  const evidenceUpload =
+    server.split("      - name: Upload Windows Git ownership evidence\n")[1] ?? "";
+  const candidateLog = candidateStep.match(/^          PASEO_GIT_OWNERSHIP_LOG: (.+)$/m)?.[1];
+  const evidenceDirectory = evidenceUpload.match(/^          path: (.+)\/$/m)?.[1];
+  assert.ok(candidateLog && evidenceDirectory);
+  assert.equal(candidateLog, `${evidenceDirectory}/new.ndjson`);
+  assert.match(
+    evidenceUpload,
+    /runner\.os == 'Windows' && \(success\(\) \|\| failure\(\) \|\| cancelled\(\)\)/,
+  );
+  assert.match(evidenceUpload, /uses: actions\/upload-artifact@v4/);
+  assert.match(jobs.get("server-tests-windows")?.join("\n") ?? "", /steps: \*server_test_steps/);
+
   assert.match(desktop, /test:e2e:renderer/);
   assert.match(desktop, /test:e2e:browser-tabs/);
   assert.match(desktop, /npm run test --workspace=@getpaseo\/desktop/);
@@ -399,4 +428,28 @@ test("desktop packaging smokes main pushes and only the pull requests that touch
   for (const action of ["actions/checkout", "actions/setup-node", "actions/upload-artifact"]) {
     assert.match(source, new RegExp(`${action}@[0-9a-f]{40} # v\\d+\\.\\d+\\.\\d+`));
   }
+  const build =
+    source.split("      - name: Build Linux desktop artifacts\n")[1]?.split("      - name:")[0] ??
+    "";
+  const upload = source.split("      - name: Upload packaged smoke diagnostics\n")[1] ?? "";
+  assert.match(
+    build,
+    /^          EXPO_OVERRIDE_METRO_CONFIG: \$\{\{ github\.workspace \}\}\/scripts\/ci-metro-observer\.cjs$/m,
+  );
+  const observerLog = build.match(/^          CI_METRO_OBSERVER_LOG: (.+)$/m)?.[1];
+  assert.ok(observerLog, "missing desktop export observer output path");
+  assert.match(observerLog, /^\$\{\{ runner\.temp \}\}\/[^/]+\.ndjson$/);
+  const retainedLog = upload
+    .split("\n")
+    .find((line) => /^            .*\.ndjson$/.test(line))
+    ?.trim();
+  assert.equal(
+    retainedLog,
+    observerLog,
+    "desktop export log must reach the actual artifact uploader",
+  );
+  assert.match(upload, /^            \$\{\{ runner\.temp \}\}\/desktop-smoke$/m);
+  assert.match(upload, /if: \$\{\{ !cancelled\(\) \}\}/);
+  assert.match(upload, /if-no-files-found: ignore/);
+  assert.match(upload, /retention-days: 7/);
 });
