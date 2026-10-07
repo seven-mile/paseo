@@ -39,9 +39,12 @@ import { HostPicker } from "@/components/hosts/host-picker";
 import { ProjectIconView } from "@/components/project-icon-view";
 import { ProjectLeadingVisual } from "@/components/sidebar/project-leading-visual";
 import {
+  getSwarmCreationValidationKey,
+  getSwarmCreationLoadKey,
   filterSwarmParents,
   resolveSwarmParent,
   type SwarmParentChoice,
+  type SwarmCreationLoadState,
 } from "@/swarm/parent-selection";
 import { Combobox, ComboboxItem } from "@/components/ui/combobox";
 import type { ComboboxOption as ComboboxOptionType, ComboboxProps } from "@/components/ui/combobox";
@@ -227,6 +230,10 @@ export interface SwarmWorkspaceOptions {
   roleClass: "planner" | "supervisor" | "worker";
   initialParent?: string;
   initialName?: string;
+  forServer(serverId: string): SwarmWorkspaceOperations | undefined;
+}
+
+export interface SwarmWorkspaceOperations {
   loadTarget(target: SwarmWorkspaceTarget): Promise<SwarmWorkspaceTargetOptions>;
   prepareAgent: (input: {
     target: SwarmWorkspaceTarget;
@@ -240,22 +247,45 @@ export interface SwarmWorkspaceOptions {
 
 function swarmTargetState(
   target: SwarmWorkspaceTarget | null,
+  operations: SwarmWorkspaceOperations | undefined,
   connected: boolean,
   query: UseQueryResult<SwarmWorkspaceTargetOptions, Error>,
   selectedRole: string,
+  t: TFunction,
 ) {
   const roles = query.data?.roles ?? [];
   const role = roles.some((choice) => choice.role === selectedRole)
     ? selectedRole
     : (roles[0]?.role ?? "");
-  let targetError: string | null = null;
-  if (!target) targetError = "Choose a project on this host.";
-  else if (connected && query.isError) targetError = toErrorMessage(query.error);
-  else if (connected && query.data && roles.length === 0)
-    targetError = "No roles are configured in this project's PWA.";
-  const waitingForRoles = !query.data && !query.isError;
-  const targetPending = target !== null && (!connected || waitingForRoles);
-  return { roles, role, targetError, targetPending };
+  let loadState: SwarmCreationLoadState = "loaded";
+  if (!target) loadState = "missing-project";
+  else if (!operations) loadState = "not-installed";
+  else if (!connected) loadState = "pending";
+  else if (query.isError) loadState = "error";
+  else if (!query.data) loadState = "pending";
+  const rawError = loadState === "error" ? toErrorMessage(query.error) : null;
+  const targetPending = loadState === "pending";
+  const loadKey = getSwarmCreationLoadKey(loadState, roles);
+  const targetError = targetPending ? null : (rawError ?? (loadKey ? t(loadKey) : null));
+  return { roles, role, loadState, rawError, targetPending, targetError };
+}
+
+function swarmWorkspaceSubmission(
+  operations: SwarmWorkspaceOperations | undefined,
+  target: SwarmWorkspaceTarget | null,
+  loadState: SwarmCreationLoadState,
+  validationKey: string | null,
+  selection: { role: string; name: string; reportsTo: string | null },
+) {
+  if (!operations || !target || loadState !== "loaded" || validationKey) return undefined;
+  return {
+    prepareAgent: operations.prepareAgent,
+    target,
+    role: selection.role,
+    name: selection.name,
+    reportsTo: selection.reportsTo,
+    brief: "",
+  };
 }
 
 function useSwarmWorkspaceState(
@@ -263,6 +293,7 @@ function useSwarmWorkspaceState(
   project: HostProjectListItem | null,
   serverId: string,
 ) {
+  const { t } = useTranslation();
   const connected = useHostRuntimeIsConnected(serverId);
   const [selectedRole, setRole] = useState("");
   const [parent, setParent] = useState<string | null>(options?.initialParent ?? null);
@@ -272,19 +303,22 @@ function useSwarmWorkspaceState(
     () => (placement ? { serverId, projectId: placement.projectId } : null),
     [placement, serverId],
   );
+  const operations = options?.forServer(serverId);
   const query = useFetchQuery({
     queryKey: ["swarm", "creation-target", serverId, target?.projectId, options?.roleClass],
-    queryFn: options && target ? () => options.loadTarget(target) : skipToken,
+    queryFn: operations && target ? () => operations.loadTarget(target) : skipToken,
     enabled: connected,
     dataShape: "value",
     staleTimeMs: 0,
     retry: false,
   });
-  const { roles, role, targetError, targetPending } = swarmTargetState(
+  const { roles, role, loadState, rawError, targetPending, targetError } = swarmTargetState(
     target,
+    operations,
     connected,
     query,
     selectedRole,
+    t,
   );
   const parents = useMemo(
     () =>
@@ -299,6 +333,14 @@ function useSwarmWorkspaceState(
     [options, project, query.data, serverId],
   );
   const effectiveParent = resolveSwarmParent(parents, parent);
+  const validationKey = getSwarmCreationValidationKey({
+    loadState,
+    roleClass: options?.roleClass ?? "planner",
+    roles,
+    role,
+    parents,
+    reportsTo: effectiveParent,
+  });
   const form = options
     ? {
         roleClass: options.roleClass,
@@ -312,34 +354,15 @@ function useSwarmWorkspaceState(
         onNameChange: setName,
         targetError,
         targetPending,
-        onRetry: target ? () => void query.refetch() : null,
+        onRetry: target && operations ? () => void query.refetch() : null,
       }
     : undefined;
-  const submission = options
-    ? {
-        prepareAgent: (input: Parameters<SwarmWorkspaceOptions["prepareAgent"]>[0]) => {
-          if (!target || targetError || targetPending) {
-            throw new Error(targetError ?? "Wait for the project's PWA roles to load.");
-          }
-          if (!roles.some((choice) => choice.role === input.role)) {
-            throw new Error("Choose a role from the selected project's PWA.");
-          }
-          if (
-            options.roleClass !== "planner" &&
-            !parents.some((choice) => choice.name === input.reportsTo)
-          ) {
-            throw new Error("Choose a manager for the selected project and host.");
-          }
-          return options.prepareAgent({ ...input, target });
-        },
-        target,
-        role,
-        name,
-        reportsTo: effectiveParent,
-        brief: "",
-      }
-    : undefined;
-  return { form, submission, bindAgent: options?.bindAgent };
+  const submission = swarmWorkspaceSubmission(operations, target, loadState, validationKey, {
+    role,
+    name,
+    reportsTo: effectiveParent,
+  });
+  return { form, submission, validationKey, rawError, bindAgent: operations?.bindAgent };
 }
 
 interface NewWorkspaceScreenProps {
@@ -350,6 +373,19 @@ interface NewWorkspaceScreenProps {
   draftId?: string;
   title?: string;
   swarm?: SwarmWorkspaceOptions;
+}
+
+function NewWorkspaceCreationError({
+  validationKey,
+  errorMessage,
+}: {
+  validationKey: string | null;
+  errorMessage: string | null;
+}) {
+  const { t } = useTranslation();
+  const message = validationKey ? t(validationKey) : errorMessage;
+  if (!message) return null;
+  return <Text style={styles.errorText}>{message}</Text>;
 }
 
 // A terminal launch sends argv, not a message: there is nothing to attach and
@@ -887,6 +923,7 @@ function SwarmFormControls({
   isPending: boolean;
   badgePressableStyle: React.ComponentProps<typeof Pressable>["style"];
 }) {
+  const { t } = useTranslation();
   if (!input) return null;
   if (input.targetPending) return <LoadingSpinner color={styles.swarmSpinnerColor.color} />;
   if (input.targetError) {
@@ -894,7 +931,7 @@ function SwarmFormControls({
       <Alert variant="error" title={input.targetError} testID="swarm-target-error">
         {input.onRetry ? (
           <Button variant="outline" size="sm" onPress={input.onRetry} testID="swarm-target-retry">
-            Retry
+            {t("common.actions.retry")}
           </Button>
         ) : null}
       </Alert>
@@ -918,6 +955,7 @@ function SwarmFormControlsInner({
   isPending: boolean;
   badgePressableStyle: React.ComponentProps<typeof Pressable>["style"];
 }) {
+  const { t } = useTranslation();
   const { theme } = useUnistyles();
   const [openPicker, setOpenPicker] = useState<"role" | "parent" | null>(null);
   const roleAnchorRef = useRef<View>(null);
@@ -931,10 +969,14 @@ function SwarmFormControlsInner({
     [input.parents],
   );
   const roleLabel =
-    input.roles.find((choice) => choice.role === input.role)?.title ?? input.role ?? "Role";
+    input.roles.find((choice) => choice.role === input.role)?.title ??
+    input.role ??
+    t("swarm.creation.role");
   const parentLabel =
     input.parents.find((choice) => choice.name === input.parent)?.title ??
-    (input.roleClass === "supervisor" ? "Choose planner" : "Choose supervisor");
+    (input.roleClass === "supervisor"
+      ? t("swarm.creation.choosePlanner")
+      : t("swarm.creation.chooseSupervisor"));
   const roleIcon = useMemo(
     () => <FileText size={ICON_SIZE.sm} color={theme.colors.foregroundMuted} />,
     [theme.colors.foregroundMuted],
@@ -1052,14 +1094,14 @@ function SwarmFormControlsInner({
         roleLabel,
         roleIcon,
         () => setOpenPicker("role"),
-        "Swarm role",
-        "Choose the agent's responsibilities from the PWA.",
+        t("swarm.creation.swarmRole"),
+        t("swarm.creation.roleHint"),
       )}
       <Combobox
         options={roleOptions}
         value={input.role}
         onSelect={handleRoleSelect}
-        title="Role"
+        title={t("swarm.creation.role")}
         open={openPicker === "role"}
         onOpenChange={handleRoleOpenChange}
         desktopPlacement="bottom-start"
@@ -1073,16 +1115,22 @@ function SwarmFormControlsInner({
             parentLabel,
             parentIcon,
             () => setOpenPicker("parent"),
-            input.roleClass === "supervisor" ? "Parent planner" : "Supervisor",
             input.roleClass === "supervisor"
-              ? "Choose the planner this supervisor reports to."
-              : "Choose the supervisor this worker reports to.",
+              ? t("swarm.creation.parentPlanner")
+              : t("swarm.creation.supervisor"),
+            input.roleClass === "supervisor"
+              ? t("swarm.creation.plannerHint")
+              : t("swarm.creation.supervisorHint"),
           )}
           <Combobox
             options={parentOptions}
             value={input.parent ?? ""}
             onSelect={handleParentSelect}
-            title={input.roleClass === "supervisor" ? "Parent planner" : "Supervisor"}
+            title={
+              input.roleClass === "supervisor"
+                ? t("swarm.creation.parentPlanner")
+                : t("swarm.creation.supervisor")
+            }
             open={openPicker === "parent"}
             onOpenChange={handleParentOpenChange}
             desktopPlacement="bottom-start"
@@ -1097,19 +1145,17 @@ function SwarmFormControlsInner({
             <EditingTextInput
               initialValue={input.name}
               onChangeText={input.onNameChange}
-              placeholder={input.roleClass}
+              placeholder={t(`swarm.roles.${input.roleClass}`)}
               autoCapitalize="none"
               autoCorrect={false}
               editable={!isPending}
-              accessibilityLabel="Agent name"
+              accessibilityLabel={t("swarm.creation.agentName")}
               style={styles.agentNameInput}
             />
           </View>
         </TooltipTrigger>
         <TooltipContent side="top" align="center" offset={8}>
-          <Text style={styles.tooltipText}>
-            Give the agent a short name used to address it within its team, such as code-review.
-          </Text>
+          <Text style={styles.tooltipText}>{t("swarm.creation.nameHint")}</Text>
         </TooltipContent>
       </Tooltip>
     </>
@@ -1302,8 +1348,8 @@ interface CreateChatAgentInput {
     selectModel: string;
   };
   swarm?: {
-    prepareAgent: SwarmWorkspaceOptions["prepareAgent"];
-    target: SwarmWorkspaceTarget | null;
+    prepareAgent: SwarmWorkspaceOperations["prepareAgent"];
+    target: SwarmWorkspaceTarget;
     role: string;
     name: string;
     reportsTo: string | null;
@@ -1396,7 +1442,6 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
   let navigated = false;
   let outcome: SubmitOutcome = "background";
   const swarmTarget = input.swarm?.target;
-  if (input.swarm && !swarmTarget) throw new Error("Choose a project on this host.");
   const preparedSwarmAgent =
     input.swarm && swarmTarget
       ? await input.swarm.prepareAgent({
@@ -2140,6 +2185,7 @@ export function NewWorkspaceScreen({
     worktreeSlug: createNameId(),
   }));
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [validationKey, setValidationKey] = useState<string | null>(null);
   const [creationResult, setCreationResult] = useState<
     WorkspaceCreationResult | { workspace: null }
   >({ workspace: null });
@@ -2589,6 +2635,17 @@ export function NewWorkspaceScreen({
     async (payload: MessagePayload) => {
       try {
         setErrorMessage(null);
+        setValidationKey(null);
+        if (swarm && !isEmptyWorkspaceSubmission(payload) && !swarmState.submission) {
+          setValidationKey(swarmState.validationKey);
+          if (swarmState.rawError) {
+            setErrorMessage(swarmState.rawError);
+            toast.error(swarmState.rawError);
+          } else if (swarmState.validationKey) {
+            toast.error(t(swarmState.validationKey));
+          }
+          return;
+        }
         await composerState?.persistFormPreferences();
         await updateFormPreferences({ launchTarget });
         if (isEmptyWorkspaceSubmission(payload)) {
@@ -2658,7 +2715,8 @@ export function NewWorkspaceScreen({
       launchTarget,
       selectedServerId,
       supportsForgeSearch,
-      swarmState.submission,
+      swarm,
+      swarmState,
       t,
       toast,
       updateFormPreferences,
@@ -2669,6 +2727,7 @@ export function NewWorkspaceScreen({
   const handleSubmitTerminalLaunch = useCallback(async () => {
     try {
       setErrorMessage(null);
+      setValidationKey(null);
       await updateFormPreferences({ launchTarget });
       setPendingAction("terminal");
       let outcome: SubmitOutcome = "background";
@@ -2927,7 +2986,7 @@ export function NewWorkspaceScreen({
           onImportSession={importSession.open}
         >
           {composer}
-          {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+          <NewWorkspaceCreationError validationKey={validationKey} errorMessage={errorMessage} />
         </NewWorkspaceLayout>
       </View>
       {importSession.sheet}

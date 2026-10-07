@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { i18n } from "@/i18n/i18next";
 import {
   findSwarmTaskAgent,
   defaultSwarmTaskScope,
@@ -329,6 +330,64 @@ describe("Swarm Activity reply", () => {
       selectedOption: null,
       canSubmit: true,
     });
+  });
+  it("refreshes mounted local errors and scopes after a language switch without changing drafts or daemon errors", async () => {
+    const previousLanguage = i18n.language;
+    const question = activity();
+    const reply = openSwarmReply("task", [question]);
+    const failed = openSwarmReply("task", []);
+    const empty = openSwarmReply("task", []);
+    try {
+      await i18n.changeLanguage("en");
+      reply.replyTo(question.id, "yes");
+      reply.setBody("User-authored context");
+      reply.applyActivities([]);
+      const englishError = reply.getState().error;
+      const englishScope = swarmTaskScopeOptions(
+        board(),
+        ["planner-workspace"],
+        ["planner-workspace"],
+      )[0].label;
+      failed.setBody("Saved draft");
+      await failed.submit(async () => {
+        throw new Error("Raw daemon failure");
+      });
+      await empty.submit(async () => undefined);
+      const englishBodyError = empty.getState().error;
+
+      await i18n.changeLanguage("zh-CN");
+      reply.refreshTranslations();
+      failed.refreshTranslations();
+      empty.refreshTranslations();
+      expect(reply.getState().error).not.toBe(englishError);
+      expect(reply.getState().error).not.toBe("swarm.tasks.errors.replyUnavailable");
+      expect(empty.getState().error).not.toBe(englishBodyError);
+      expect(empty.getState().error).not.toBe("swarm.tasks.errors.bodyRequired");
+      expect(
+        swarmTaskScopeOptions(board(), ["planner-workspace"], ["planner-workspace"])[0],
+      ).toMatchObject({ value: "" });
+      expect(
+        swarmTaskScopeOptions(board(), ["planner-workspace"], ["planner-workspace"])[0].label,
+      ).not.toBe(englishScope);
+      expect(reply.getState()).toMatchObject({
+        body: "User-authored context",
+        replyTo: question.id,
+        selectedOption: "yes",
+        responseProfile: "steering",
+        pending: false,
+        canSubmit: false,
+      });
+      expect(failed.getState()).toMatchObject({
+        body: "Saved draft",
+        error: "Raw daemon failure",
+        canSubmit: true,
+      });
+    } finally {
+      reply.close();
+      failed.close();
+      empty.close();
+      await i18n.changeLanguage(previousLanguage);
+    }
   });
   it("supports ordinary replies and ignores completion after the form closes", async () => {
     const model = openSwarmReply("task", [activity()]);

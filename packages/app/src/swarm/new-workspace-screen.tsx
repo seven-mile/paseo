@@ -42,54 +42,56 @@ export function SwarmNewWorkspaceScreen({
   const { t } = useTranslation();
   const installations = usePluginInstallations("paseo-swarm");
   const options = useMemo<SwarmWorkspaceOptions>(() => {
-    function installationFor(targetServerId: string) {
-      const installation = installations.find((plugin) => plugin.serverId === targetServerId);
-      if (!installation) throw new Error("Swarm is not installed on the selected host.");
-      return installation;
-    }
     return {
       roleClass,
       initialParent: parentName,
       initialName: roleClass,
-      async loadTarget(target) {
-        const installation = installationFor(target.serverId);
-        const [roleResponse, boardResponse] = await Promise.all([
-          installation.invoke("swarm.pwa_roles.read", { roleClass, projectId: target.projectId }),
-          installation.invoke("swarm.board.read", {}),
-        ]);
-        const roles: SwarmRoleChoice[] = rolesSchema.parse(roleResponse);
-        const board = swarmTaskBoardSchema.parse(boardResponse);
-        let parentRoleClass: "planner" | "supervisor" | null = null;
-        if (roleClass === "supervisor") parentRoleClass = "planner";
-        if (roleClass === "worker") parentRoleClass = "supervisor";
-        const parents = board.agents
-          .filter((agent) => agent.roleClass === parentRoleClass && !agent.retired)
-          .map((agent) => ({
-            name: agent.qualifiedName ?? agent.name,
-            title: agent.qualifiedName ?? agent.name,
-            displayName: agent.name,
-            paseoAgentId: agent.paseoAgentId,
-            serverId: target.serverId,
-            workspaceId: agent.workspaceId,
-          }));
-        return { roles, parents };
-      },
-      async prepareAgent({ target, ...input }) {
-        const installation = installationFor(target.serverId);
-        return preparedAgentSchema.parse(
-          await installation.invoke("swarm.agent.prepare", {
-            ...input,
-            projectId: target.projectId,
-            roleClass,
-            actorPaseoAgentId: null,
-          }),
-        );
-      },
-      async bindAgent({ serverId: targetServerId, agentId, workspaceId }) {
-        await installationFor(targetServerId).invoke("swarm.agent.bind_workspace", {
-          agentId,
-          workspaceId,
-        });
+      forServer(targetServerId) {
+        const installation = installations.find((plugin) => plugin.serverId === targetServerId);
+        if (!installation) return undefined;
+        return {
+          async loadTarget(target) {
+            const [roleResponse, boardResponse] = await Promise.all([
+              installation.invoke("swarm.pwa_roles.read", {
+                roleClass,
+                projectId: target.projectId,
+              }),
+              installation.invoke("swarm.board.read", {}),
+            ]);
+            const roles: SwarmRoleChoice[] = rolesSchema.parse(roleResponse);
+            const board = swarmTaskBoardSchema.parse(boardResponse);
+            let parentRoleClass: "planner" | "supervisor" | null = null;
+            if (roleClass === "supervisor") parentRoleClass = "planner";
+            if (roleClass === "worker") parentRoleClass = "supervisor";
+            const parents = board.agents
+              .filter((agent) => agent.roleClass === parentRoleClass && !agent.retired)
+              .map((agent) => ({
+                name: agent.qualifiedName ?? agent.name,
+                title: agent.qualifiedName ?? agent.name,
+                displayName: agent.name,
+                paseoAgentId: agent.paseoAgentId,
+                serverId: target.serverId,
+                workspaceId: agent.workspaceId,
+              }));
+            return { roles, parents };
+          },
+          async prepareAgent({ target, ...input }) {
+            return preparedAgentSchema.parse(
+              await installation.invoke("swarm.agent.prepare", {
+                ...input,
+                projectId: target.projectId,
+                roleClass,
+                actorPaseoAgentId: null,
+              }),
+            );
+          },
+          async bindAgent({ agentId, workspaceId }) {
+            await installation.invoke("swarm.agent.bind_workspace", {
+              agentId,
+              workspaceId,
+            });
+          },
+        };
       },
     };
   }, [installations, parentName, roleClass]);
@@ -100,7 +102,7 @@ export function SwarmNewWorkspaceScreen({
       projectId={projectId}
       displayName={displayName}
       draftId={draftId}
-      title={t("newWorkspace.roleTitle", { role: roleClass })}
+      title={t("newWorkspace.roleTitle", { role: t(`swarm.roles.${roleClass}`) })}
       swarm={options}
     />
   );

@@ -397,7 +397,7 @@ function ExplorerSidebarContent({
             <ExplorerTabButton
               tab="tasks"
               active={resolvedTab === "tasks"}
-              label="Tasks"
+              label={t("swarm.tasks.title")}
               onTabPress={onTabPress}
               testID="explorer-tab-tasks"
             />

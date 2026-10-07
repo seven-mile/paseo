@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -23,6 +24,7 @@ interface ProjectPwaSettingsProps {
 }
 
 export function ProjectPwaSettings({ serverId, projectId }: ProjectPwaSettingsProps) {
+  const { t } = useTranslation();
   const { plugin, invoke } = useSwarmRpc(serverId);
   const queryClient = useQueryClient();
   const [session, setSession] = useState<PwaFormSnapshot | null>(null);
@@ -65,31 +67,34 @@ export function ProjectPwaSettings({ serverId, projectId }: ProjectPwaSettingsPr
   let content;
   if (query.isError) {
     content = (
-      <SettingsRow label="PWA directory" error={query.error.message}>
+      <SettingsRow label={t("swarm.pwa.directory")} error={query.error.message}>
         <Button variant="outline" size="sm" onPress={retry}>
-          Retry
+          {t("common.actions.retry")}
         </Button>
       </SettingsRow>
     );
   } else if (!query.data) {
     content = (
-      <SettingsRow label="PWA directory" hint="Loading...">
+      <SettingsRow label={t("swarm.pwa.directory")} hint={t("common.states.loading")}>
         <Button variant="outline" size="sm" disabled>
-          Edit
+          {t("swarm.pwa.edit")}
         </Button>
       </SettingsRow>
     );
   } else {
     content = (
-      <SettingsRow label="PWA directory" hint={query.data.path ?? "Not configured"}>
+      <SettingsRow
+        label={t("swarm.pwa.directory")}
+        hint={query.data.path ?? t("swarm.pwa.notConfigured")}
+      >
         <Button variant="outline" size="sm" onPress={open} testID="project-pwa-edit">
-          Edit
+          {t("swarm.pwa.edit")}
         </Button>
       </SettingsRow>
     );
   }
   return (
-    <SettingsSection title="Swarm" testID="project-pwa-settings">
+    <SettingsSection title={t("swarm.pwa.section")} testID="project-pwa-settings">
       <SettingsCard>{content}</SettingsCard>
       {session ? <PwaFormSheet snapshot={session} onClose={close} /> : null}
     </SettingsSection>
@@ -104,6 +109,7 @@ function usePwaForm(snapshot: PwaFormSnapshot) {
 }
 
 function PwaFormSheet({ snapshot, onClose }: { snapshot: PwaFormSnapshot; onClose(): void }) {
+  const { t } = useTranslation();
   const { form, state } = usePwaForm(snapshot);
   const size = useIsCompactFormFactor() ? "md" : "sm";
   const pending = state.status.kind === "pending";
@@ -112,12 +118,12 @@ function PwaFormSheet({ snapshot, onClose }: { snapshot: PwaFormSnapshot; onClos
     if (!pending) onClose();
   }, [onClose, pending]);
   const submit = useCallback(() => void form.submit(), [form]);
-  const header = useMemo(() => ({ title: "PWA directory" }), []);
+  const header = useMemo(() => ({ title: t("swarm.pwa.directory") }), [t]);
   const footer = useMemo(
     () => (
       <View style={styles.footer}>
         <Button variant="secondary" onPress={close} disabled={pending}>
-          Close
+          {t("common.actions.close")}
         </Button>
         <Button
           variant="default"
@@ -126,11 +132,11 @@ function PwaFormSheet({ snapshot, onClose }: { snapshot: PwaFormSnapshot; onClos
           loading={pending}
           testID="project-pwa-save"
         >
-          {pending ? "Saving..." : "Save"}
+          {t(pending ? "swarm.pwa.saving" : "swarm.pwa.save")}
         </Button>
       </View>
     ),
-    [close, pending, state.canSubmit, submit],
+    [close, pending, state.canSubmit, submit, t],
   );
   return (
     <AdaptiveModalSheet
@@ -142,7 +148,11 @@ function PwaFormSheet({ snapshot, onClose }: { snapshot: PwaFormSnapshot; onClos
       sizeContentToCurrentSnapPoint
       testID="project-pwa-sheet"
     >
-      <Field label="Directory" error={error} testID="project-pwa-directory-field">
+      <Field
+        label={t("swarm.pwa.directoryLabel")}
+        error={error}
+        testID="project-pwa-directory-field"
+      >
         <FormTextInput
           key={state.inputRevision}
           initialValue={state.path}
@@ -151,12 +161,12 @@ function PwaFormSheet({ snapshot, onClose }: { snapshot: PwaFormSnapshot; onClos
           editable={!pending}
           autoCapitalize="none"
           autoCorrect={false}
-          accessibilityLabel="PWA directory"
+          accessibilityLabel={t("swarm.pwa.directory")}
           testID="project-pwa-directory"
         />
       </Field>
       {state.status.kind === "success" ? (
-        <Alert variant="success" title="PWA directory saved" testID="project-pwa-saved" />
+        <Alert variant="success" title={t("swarm.pwa.saved")} testID="project-pwa-saved" />
       ) : null}
     </AdaptiveModalSheet>
   );
