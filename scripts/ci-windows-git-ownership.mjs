@@ -51,6 +51,7 @@ let logFd;
 let interrupted = false;
 let interruptWait;
 let originalHashes;
+const capturedIdentities = new Map();
 
 for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () => {
@@ -99,14 +100,48 @@ async function stop(pid) {
   if (!running(pid)) return;
   const timeout = Math.min(5000, Math.floor(cleanupDeadline - performance.now() - 1000));
   assert.ok(timeout > 0, "no cleanup time remains");
+  const captured = capturedIdentities.get(pid);
+  if (captured) {
+    const script = `$ErrorActionPreference='Stop'; $row=Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if ($row) { $row.CreationDate.ToUniversalTime().ToString('o') }`;
+    const { stdout } = await execFileAsync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      {
+        shell: false,
+        timeout,
+        windowsHide: true,
+        maxBuffer: 1024,
+      },
+    );
+    if (!stdout.trim() && !running(pid)) return;
+    assert.equal(stdout.trim(), captured.created, "captured Windows owner identity changed");
+  }
+  const signalTimeout = Math.min(5000, Math.floor(cleanupDeadline - performance.now() - 1000));
+  assert.ok(signalTimeout > 0, "no tree signal time remains");
   try {
     await execFileAsync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
       shell: false,
-      timeout,
+      timeout: signalTimeout,
       windowsHide: true,
     });
   } catch (error) {
     if (error.code !== 128) throw error;
+  }
+}
+
+function recoverOwnedTree(row, owned) {
+  assert.ok(Array.isArray(row.ownedTree) && row.ownedTree.length > 0 && row.ownedTree.length <= 16);
+  for (const owner of row.ownedTree) {
+    assert.ok(
+      Number.isInteger(owner.pid) &&
+        owner.pid > 0 &&
+        Number.isInteger(owner.parent) &&
+        owner.parent >= 0 &&
+        typeof owner.created === "string" &&
+        owner.created.length <= 128,
+    );
+    owned.add(owner.pid);
+    capturedIdentities.set(owner.pid, owner);
   }
 }
 
@@ -121,7 +156,14 @@ function recoverOwners(owned) {
   }
   for (const row of phases) {
     if (row.event === "git-start") started = true;
-    if (row.event === "ready") published = true;
+    if (row.event === "ready") {
+      published = true;
+      try {
+        recoverOwnedTree(row, owned);
+      } catch (error) {
+        recordError(error);
+      }
+    }
     for (const key of ["gitPid", "ownerPid", "descendantPid"]) {
       if (Number.isInteger(row[key]) && row[key] > 0) owned.add(row[key]);
     }
@@ -147,7 +189,7 @@ function recoverOwners(owned) {
       recordError(error);
     }
   }
-  return { started, published };
+  return { started, published, treeCaptured: capturedIdentities.size > 0 };
 }
 
 try {
@@ -335,6 +377,7 @@ try {
     { originalTimeout: true, cleanupFailure: false },
   );
   assert.equal(phase("cleanup").errors, 0, "fixture cleanup failed");
+  assert.equal(phase("cleanup").cwdReleased, true, "fixture cwd release unconfirmed");
   const settlement = phase("settlement");
   const alive = [settlement.gitAlive, settlement.ownerAlive, settlement.descendantAlive];
   assert.ok(alive.every((value) => typeof value === "boolean"));
@@ -375,7 +418,7 @@ try {
   const owned = new Set();
   if (child?.pid) owned.add(child.pid);
   const recovery = recoverOwners(owned);
-  if (recovery.started && !recovery.published)
+  if (recovery.started && (!recovery.published || !recovery.treeCaptured))
     recordError(
       "helper ownership publication incomplete; unobserved descendants cannot be certified gone",
     );
@@ -419,14 +462,21 @@ try {
   }
   receipt.elapsedMs = performance.now() - startedAt;
   receipt.budgetMet = receipt.elapsedMs <= 45_000;
-  if (receipt.cleanupErrors.length || interrupted || !receipt.budgetMet) process.exitCode = 1;
+  receipt.safeToContinue =
+    receipt.cleanupErrors.length === 0 &&
+    !interrupted &&
+    receipt.budgetMet &&
+    remaining.length === 0 &&
+    receipt.copyRemoved &&
+    receipt.prProductionUntouched;
+  if (!receipt.safeToContinue) process.exitCode = 2;
   if (process.env.RUNNER_TEMP) {
     try {
       mkdirSync(evidence, { recursive: true });
       writeFileSync(path.join(evidence, "execution.json"), JSON.stringify(receipt, null, 2) + "\n");
     } catch (error) {
       recordError(error);
-      process.exitCode = 1;
+      process.exitCode = 2;
     }
   }
   console.log(JSON.stringify(receipt));

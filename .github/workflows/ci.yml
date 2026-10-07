@@ -105,6 +105,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -130,14 +132,28 @@ jobs:
         run: npx playwright install --with-deps chromium webkit
 
       - name: Verify website mockups
-        run: npm run test:e2e --workspace=@getpaseo/website
+        id: website_checks
+        shell: bash
+        run: |
+          unset WEBSITE_TEST_URL
+          set +e
+          node scripts/ci-website-hydration.mjs
+          old_status=$?
+          set -e
+          if [ "$old_status" -ne 0 ] && [ "$old_status" -ne 1 ]; then exit "$old_status"; fi
+          npm run test:e2e --workspace=@getpaseo/website
+          exit "$old_status"
+        env:
+          PWTEST_CACHE_DIR: ${{ runner.temp }}/website-candidate-cache
 
       - name: Upload website test artifacts
         uses: actions/upload-artifact@v4
-        if: ${{ failure() || cancelled() }}
+        if: ${{ failure() || cancelled() || steps.website_checks.outcome == 'success' }}
         with:
           name: website-test-results
-          path: packages/website/test-results/
+          path: |
+            packages/website/test-results/
+            ${{ runner.temp }}/website-hydration/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -177,8 +193,16 @@ jobs:
         run: npm run build:server-deps
 
       - name: Observe baseline Windows Git descendant ownership
+        id: git_ownership
+        shell: bash
         if: ${{ runner.os == 'Windows' && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
-        run: node scripts/ci-windows-git-ownership.mjs
+        run: |
+          set +e
+          node scripts/ci-windows-git-ownership.mjs
+          old_status=$?
+          set -e
+          echo "status=$old_status" >> "$GITHUB_OUTPUT"
+          if [ "$old_status" -ne 0 ] && [ "$old_status" -ne 1 ]; then exit "$old_status"; fi
 
       - name: Run server tests
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
@@ -196,6 +220,11 @@ jobs:
       - name: Run Hub CLI/daemon contract
         if: ${{ needs.changes.outputs.full == 'false' && needs.changes.outputs.server == 'false' && needs.changes.outputs.hub != 'false' }}
         run: npm run test:hub-cli-contract --workspace=@getpaseo/server
+
+      - name: Retain invalid Windows ownership observation failure
+        if: ${{ !cancelled() && runner.os == 'Windows' && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') && steps.git_ownership.outputs.status == '1' }}
+        shell: bash
+        run: exit 1
 
       - name: Upload Windows Git ownership evidence
         if: ${{ runner.os == 'Windows' && (success() || failure() || cancelled()) }}

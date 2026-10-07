@@ -11,6 +11,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { execCommand, terminateProcess } from "@getpaseo/plugin/server";
+
 import { runGitCommand } from "./run-git-command.js";
 import * as gitSpawn from "./spawn.js";
 
@@ -20,6 +22,13 @@ function makeTempRepo(): string {
   const repo = mkdtempSync(path.join(tmpdir(), "paseo-git-shell-"));
   tempDirs.push(repo);
   return repo;
+}
+
+function releaseWindowsFixtureCwd(repo: string): boolean {
+  rmSync(repo, { recursive: true, force: true });
+  const released = !existsSync(repo);
+  if (!released) throw new Error("Owned Windows fixture cwd remains");
+  return released;
 }
 
 afterEach(() => {
@@ -47,10 +56,94 @@ function recordOwnership(event: string, startedAt: number, details: Record<strin
     );
 }
 
+interface WindowsOwner {
+  pid: number;
+  parent: number;
+  created: string;
+}
+
+// Actual Windows metadata only. Do not collect command lines, paths or environment.
+async function readWindowsOwners(
+  pids: number[],
+  descendants: boolean,
+  timeout: number,
+): Promise<WindowsOwner[]> {
+  if (!pids.every((pid) => Number.isInteger(pid) && pid > 0))
+    throw new Error("Invalid synthetic Windows owner PID");
+  if (!descendants && pids.length !== 1) throw new Error("Identity query must name one owned PID");
+  const script = `
+    $ErrorActionPreference = 'Stop'
+    $rows = @(Get-CimInstance Win32_Process ${descendants ? "" : `-Filter 'ProcessId=${pids[0]}'`})
+    $ids = @(${pids.join(",")})
+    ${
+      descendants
+        ? `do {
+      $next = @($rows | Where-Object { $ids -contains [int]$_.ParentProcessId -and $ids -notcontains [int]$_.ProcessId })
+      $ids += @($next | ForEach-Object { [int]$_.ProcessId })
+      if ($ids.Count -gt 16) { throw 'Synthetic Windows owner tree exceeds bound' }
+    } while ($next.Count -gt 0)`
+        : ""
+    }
+    $selected = @($rows | Where-Object { $ids -contains [int]$_.ProcessId } | ForEach-Object {
+      @{ pid=[int]$_.ProcessId; parent=[int]$_.ParentProcessId; created=$_.CreationDate.ToUniversalTime().ToString('o') }
+    })
+    ConvertTo-Json -InputObject $selected -Compress
+  `;
+  const result = await execCommand(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    {
+      shell: false,
+      timeout,
+      maxBuffer: 64 * 1024,
+    },
+  );
+  const rows = JSON.parse(result.stdout) as WindowsOwner[];
+  if (
+    !Array.isArray(rows) ||
+    rows.length > 16 ||
+    !rows.every(
+      (row) =>
+        Number.isInteger(row.pid) &&
+        row.pid > 0 &&
+        Number.isInteger(row.parent) &&
+        row.parent >= 0 &&
+        typeof row.created === "string" &&
+        row.created.length > 0 &&
+        row.created.length <= 128,
+    ) ||
+    new Set(rows.map((row) => row.pid)).size !== rows.length
+  )
+    throw new Error("Invalid synthetic Windows owner identities");
+  return rows;
+}
+
+async function stopWindowsOwner(pid: number, captured: WindowsOwner[]): Promise<void> {
+  if (!isProcessRunning(pid)) return;
+  const before = captured.find((row) => row.pid === pid);
+  const deadline = performance.now() + 5000;
+  const current = await readWindowsOwners([pid], false, 5000);
+  const now = current.find((row) => row.pid === pid);
+  if (!now && !isProcessRunning(pid)) return;
+  if (!before || !now || before.created !== now.created)
+    throw new Error("Windows synthetic owner identity is unknown or changed");
+  const remaining = Math.floor(deadline - performance.now());
+  if (remaining <= 0) throw new Error("Windows owner identity exhausted cleanup budget");
+  try {
+    await execCommand("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
+      shell: false,
+      timeout: remaining,
+    });
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === 128)) throw error;
+  }
+}
+
 async function cleanupWindowsOwners(
   pidFile: string,
   pids: { owner: number; descendant: number } | undefined,
-  gitPid: number | undefined,
+  gitChild: ChildProcess | undefined,
+  captured: WindowsOwner[],
 ): Promise<{ owned: number[]; errors: unknown[] }> {
   const errors: unknown[] = [];
   if (!pids) {
@@ -68,19 +161,21 @@ async function cleanupWindowsOwners(
   }
   const owned = [
     ...new Set(
-      [gitPid, pids?.owner, pids?.descendant].filter(
+      [gitChild?.pid, pids?.owner, pids?.descendant, ...captured.map((row) => row.pid)].filter(
         (pid): pid is number => typeof pid === "number" && Number.isInteger(pid) && pid > 0,
       ),
     ),
   ];
-  // Attempt every captured PID even when another query or kill fails.
-  for (const pid of owned) {
-    try {
-      if (isProcessRunning(pid)) process.kill(pid, "SIGKILL");
-    } catch (error) {
-      errors.push(error);
-    }
+  // Attempt the held real root through SDK, then every captured intermediate owner.
+  // SDK failure is recorded as unknown; this does not claim a direct-kill fallback.
+  try {
+    if (gitChild?.pid && gitChild.exitCode === null && gitChild.signalCode === null)
+      await terminateProcess(gitChild);
+  } catch (error) {
+    errors.push(error);
   }
+  const stops = await Promise.allSettled(owned.map((pid) => stopWindowsOwner(pid, captured)));
+  for (const stop of stops) if (stop.status === "rejected") errors.push(stop.reason);
   const drains = await Promise.allSettled(
     owned.map((pid) =>
       vi.waitFor(
@@ -139,12 +234,19 @@ describe("runGitCommand shell behavior", () => {
       );
       let pids: { owner: number; descendant: number } | undefined;
       let gitChild: ChildProcess | undefined;
+      let ownedTree: WindowsOwner[] = [];
+      let gitCommandStartedAt = 0;
       const actualSpawn = gitSpawn.spawnProcess;
       const observation = vi.spyOn(gitSpawn, "spawnProcess").mockImplementation((...args) => {
+        const commandStartedAt = performance.now();
         const child = actualSpawn(...args);
         if (args[0] === "git" && args[1].includes("paseo-timeout-owner")) {
           gitChild = child;
-          recordOwnership("git-start", startedAt, { gitPid: child.pid });
+          gitCommandStartedAt = commandStartedAt;
+          recordOwnership("git-start", startedAt, {
+            gitPid: child.pid,
+            commandStartedMs: gitCommandStartedAt - startedAt,
+          });
         }
         return child;
       });
@@ -188,10 +290,19 @@ describe("runGitCommand shell behavior", () => {
           },
           { timeout: 5000, interval: 25 },
         );
+        const remaining = Math.floor(10_000 - (performance.now() - gitCommandStartedAt));
+        expect(remaining).toBeGreaterThan(0);
+        ownedTree = await readWindowsOwners([gitChild!.pid!], true, Math.min(5000, remaining));
+        expect(ownedTree.some((row) => row.pid === gitChild!.pid)).toBe(true);
+        expect(ownedTree.some((row) => row.pid === pids!.owner)).toBe(true);
+        expect(ownedTree.some((row) => row.pid === pids!.descendant)).toBe(true);
+        expect(ownedTree.every((row) => isProcessRunning(row.pid))).toBe(true);
+        expect(performance.now() - gitCommandStartedAt).toBeLessThan(10_000);
         recordOwnership("ready", startedAt, {
           gitPid: gitChild!.pid,
           ownerPid: pids!.owner,
           descendantPid: pids!.descendant,
+          ownedTree,
         });
         const timeoutFailure = await timedOut;
         expect(timeoutFailure).toBeInstanceOf(Error);
@@ -238,10 +349,19 @@ describe("runGitCommand shell behavior", () => {
         } catch (error) {
           cleanupErrors.push(error);
         }
-        const cleanup = await cleanupWindowsOwners(pidFile, pids, gitChild?.pid);
+        const cleanup = await cleanupWindowsOwners(pidFile, pids, gitChild, ownedTree);
         cleanupErrors.push(...cleanup.errors);
+        let cwdReleased = false;
+        try {
+          cwdReleased = releaseWindowsFixtureCwd(repo);
+          const index = tempDirs.indexOf(repo);
+          if (index >= 0) tempDirs.splice(index, 1);
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
         recordOwnership("cleanup", startedAt, {
           ownedPids: cleanup.owned,
+          cwdReleased,
           errors: cleanupErrors.length,
         });
       }

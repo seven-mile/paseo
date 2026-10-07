@@ -178,10 +178,12 @@ test("browser artifacts cover failures and cancellation in existing checks", () 
     artifacts,
     /\$\{\{ runner\.temp \}\}\/playwright-\$\{\{ env\.PLAYWRIGHT_ARTIFACT \}\}\.log/,
   );
-  assert.match(website, /path: packages\/website\/test-results\//);
+  assert.match(website, /packages\/website\/test-results\//);
+  assert.match(website, /\$\{\{ runner\.temp \}\}\/website-hydration\//);
+  assert.match(website, /steps\.website_checks\.outcome == 'success'/);
   for (const upload of [artifacts, website]) {
     assert.match(upload, /uses: actions\/upload-artifact@v4/);
-    assert.match(upload, /if: \$\{\{ failure\(\) \|\| cancelled\(\) \}\}/);
+    assert.match(upload, /if: \$\{\{ failure\(\) \|\| cancelled\(\)/);
     assert.match(upload, /retention-days: 7/);
   }
   for (const shard of [2, 3, 4]) {
@@ -196,6 +198,41 @@ test("browser artifacts cover failures and cancellation in existing checks", () 
   );
 });
 
+test("website observation preserves full-suite status and prevents unsafe port reuse", () => {
+  const typecheck = jobBlocks(readFileSync(ciWorkflowPath, "utf8")).get("typecheck").join("\n");
+  assert.match(typecheck, /fetch-depth: 0/);
+  const step = typecheck
+    .split("      - name: Verify website mockups\n")[1]
+    .split("      - name:")[0];
+  assert.match(step, /shell: bash/);
+  const script = step
+    .match(/        run: \|\n((?:          .*\n)+)/)[1]
+    .replace(/^          /gm, "");
+  for (const [oldStatus, candidateStatus, expected, runs] of [
+    [0, 0, 0, true],
+    [1, 0, 1, true],
+    [2, 0, 2, false],
+    [0, 17, 17, true],
+  ]) {
+    const simulated = script
+      .replace(
+        "node scripts/ci-website-hydration.mjs",
+        `bash -c 'if [[ -v WEBSITE_TEST_URL ]]; then exit 99; fi; exit ${oldStatus}'`,
+      )
+      .replace(
+        "npm run test:e2e --workspace=@getpaseo/website",
+        `bash -c 'if [[ -v WEBSITE_TEST_URL ]]; then exit 99; fi; echo candidate-ran; exit ${candidateStatus}'`,
+      );
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", simulated], {
+      encoding: "utf8",
+      env: { ...process.env, WEBSITE_TEST_URL: "https://synthetic.invalid" },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, expected, result.stderr);
+    assert.equal(result.stdout.includes("candidate-ran"), runs);
+  }
+});
+
 test("change gating allows superseded workflow runs to cancel", () => {
   for (const workflowPath of [ciWorkflowPath, dockerWorkflowPath, nixWorkflowPath]) {
     const source = readFileSync(workflowPath, "utf8");
@@ -206,6 +243,29 @@ test("change gating allows superseded workflow runs to cancel", () => {
     );
   }
 });
+
+function assertWindowsOwnershipStatuses(baselineStep) {
+  const observedRun = baselineStep.match(/        run: \|\n((?:          .*\n)+)/)?.[1];
+  assert.ok(observedRun);
+  const ownershipOutput = mkdtempSync(join(tmpdir(), "paseo-ci-owned-status-"));
+  try {
+    for (const status of [0, 1, 2]) {
+      const filename = join(ownershipOutput, `status-${status}`);
+      const actual = observedRun
+        .replace(/^          /gm, "")
+        .replace("node scripts/ci-windows-git-ownership.mjs", `bash -c 'exit ${status}'`);
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", actual], {
+        encoding: "utf8",
+        env: { ...process.env, GITHUB_OUTPUT: filename },
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, status === 2 ? 2 : 0, result.stderr);
+      assert.equal(readFileSync(filename, "utf8"), `status=${status}\n`);
+    }
+  } finally {
+    rmSync(ownershipOutput, { recursive: true, force: true });
+  }
+}
 
 test("focused contracts stay inside existing required checks", () => {
   const jobs = jobBlocks(readFileSync(ciWorkflowPath, "utf8"));
@@ -229,7 +289,17 @@ test("focused contracts stay inside existing required checks", () => {
     baselineStep,
     /needs\.changes\.outputs\.full != 'false' \|\| needs\.changes\.outputs\.server != 'false'/,
   );
-  assert.match(baselineStep, /run: node scripts\/ci-windows-git-ownership\.mjs/);
+  assert.match(baselineStep, /id: git_ownership/);
+  assert.match(baselineStep, /shell: bash/);
+  assertWindowsOwnershipStatuses(baselineStep);
+  const finalGate =
+    server
+      .split("      - name: Retain invalid Windows ownership observation failure\n")[1]
+      ?.split("      - name:")[0] ?? "";
+  assert.match(finalGate, /!cancelled\(\)/);
+  assert.match(finalGate, /runner\.os == 'Windows'/);
+  assert.match(finalGate, /steps\.git_ownership\.outputs\.status == '1'/);
+  assert.match(finalGate, /run: exit 1/);
   assert.ok(
     server.indexOf("Observe baseline Windows Git descendant ownership") <
       server.indexOf("Run server tests"),

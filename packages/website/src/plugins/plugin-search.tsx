@@ -19,6 +19,7 @@ const ICON_CLASS = "h-3.5 w-3.5 text-extra-muted-foreground";
 export function PluginSearch({ scope, className }: { scope: BrowseQuery; className?: string }) {
   const navigate = useNavigate();
   const input = useRef<HTMLInputElement>(null);
+  const reconciledInput = useRef(false);
   const [term, setTerm] = useState(scope.q ?? "");
   useLayoutEffect(() => {
     if (
@@ -66,6 +67,12 @@ export function PluginSearch({ scope, className }: { scope: BrowseQuery; classNa
     },
     [navigate, scope],
   );
+  useLayoutEffect(() => {
+    if (reconciledInput.current) return;
+    reconciledInput.current = true;
+    const value = input.current?.value;
+    if (value !== undefined && value !== term) search(value);
+  }, [search, term]);
   const handleChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
       if (

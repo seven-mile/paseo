@@ -100,6 +100,122 @@ function snapshot(reason) {
   );
 }
 
+// Install only at the exact desktop target dispatch, in the actual in-process farm.
+const targetPhaseClaims = new Set();
+let targetPhaseObservation;
+function targetPhaseFilename(projectRoot, filename) {
+  try {
+    return path.resolve(projectRoot, filename) === generated ? generated : null;
+  } catch {
+    return null;
+  }
+}
+function installDesktopTargetPhases(farm) {
+  if (targetPhaseObservation) return targetPhaseObservation;
+  const observation = { installed: false, stage: "target-dispatch-cached-exports" };
+  targetPhaseObservation = observation;
+  try {
+    if (process.env.CI !== "true" || !output || process.env.PASEO_WEB_PLATFORM !== "electron") {
+      observation.reason = "desktop-CI-gate-disabled";
+      return observation;
+    }
+    if (farm._config.maxWorkers !== 1) {
+      observation.reason = "separate-worker-context-not-observed";
+      return observation;
+    }
+    const babelPath = require.resolve(
+      farm._transformerConfig.transformerConfig.babelTransformerPath,
+    );
+    const workerPath =
+      require.resolve("@expo/metro-config/build/transform-worker/metro-transform-worker.js");
+    const expectedTransformer =
+      require.resolve("@expo/metro-config/build/transform-worker/transform-worker.js");
+    if (farm._transformerConfig.transformerPath !== expectedTransformer) {
+      observation.reason = "different-transformer-path";
+      return observation;
+    }
+    observation.babelPath = babelPath;
+    observation.workerPath = workerPath;
+    observation.babelHash = hashFile(babelPath);
+    observation.workerHash = hashFile(workerPath);
+    const babel = require.cache[babelPath]?.exports;
+    const worker = require.cache[workerPath]?.exports;
+    if (typeof babel?.transform !== "function" || typeof worker?.minifyCode !== "function") {
+      observation.reason = "actual-exports-not-cached";
+      return observation;
+    }
+    const babelTransform = babel.transform;
+    babel.transform = function (...args) {
+      const input = args[0];
+      const filename = targetPhaseFilename(input?.options?.projectRoot, input?.filename);
+      if (!filename || targetPhaseClaims.has("babel"))
+        return Reflect.apply(babelTransform, this, args);
+      targetPhaseClaims.add("babel");
+      const started = performance.now();
+      record("target-babel-start", { filename, ...parentMemory() }, true);
+      try {
+        const result = Reflect.apply(babelTransform, this, args);
+        record(
+          "target-babel-end",
+          {
+            filename,
+            status: "success",
+            elapsedMs: performance.now() - started,
+            ...parentMemory(),
+          },
+          true,
+        );
+        return result;
+      } catch (error) {
+        record(
+          "target-babel-end",
+          { filename, status: "error", elapsedMs: performance.now() - started, ...parentMemory() },
+          true,
+        );
+        throw error;
+      }
+    };
+    const minifyCode = worker.minifyCode;
+    worker.minifyCode = function (...args) {
+      const filename = targetPhaseFilename(farm._config.projectRoot, args[1]);
+      if (!filename || targetPhaseClaims.has("minifyCode"))
+        return Reflect.apply(minifyCode, this, args);
+      targetPhaseClaims.add("minifyCode");
+      const started = performance.now();
+      record("target-minify-start", { filename, ...parentMemory() }, true);
+      const settled = (status) =>
+        record(
+          "target-minify-end",
+          {
+            filename,
+            status,
+            elapsedMs: performance.now() - started,
+            ...parentMemory(),
+          },
+          true,
+        );
+      let result;
+      try {
+        result = Reflect.apply(minifyCode, this, args);
+      } catch (error) {
+        settled("error", error);
+        throw error;
+      }
+      // Installed minifyCode is async: observe settlement, return its ORIGINAL Promise.
+      result.then(
+        (value) => settled("success", value),
+        (error) => settled("error", error),
+      );
+      return result;
+    };
+    observation.installed = true;
+    observation.reason = "same-process-installed-exports";
+  } catch {
+    observation.reason = "observation-install-failed";
+  }
+  return observation;
+}
+
 const transform = WorkerFarm.prototype.transform;
 WorkerFarm.prototype.transform = function (...args) {
   const [filename, options] = args;
@@ -130,7 +246,9 @@ WorkerFarm.prototype.transform = function (...args) {
       absoluteFilename,
       requests: [...requests],
       generatedValidator,
-      ...(generatedValidator ? parentMemory() : {}),
+      ...(generatedValidator
+        ? { targetPhaseObservation: installDesktopTargetPhases(this), ...parentMemory() }
+        : {}),
       options: {
         platform: options.platform,
         dev: options.dev,
