@@ -135,7 +135,24 @@ async function stopWindowsOwner(pid: number, captured: WindowsOwner[]): Promise<
       timeout: remaining,
     });
   } catch (error) {
-    if (!(error instanceof Error && "code" in error && error.code === 128)) throw error;
+    if (error instanceof Error && "code" in error && error.code === 128) return;
+    // Concurrent owned /T stops can race; only actual absence makes a failed stop harmless.
+    const verificationBudget = Math.floor(deadline - performance.now());
+    if (verificationBudget <= 0) throw error;
+    try {
+      const after = await readWindowsOwners([pid], false, verificationBudget);
+      if (after.length === 0 && !isProcessRunning(pid)) return;
+    } catch (verificationError) {
+      // oxlint 1.61 reads AggregateError options from the second argument.
+      const verificationFailure = new AggregateError(
+        [error, verificationError],
+        "Windows owned stop failed and disappearance is unconfirmed",
+        { cause: verificationError },
+      );
+      throw verificationFailure;
+    }
+    // A live/reused/unknown identity retains the original signal failure.
+    throw error;
   }
 }
 

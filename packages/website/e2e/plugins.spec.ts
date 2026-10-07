@@ -389,22 +389,26 @@ test.describe("early search input", () => {
   hydrationTest("preserves search typed before hydration", async ({ page }, testInfo) => {
     const evidence = hydrationEvidence(page);
     if (process.env.CI) await observePluginSearch(page);
-    await page.goto("/");
-    const origin = new URL(page.url()).origin;
+    const origin = new URL("/", testInfo.project.use.baseURL).origin;
     let releaseScripts!: () => void;
     const scripts = new Promise<void>((resolve) => {
       releaseScripts = resolve;
     });
     let heldScripts = 0;
+    let holdTargetScripts = false;
     const assets = (url: URL) =>
       url.origin === origin && url.pathname.startsWith("/assets/") && url.pathname.endsWith(".js");
     await page.route(assets, async (route: Route) => {
-      heldScripts++;
-      evidence.hold(route.request());
-      await scripts;
+      if (holdTargetScripts) {
+        heldScripts++;
+        evidence.hold(route.request());
+        await scripts;
+      }
       await route.continue();
     });
     try {
+      await page.goto("/");
+      holdTargetScripts = true;
       evidence.target();
       await page.goto("/plugins/all", { waitUntil: "commit" });
       const searchbox = page.getByRole("searchbox", { name: "Search plugins" });

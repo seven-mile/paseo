@@ -55,15 +55,62 @@ function createLegacyWorktreeForTest(
 
 // A remote that accepts connections and never answers, like a VPN-only host while off the VPN.
 async function startSilentRemote(): Promise<{ url: string; close: () => Promise<void> }> {
-  const connections = new Set<Socket>();
-  const server = createServer((socket) => connections.add(socket));
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const connections = new Map<Socket, Promise<void>>();
+  const errors: unknown[] = [];
+  let closing = false;
+  const server = createServer((socket) => {
+    connections.set(
+      socket,
+      new Promise<void>((resolve) => {
+        socket.once("close", () => {
+          connections.delete(socket);
+          resolve();
+        });
+      }),
+    );
+    socket.on("error", (error) => {
+      // The timed-out HTTP client can reset this deliberately silent accepted connection.
+      if (!(error instanceof Error && "code" in error && error.code === "ECONNRESET"))
+        errors.push(error);
+    });
+    if (closing) socket.destroy();
+  });
+  server.on("error", (error) => errors.push(error));
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.removeListener("error", reject);
+      resolve();
+    });
+  });
   const { port } = server.address() as AddressInfo;
   return {
     url: `http://127.0.0.1:${port}/repo.git`,
-    close: () => {
-      for (const socket of connections) socket.destroy();
-      return new Promise<void>((resolve) => server.close(() => resolve()));
+    close: async () => {
+      closing = true;
+      for (const socket of connections.keys()) {
+        try {
+          socket.destroy();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      await new Promise<void>((resolve) => {
+        try {
+          server.close((error) => {
+            if (error) errors.push(error);
+            resolve();
+          });
+        } catch (error) {
+          errors.push(error);
+          resolve();
+        }
+      });
+      // Server close can precede the accepted sockets' own close event handlers.
+      await Promise.all(connections.values());
+      if (server.listening || connections.size !== 0)
+        errors.push(new Error("Silent remote owned socket/server release unconfirmed"));
+      if (errors.length) throw new AggregateError(errors, "Silent remote socket/server errors");
     },
   };
 }
@@ -356,9 +403,9 @@ describe("paseo worktree manager", () => {
       pushPastCachedRemoteRef("origin");
       const cachedTip = git(["rev-parse", "refs/remotes/origin/main"], repoDir);
       const silentRemote = await startSilentRemote();
-      git(["remote", "set-url", "origin", silentRemote.url], repoDir);
-
+      const failures: unknown[] = [];
       try {
+        git(["remote", "set-url", "origin", silentRemote.url], repoDir);
         const startedAt = Date.now();
         const created = await createLegacyWorktreeForTest({
           branchName: "from-silent-remote",
@@ -371,9 +418,18 @@ describe("paseo worktree manager", () => {
         // Clients give up on a create request after 60s, so the fallback has to land well before.
         expect(Date.now() - startedAt).toBeLessThan(30_000);
         expect(git(["rev-parse", "HEAD"], created.worktreePath)).toBe(cachedTip);
+      } catch (error) {
+        failures.push(error);
       } finally {
-        await silentRemote.close();
+        try {
+          await silentRemote.close();
+        } catch (error) {
+          failures.push(error);
+        }
       }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1)
+        throw new AggregateError(failures, "Silent remote case and cleanup failed");
     }, 45_000);
   });
 });

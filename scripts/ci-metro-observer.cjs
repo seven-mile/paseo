@@ -110,6 +110,75 @@ function targetPhaseFilename(projectRoot, filename) {
     return null;
   }
 }
+// Observe the function Expo's getMinifier returns; resolution never loads a missing module.
+function installConfiguredMinifierPhase(farm, workerPath) {
+  const observation = {
+    installed: false,
+    callsite: "Expo minifyCode -> getMinifier -> module.exports",
+  };
+  try {
+    const resolverPath = path.join(path.dirname(workerPath), "utils/getMinifier.js");
+    observation.resolverPath = resolverPath;
+    observation.resolverHash = hashFile(resolverPath);
+    const resolver = require.cache[resolverPath]?.exports;
+    if (typeof resolver?.resolveMinifier !== "function") {
+      observation.reason = "minifier-resolver-not-cached";
+      return observation;
+    }
+    const configuredPath = farm._transformerConfig.transformerConfig.minifierPath;
+    const selectedPath = resolver.resolveMinifier(configuredPath);
+    observation.configuredPath = configuredPath;
+    observation.selectedPath = selectedPath;
+    observation.selectedHash = hashFile(selectedPath);
+    if (selectedPath !== resolver.resolveMinifier("metro-minify-terser")) {
+      observation.reason = "different-configured-minifier";
+      return observation;
+    }
+    const selectedModule = require.cache[selectedPath];
+    const minifier = selectedModule?.exports;
+    if (typeof minifier !== "function") {
+      observation.reason = "configured-minifier-export-not-cached";
+      return observation;
+    }
+    selectedModule.exports = function () {
+      "use strict"; // Preserve undefined this at Expo's unbound minifier call.
+      const args = Array.from(arguments);
+      const filename = targetPhaseFilename(farm._config.projectRoot, args[0]?.filename);
+      if (!filename || targetPhaseClaims.has("configuredMinifier"))
+        return Reflect.apply(minifier, this, args);
+      targetPhaseClaims.add("configuredMinifier");
+      const started = performance.now();
+      record("target-configured-minifier-start", { filename, ...parentMemory() }, true);
+      const settled = (status) =>
+        record(
+          "target-configured-minifier-end",
+          { filename, status, elapsedMs: performance.now() - started, ...parentMemory() },
+          true,
+        );
+      let result;
+      try {
+        result = Reflect.apply(minifier, this, args);
+      } catch (error) {
+        settled("error");
+        throw error;
+      }
+      // Preserve a synchronous result or the installed async minifier's ORIGINAL Promise.
+      if (typeof result?.then === "function")
+        result.then(
+          () => settled("success"),
+          () => settled("error"),
+        );
+      else settled("success");
+      return result;
+    };
+    observation.installed = true;
+    observation.reason = "configured-cached-export";
+  } catch {
+    observation.reason = "configured-minifier-observation-unavailable";
+  }
+  return observation;
+}
+
 function installDesktopTargetPhases(farm) {
   if (targetPhaseObservation) return targetPhaseObservation;
   const observation = { installed: false, stage: "target-dispatch-cached-exports" };
@@ -123,9 +192,6 @@ function installDesktopTargetPhases(farm) {
       observation.reason = "separate-worker-context-not-observed";
       return observation;
     }
-    const babelPath = require.resolve(
-      farm._transformerConfig.transformerConfig.babelTransformerPath,
-    );
     const workerPath =
       require.resolve("@expo/metro-config/build/transform-worker/metro-transform-worker.js");
     const expectedTransformer =
@@ -134,47 +200,13 @@ function installDesktopTargetPhases(farm) {
       observation.reason = "different-transformer-path";
       return observation;
     }
-    observation.babelPath = babelPath;
     observation.workerPath = workerPath;
-    observation.babelHash = hashFile(babelPath);
     observation.workerHash = hashFile(workerPath);
-    const babel = require.cache[babelPath]?.exports;
     const worker = require.cache[workerPath]?.exports;
-    if (typeof babel?.transform !== "function" || typeof worker?.minifyCode !== "function") {
+    if (typeof worker?.minifyCode !== "function") {
       observation.reason = "actual-exports-not-cached";
       return observation;
     }
-    const babelTransform = babel.transform;
-    babel.transform = function (...args) {
-      const input = args[0];
-      const filename = targetPhaseFilename(input?.options?.projectRoot, input?.filename);
-      if (!filename || targetPhaseClaims.has("babel"))
-        return Reflect.apply(babelTransform, this, args);
-      targetPhaseClaims.add("babel");
-      const started = performance.now();
-      record("target-babel-start", { filename, ...parentMemory() }, true);
-      try {
-        const result = Reflect.apply(babelTransform, this, args);
-        record(
-          "target-babel-end",
-          {
-            filename,
-            status: "success",
-            elapsedMs: performance.now() - started,
-            ...parentMemory(),
-          },
-          true,
-        );
-        return result;
-      } catch (error) {
-        record(
-          "target-babel-end",
-          { filename, status: "error", elapsedMs: performance.now() - started, ...parentMemory() },
-          true,
-        );
-        throw error;
-      }
-    };
     const minifyCode = worker.minifyCode;
     worker.minifyCode = function (...args) {
       const filename = targetPhaseFilename(farm._config.projectRoot, args[1]);
@@ -208,6 +240,7 @@ function installDesktopTargetPhases(farm) {
       );
       return result;
     };
+    observation.configuredMinifier = installConfiguredMinifierPhase(farm, workerPath);
     observation.installed = true;
     observation.reason = "same-process-installed-exports";
   } catch {
