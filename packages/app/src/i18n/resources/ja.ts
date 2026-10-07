@@ -55,6 +55,7 @@ export const ja: TranslationResources = {
       plannerScope: "プランナー · {{name}}",
       supervisorScope: "スーパーバイザー · {{name}}",
       allStatuses: "すべての状態",
+      selectedStatuses: "選択済み: {{count}}",
       findTask: "タスクを検索",
       status: "タスクの状態",
       unavailableInScope: "この範囲ではタスクを利用できません。",

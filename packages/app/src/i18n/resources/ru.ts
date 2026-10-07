@@ -55,6 +55,7 @@ export const ru: TranslationResources = {
       plannerScope: "Планировщик · {{name}}",
       supervisorScope: "Руководитель · {{name}}",
       allStatuses: "Все статусы",
+      selectedStatuses: "Выбрано: {{count}}",
       findTask: "Найти задачу",
       status: "Статус задачи",
       unavailableInScope: "Задача недоступна в этой области.",

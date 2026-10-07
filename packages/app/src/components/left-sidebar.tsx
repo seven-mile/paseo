@@ -603,7 +603,7 @@ function MobileSidebar({
           </Pressable>
         </WindowChromeSafeArea>
 
-        <SwarmSidebar>
+        <SwarmSidebar parentGestureRef={closeGestureRef} dragGestureHostActive={active}>
           {isInitialLoad && !hasActiveHostFilter ? (
             <SidebarAgentListSkeleton />
           ) : (
@@ -788,7 +788,7 @@ function DesktopSidebar({
           />
         </View>
 
-        <SwarmSidebar>
+        <SwarmSidebar dragGestureHostActive={active}>
           {isInitialLoad && !hasActiveHostFilter ? (
             <SidebarAgentListSkeleton />
           ) : (

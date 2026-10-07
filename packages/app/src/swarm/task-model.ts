@@ -1,5 +1,25 @@
 import { z } from "zod";
 import { i18n } from "@/i18n/i18next";
+import { isImeComposingKeyboardEvent } from "@/utils/keyboard-ime";
+
+export function isSwarmActivitySubmitShortcut(event: {
+  key: string;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  shiftKey?: boolean;
+  altKey?: boolean;
+  isComposing?: boolean;
+  keyCode?: number;
+  repeat?: boolean;
+}) {
+  return (
+    event.key === "Enter" &&
+    Boolean(event.ctrlKey || event.metaKey) &&
+    !event.shiftKey &&
+    !event.altKey &&
+    !isImeComposingKeyboardEvent(event)
+  );
+}
 
 const responseProfileSchema = z.enum(["decision", "steering", "discussion"]);
 export type SwarmResponseProfile = z.infer<typeof responseProfileSchema>;
@@ -118,6 +138,19 @@ export function swarmTaskColumns(board: SwarmTaskBoard, tasks: readonly SwarmTas
     status,
     tasks: tasks.filter((task) => task.status === status),
   }));
+}
+
+export function filterSwarmTasks(
+  tasks: readonly SwarmTask[],
+  statuses: readonly string[],
+  search: string,
+) {
+  const text = search.trim().toLowerCase();
+  return tasks.filter(
+    (task) =>
+      (statuses.length === 0 || statuses.includes(task.status)) &&
+      (!text || `${task.id} ${task.title} ${task.managerName}`.toLowerCase().includes(text)),
+  );
 }
 
 export function resolveSwarmTaskReference(
@@ -345,7 +378,7 @@ export function openSwarmReply(taskId: string, initialActivities: readonly Swarm
       kind: state.replyTo ? "human-response" : "human-note",
       body,
       replyTo: state.replyTo,
-      responseProfile: state.replyTo ? state.responseProfile : null,
+      responseProfile: state.responseProfile,
       data: option ? { selectedOption: option.id } : {},
     };
   }
@@ -447,3 +480,49 @@ export function openSwarmReply(taskId: string, initialActivities: readonly Swarm
     },
   };
 }
+
+// Tasks state outlives responsive shell mounts; the backing tab owns disposal.
+export function openSwarmTaskSurfaceState() {
+  let closed = false;
+  const details = new Map<
+    string,
+    {
+      model: ReturnType<typeof openSwarmReply>;
+      actor: string;
+      referenceUnavailable: boolean;
+      selection: { start: number; end: number } | null;
+      restoreFocus: boolean;
+    }
+  >();
+  return {
+    isClosed: () => closed,
+    view: {
+      selectedTaskId: null as string | null,
+      visitedTaskIds: [] as string[],
+      scope: null as string | null,
+      statuses: [] as string[],
+      search: "",
+    },
+    detail(taskId: string, activities: readonly SwarmActivity[]) {
+      if (closed) throw new Error("Tasks tab state is closed");
+      let detail = details.get(taskId);
+      if (!detail) {
+        detail = {
+          model: openSwarmReply(taskId, activities),
+          actor: "",
+          referenceUnavailable: false,
+          selection: null,
+          restoreFocus: false,
+        };
+        details.set(taskId, detail);
+      }
+      return detail;
+    },
+    close() {
+      closed = true;
+      for (const detail of details.values()) detail.model.close();
+      details.clear();
+    },
+  };
+}
+export type SwarmTaskSurfaceState = ReturnType<typeof openSwarmTaskSurfaceState>;
