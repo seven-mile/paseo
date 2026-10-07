@@ -11,6 +11,19 @@ on:
         description: "Existing tag to build (e.g. v0.1.0)"
         required: true
         type: string
+      checkout_ref:
+        description: "Source ref for a non-publishing candidate."
+        required: false
+        default: ""
+        type: string
+      publish:
+        description: "Publish through EAS, or build a test-signed ARM64 APK artifact."
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 concurrency:
   group: android-apk-release-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
@@ -21,6 +34,7 @@ env:
 
 jobs:
   ensure-release:
+    if: github.event_name != 'workflow_dispatch' || inputs.publish != 'false'
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -148,3 +162,61 @@ jobs:
         run: |
           release_lookup="$(node scripts/github-release.mjs --repo "${{ github.repository }}" --tag "$RELEASE_TAG")"
           gh release upload "$release_lookup" "${{ steps.artifact.outputs.asset_path }}" --clobber --repo "${{ github.repository }}"
+
+  build-candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == 'false'
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      APP_VARIANT: production
+      ONNXRUNTIME_NODE_INSTALL: skip
+      NODE_OPTIONS: --max-old-space-size=4096
+      CANDIDATE_REF: ${{ inputs.checkout_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref || inputs.tag }}
+      - name: Verify immutable candidate source
+        run: |
+          [[ "$CANDIDATE_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_REF"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+      - name: Install and prepare app dependencies
+        run: |
+          node scripts/npm-retry.mjs ci
+          npm run eas-build-post-install --workspace=@getpaseo/app
+      - name: Build self-contained test-signed ARM64 APK
+        working-directory: packages/app
+        run: |
+          npx expo prebuild --platform android --clean --no-install
+          cd android
+          ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --max-workers=1 -Dorg.gradle.parallel=false
+      - name: Record candidate identity and signature
+        run: |
+          mkdir -p candidate
+          cp packages/app/android/app/build/outputs/apk/release/*.apk candidate/
+          git rev-parse HEAD > candidate/source-commit.txt
+          printf '%s\n' "$GITHUB_SHA" > candidate/workflow-commit.txt
+          node -p "require('./packages/app/package.json').version" > candidate/source-version.txt
+          printf '%s\n' 'production ID sh.paseo; Expo template debug signing key; ARM64 only; cannot assume upgrade over official installation; use an isolated device; no release publication; push credentials unavailable' > candidate/limitations.txt
+          { node --version; npm --version; java -version; } > candidate/tool-versions.txt 2>&1
+          tools="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)"
+          "$tools" verify --print-certs candidate/*.apk > candidate/signature.txt
+          "$(dirname "$tools")/aapt" dump badging candidate/*.apk > candidate/package.txt
+          sha256sum candidate/*.apk > candidate/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-candidate-arm64-test-signed
+          path: candidate/
+          retention-days: 7
+          if-no-files-found: error

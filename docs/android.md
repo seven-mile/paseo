@@ -212,6 +212,8 @@ Beta tags like `v0.1.1-beta.1` only trigger the GitHub APK workflow. They publis
 
 `android-v*` tags also trigger only the GitHub APK workflow — useful when you want to ship an APK without going through stores. The GitHub APK workflow supports `workflow_dispatch` with an existing `tag` input so you can rebuild without cutting a new tag.
 
+手动候选构建使用 `publish=false` 与完整提交 SHA 的 `checkout_ref`；`tag` 仅为保留的输入，不决定候选源码。此路径无需 EAS 凭据，只保存七天的 ARM64 Release APK 与来源、签名和校验证据。它使用 Expo 模板测试签名和生产包名 `sh.paseo`；在隔离设备上验收，不能假设可覆盖官方安装。缺少 Firebase 凭据时不保证推送功能。正式 EAS 发布继续使用 `publish=true`。
+
 ### Useful commands
 
 ```bash
