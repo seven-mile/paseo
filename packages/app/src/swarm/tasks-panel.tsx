@@ -318,6 +318,7 @@ export function SwarmTasksContent({
       const currentSelection = readSwarmTaskSelection(current?.state);
       setSwarmTaskSelection(workspaceKey, currentTabId, {
         ...scope,
+        taskId: currentSelection.taskId,
         defaultAgentId: currentSelection.defaultAgentId,
       });
     },

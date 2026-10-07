@@ -545,7 +545,6 @@ function LoadedTasks({
   const changeScope = useCallback(
     (value: string) => {
       setScope(value);
-      setSelectedTaskId(null);
       onScopeChange?.(taskScopeSelection(board, value));
     },
     [board, onScopeChange],
@@ -875,6 +874,70 @@ function TaskDetail({
   const [actor, setActor] = useState(detail.actor);
   const [referenceUnavailable, setReferenceUnavailable] = useState(detail.referenceUnavailable);
   const active = useRetainedPanelActive();
+  const activityScroll = useRef<ScrollView>(null);
+  const [scrollReceiptId, setScrollReceiptId] = useState<string | null>(null);
+  const scrollReceipt = useRef<string | null>(null);
+  const receiptIncluded = useRef(false);
+  useLayoutEffect(() => {
+    receiptIncluded.current = Boolean(
+      scrollReceiptId && !actor && activities.some((activity) => activity.id === scrollReceiptId),
+    );
+  }, [activities, actor, scrollReceiptId]);
+  const scrollFrame = useRef<number | null>(null);
+  const committedView = useRef({ mounted: false, active: false, actor, revision: 0 });
+  useLayoutEffect(() => {
+    committedView.current = {
+      mounted: true,
+      active,
+      actor,
+      revision: committedView.current.revision + 1,
+    };
+    if (!active || actor) setScrollReceiptId(null);
+    return () => {
+      committedView.current.mounted = false;
+      committedView.current.active = false;
+      committedView.current.revision += 1;
+      if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+      scrollFrame.current = null;
+    };
+  }, [active, actor]);
+  useLayoutEffect(() => {
+    scrollReceipt.current = scrollReceiptId;
+    return () => {
+      scrollReceipt.current = null;
+      if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+      scrollFrame.current = null;
+    };
+  }, [scrollReceiptId]);
+  const revealSavedActivity = useCallback(() => {
+    const current = committedView.current;
+    if (
+      !current.mounted ||
+      !current.active ||
+      current.actor ||
+      !receiptIncluded.current ||
+      !scrollReceiptId ||
+      scrollReceipt.current !== scrollReceiptId
+    )
+      return;
+    if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = null;
+      const view = committedView.current;
+      if (
+        !view.mounted ||
+        !view.active ||
+        view.actor ||
+        !receiptIncluded.current ||
+        scrollReceipt.current !== scrollReceiptId
+      )
+        return;
+      // Consume only after the exact receipt's refreshed list has laid out.
+      scrollReceipt.current = null;
+      activityScroll.current?.scrollToEnd({ animated: false });
+      setScrollReceiptId(null);
+    });
+  }, [scrollReceiptId]);
   const initialEditorState = useRef({
     selection: detail.selection,
     restoreFocus: active && !reply.pending && detail.restoreFocus,
@@ -969,11 +1032,28 @@ function TaskDetail({
     // Read the editing owner once at submission, including the latest committed keystroke.
     model.setBody(editor.current?.getText() ?? model.getState().body);
     if (!model.getState().canSubmit) return;
-    const sent = await model.submit(async (input) =>
-      swarmHumanActivityReceiptSchema.parse(await invoke("swarm.activity.append_human", input)),
-    );
+    const viewRevision = committedView.current.revision;
+    let savedReceiptId: string | null = null;
+    const sent = await model.submit(async (input) => {
+      const receipt = swarmHumanActivityReceiptSchema.parse(
+        await invoke("swarm.activity.append_human", input),
+      );
+      savedReceiptId = receipt.id;
+      return receipt;
+    });
     if (sent) {
       editor.current?.replaceText("");
+      const current = committedView.current;
+      if (
+        savedReceiptId &&
+        current.mounted &&
+        current.active &&
+        current.revision === viewRevision
+      ) {
+        // A successful local send reveals its human Activity through the existing All actors view.
+        setActor("");
+        setScrollReceiptId(savedReceiptId);
+      }
       onRefresh();
     }
   }, [invoke, model, onRefresh, online]);
@@ -1027,7 +1107,11 @@ function TaskDetail({
           {t("swarm.tasks.referenceUnavailable")}
         </Text>
       ) : null}
-      <ScrollView contentContainerStyle={styles.detailContent} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        ref={activityScroll}
+        contentContainerStyle={styles.detailContent}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.rowMeta}>
           <Text style={styles.title}>{task.title}</Text>
           <StatusBadge label={task.status} />
@@ -1060,6 +1144,21 @@ function TaskDetail({
               />
             ))
           )}
+          {scrollReceiptId &&
+          active &&
+          !actor &&
+          visible.some((activity) => activity.id === scrollReceiptId) ? (
+            <View
+              key={scrollReceiptId}
+              collapsable={false}
+              pointerEvents="none"
+              accessible={false}
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              style={styles.receiptLayoutMarker}
+              onLayout={revealSavedActivity}
+            />
+          ) : null}
         </SettingsSection>
       </ScrollView>
       <View style={styles.composer}>
@@ -1095,17 +1194,15 @@ function TaskDetail({
           />
         </Field>
         <View style={styles.sendRow}>
-          {reply.replyTo ? (
-            <TaskSelect
-              label={t("swarm.tasks.responseProfile")}
-              value={reply.responseProfile}
-              options={responseProfiles
-                .filter((profile) => !profiles || profiles.includes(profile.value))
-                .map((profile) => ({ value: profile.value, label: t(profile.labelKey) }))}
-              onSelect={setProfile}
-              disabled={reply.pending}
-            />
-          ) : null}
+          <TaskSelect
+            label={t("swarm.tasks.responseProfile")}
+            value={reply.responseProfile}
+            options={responseProfiles
+              .filter((profile) => !profiles || profiles.includes(profile.value))
+              .map((profile) => ({ value: profile.value, label: t(profile.labelKey) }))}
+            onSelect={setProfile}
+            disabled={reply.pending}
+          />
           <Button
             variant="default"
             size={compact ? "md" : "sm"}
@@ -1332,6 +1429,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   choices: { gap: theme.spacing[2], paddingVertical: theme.spacing[2] },
   choice: { alignItems: "flex-start", gap: theme.spacing[1] },
+  receiptLayoutMarker: { position: "absolute", bottom: 0, width: 0, height: 0 },
   composer: {
     borderTopWidth: 1,
     borderTopColor: theme.colors.border,

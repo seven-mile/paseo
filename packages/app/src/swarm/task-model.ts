@@ -378,7 +378,7 @@ export function openSwarmReply(taskId: string, initialActivities: readonly Swarm
       kind: state.replyTo ? "human-response" : "human-note",
       body,
       replyTo: state.replyTo,
-      responseProfile: state.replyTo ? state.responseProfile : null,
+      responseProfile: state.responseProfile,
       data: option ? { selectedOption: option.id } : {},
     };
   }

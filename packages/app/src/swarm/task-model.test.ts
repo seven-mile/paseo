@@ -455,6 +455,40 @@ describe("Swarm Activity reply", () => {
     finish();
     expect(await pending).toBe(false);
   });
+  it("sends the selected profile without a reply and retains the note profile on failure", async () => {
+    const model = openSwarmReply("task", []);
+    model.setProfile("discussion");
+    model.setBody("Discuss the next step");
+    expect(
+      await model.submit(async () => {
+        throw new Error("Host offline");
+      }),
+    ).toBe(false);
+    expect(model.getState()).toMatchObject({
+      body: "Discuss the next step",
+      replyTo: null,
+      responseProfile: "discussion",
+      pending: false,
+    });
+    const inputs: HumanActivityInput[] = [];
+    expect(
+      await model.submit(async (input) => {
+        inputs.push(input);
+      }),
+    ).toBe(true);
+    expect(inputs).toEqual([
+      {
+        taskId: "task",
+        actorName: "human",
+        kind: "human-note",
+        body: "Discuss the next step",
+        replyTo: null,
+        responseProfile: "discussion",
+        data: {},
+      },
+    ]);
+    expect(model.getState()).toMatchObject({ body: "", replyTo: null, canSubmit: false });
+  });
   it("sends an ordinary Activity reply with its selected response profile", async () => {
     const note = { ...activity(), data: {} };
     const model = openSwarmReply("task", [note]);
