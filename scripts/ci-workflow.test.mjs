@@ -117,7 +117,10 @@ test("Playwright workflow preserves failing command status and both Metro log st
   const command =
     "npm run test:e2e --workspace=@getpaseo/app -- --shard=${{ env.PLAYWRIGHT_SHARD }}";
   assert.equal(runBlock.split(command).length, 2, "substitute only the single npm invocation");
-  const producer = `bash -c 'printf "%s\\n" "[metro] stdout"; printf "%s\\n" "[metro] stderr" >&2; exit 17'`;
+  const observerEnvPath = runStep.match(/^          CI_METRO_OBSERVER_LOG: (.+)$/m)?.[1];
+  assert.ok(observerEnvPath, "missing actual observer step env path");
+  const observerMarker = '{"event":"ci-metro-retention-marker"}';
+  const producer = `bash -c 'printf "%s\\n" "[metro] stdout"; printf "%s\\n" "[metro] stderr" >&2; printf "%s\\n" "$CI_METRO_RETENTION_MARKER" > "$CI_METRO_OBSERVER_LOG"; exit 17'`;
   const script = runBlock.replace(/^          /gm, "").replace(command, producer);
   const artifactPath = playwright
     .split("      - name: Upload test artifacts\n")[1]
@@ -125,19 +128,33 @@ test("Playwright workflow preserves failing command status and both Metro log st
     .find((line) => /^\s+\$\{\{ runner\.temp \}\}\/.*\.log$/.test(line))
     ?.trim();
   assert.ok(artifactPath, "missing retained runner.temp log path");
+  const observerArtifactPath = playwright
+    .split("      - name: Upload test artifacts\n")[1]
+    ?.split("\n")
+    .find((line) => /^\s+\$\{\{ runner\.temp \}\}\/.*\.ndjson$/.test(line))
+    ?.trim();
+  assert.ok(observerArtifactPath, "missing actual retained NDJSON artifact path");
   const directory = mkdtempSync(join(tmpdir(), "paseo-ci-log-"));
   try {
+    const expandRunnerPath = (value) =>
+      value.replace("${{ runner.temp }}", directory).replace("${{ env.PLAYWRIGHT_ARTIFACT }}", "3");
     const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", script], {
       encoding: "utf8",
-      env: { ...process.env, RUNNER_TEMP: directory, PLAYWRIGHT_ARTIFACT: "3" },
+      env: {
+        ...process.env,
+        RUNNER_TEMP: directory,
+        PLAYWRIGHT_ARTIFACT: "3",
+        CI_METRO_OBSERVER_LOG: expandRunnerPath(observerEnvPath),
+        CI_METRO_RETENTION_MARKER: observerMarker,
+      },
     });
     assert.ifError(result.error);
     assert.equal(result.status, 17, result.stderr);
-    const log = readFileSync(
-      artifactPath
-        .replace("${{ runner.temp }}", directory)
-        .replace("${{ env.PLAYWRIGHT_ARTIFACT }}", "3"),
-      "utf8",
+    const log = readFileSync(expandRunnerPath(artifactPath), "utf8");
+    assert.equal(
+      readFileSync(expandRunnerPath(observerArtifactPath), "utf8"),
+      observerMarker + "\n",
+      "failing command must retain observer marker at actual uploader path",
     );
     for (const marker of ["[metro] stdout", "[metro] stderr"]) {
       assert.ok(log.includes(marker), `missing retained ${marker}`);

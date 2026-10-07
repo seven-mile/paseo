@@ -53,6 +53,7 @@ try {
 
   {
     console.log("Test 3: status reaches the same daemon when password is supplied");
+    const statusStartedAt = performance.now();
     const result = await runLocalPaseo(["daemon", "status", "--json"], {
       PASEO_HOME: daemon.paseoHome,
       PASEO_HOST: "",
@@ -63,7 +64,15 @@ try {
     const status = JSON.parse(result.stdout);
 
     assert.strictEqual(status.localDaemon, "running");
-    assert.strictEqual(status.connectedDaemon, "reachable");
+    assert.strictEqual(
+      status.connectedDaemon,
+      "reachable",
+      JSON.stringify({
+        connectedDaemon: status.connectedDaemon,
+        note: status.note?.replaceAll(daemon.paseoHome, "<test-home>"),
+        elapsedMs: performance.now() - statusStartedAt,
+      }),
+    );
     assert(!("runningAgents" in status), "status should not fetch agent counts");
     assert(!("idleAgents" in status), "status should not fetch agent counts");
     console.log("✓ password-authenticated status remains reachable\n");

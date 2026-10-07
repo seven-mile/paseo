@@ -1,6 +1,13 @@
 import { useNavigate } from "@tanstack/react-router";
 import { Search, X } from "lucide-react";
-import { type ChangeEvent, type FormEvent, useCallback, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  type FormEvent,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { type BrowseQuery, browseHref, DEFAULT_WINDOW } from "./links";
 
 const ICON_CLASS = "h-3.5 w-3.5 text-extra-muted-foreground";
@@ -13,18 +20,70 @@ export function PluginSearch({ scope, className }: { scope: BrowseQuery; classNa
   const navigate = useNavigate();
   const input = useRef<HTMLInputElement>(null);
   const [term, setTerm] = useState(scope.q ?? "");
+  useLayoutEffect(() => {
+    if (
+      typeof window !== "undefined" &&
+      (window as unknown as { __paseoPluginSearchTrace?: boolean }).__paseoPluginSearchTrace ===
+        true
+    ) {
+      console.info(
+        "plugin-search:commit",
+        performance.now(),
+        JSON.stringify({
+          termIsGraphite: term === "graphite",
+          termLength: term.length,
+          scopeHasQuery: Boolean(scope.q),
+          inputIsGraphite: input.current?.value === "graphite",
+          inputLength: input.current?.value.length,
+          urlIsExpected: location.pathname === "/plugins/all" && location.search === "?q=graphite",
+        }),
+      );
+    }
+  }, [term, scope.q]);
   const search = useCallback(
     (next: string) => {
       setTerm(next);
+      const href = browseHref({ ...scope, q: next.trim() ? next : undefined });
+      if (
+        (window as unknown as { __paseoPluginSearchTrace?: boolean }).__paseoPluginSearchTrace ===
+        true
+      ) {
+        console.info(
+          "plugin-search:navigate",
+          performance.now(),
+          JSON.stringify({
+            termIsGraphite: next === "graphite",
+            termLength: next.length,
+            hrefIsExpected: href === "/plugins/all?q=graphite",
+            replace: true,
+          }),
+        );
+      }
       void navigate({
-        href: browseHref({ ...scope, q: next.trim() ? next : undefined }),
+        href,
         replace: true,
       });
     },
     [navigate, scope],
   );
   const handleChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => search(event.target.value),
+    (event: ChangeEvent<HTMLInputElement>) => {
+      if (
+        (window as unknown as { __paseoPluginSearchTrace?: boolean }).__paseoPluginSearchTrace ===
+        true
+      ) {
+        console.info(
+          "plugin-search:change",
+          performance.now(),
+          JSON.stringify({
+            termIsGraphite: event.target.value === "graphite",
+            termLength: event.target.value.length,
+            nativeTime: event.timeStamp,
+          }),
+        );
+      }
+      search(event.target.value);
+    },
     [search],
   );
   const handleClear = useCallback(() => {

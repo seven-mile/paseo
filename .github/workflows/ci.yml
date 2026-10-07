@@ -417,6 +417,8 @@ jobs:
           npm run test:e2e --workspace=@getpaseo/app -- --shard=${{ env.PLAYWRIGHT_SHARD }} 2>&1 | tee "${RUNNER_TEMP}/playwright-${PLAYWRIGHT_ARTIFACT}.log"
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EXPO_OVERRIDE_METRO_CONFIG: ${{ github.workspace }}/scripts/ci-metro-observer.cjs
+          CI_METRO_OBSERVER_LOG: ${{ runner.temp }}/metro-${{ env.PLAYWRIGHT_ARTIFACT }}.ndjson
           # Weight file groups by observed duration; raw test counts overload
           # early agent/Changes specs. Required check names remain unchanged.
           PWTEST_SHARD_WEIGHTS: "111:172:137:160"
@@ -430,6 +432,7 @@ jobs:
             packages/app/test-results/
             packages/app/playwright-report/
             ${{ runner.temp }}/playwright-${{ env.PLAYWRIGHT_ARTIFACT }}.log
+            ${{ runner.temp }}/metro-${{ env.PLAYWRIGHT_ARTIFACT }}.ndjson
           retention-days: 7
 
   playwright-2:
