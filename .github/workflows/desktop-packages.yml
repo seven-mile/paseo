@@ -48,8 +48,6 @@ jobs:
           npm run build:desktop -- --publish never --linux --x64 --config "$RUNNER_TEMP/desktop-smoke-builder.json"
         env:
           EP_GH_IGNORE_TIME: true
-          EXPO_OVERRIDE_METRO_CONFIG: ${{ github.workspace }}/scripts/ci-metro-observer.cjs
-          CI_METRO_OBSERVER_LOG: ${{ runner.temp }}/desktop-export-metro.ndjson
           PASEO_DESKTOP_SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/desktop-smoke
 
       - name: Smoke installed artifacts with restricted user namespaces
@@ -90,6 +88,5 @@ jobs:
           name: desktop-packaged-smoke-linux-x64
           path: |
             ${{ runner.temp }}/desktop-smoke
-            ${{ runner.temp }}/desktop-export-metro.ndjson
           if-no-files-found: ignore
           retention-days: 7

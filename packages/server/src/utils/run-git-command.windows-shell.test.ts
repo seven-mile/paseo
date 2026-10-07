@@ -1,12 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import {
-  appendFileSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -45,15 +38,6 @@ function isProcessRunning(pid: number): boolean {
     if (error instanceof Error && "code" in error && error.code === "ESRCH") return false;
     throw error;
   }
-}
-
-function recordOwnership(event: string, startedAt: number, details: Record<string, unknown>): void {
-  const destination = process.env.PASEO_GIT_OWNERSHIP_LOG;
-  if (destination)
-    appendFileSync(
-      destination,
-      JSON.stringify({ event, elapsedMs: performance.now() - startedAt, ...details }) + "\n",
-    );
 }
 
 interface WindowsOwner {
@@ -231,9 +215,7 @@ describe("runGitCommand shell behavior", () => {
   it.runIf(process.platform === "win32")(
     "stops Git-owned Windows helper descendants before timeout rejection",
     async () => {
-      const startedAt = performance.now();
       const repo = makeTempRepo();
-      recordOwnership("fixture", startedAt, { repoName: path.basename(repo) });
       await runGitCommand(["init"], { cwd: repo });
       const helper = path.join(repo, "owned-helper.cjs");
       const pidFile = path.join(repo, "owned-helper-pids.json");
@@ -260,10 +242,6 @@ describe("runGitCommand shell behavior", () => {
         if (args[0] === "git" && args[1].includes("paseo-timeout-owner")) {
           gitChild = child;
           gitCommandStartedAt = commandStartedAt;
-          recordOwnership("git-start", startedAt, {
-            gitPid: child.pid,
-            commandStartedMs: gitCommandStartedAt - startedAt,
-          });
         }
         return child;
       });
@@ -315,27 +293,16 @@ describe("runGitCommand shell behavior", () => {
         expect(ownedTree.some((row) => row.pid === pids!.descendant)).toBe(true);
         expect(ownedTree.every((row) => isProcessRunning(row.pid))).toBe(true);
         expect(performance.now() - gitCommandStartedAt).toBeLessThan(10_000);
-        recordOwnership("ready", startedAt, {
-          gitPid: gitChild!.pid,
-          ownerPid: pids!.owner,
-          descendantPid: pids!.descendant,
-          ownedTree,
-        });
         const timeoutFailure = await timedOut;
         expect(timeoutFailure).toBeInstanceOf(Error);
         expect((timeoutFailure as Error).message).toMatch(/^Git command timed out after 10000ms:/);
         expect((timeoutFailure as Error).message).not.toContain("process-tree cleanup failed");
-        recordOwnership("timeout-contract", startedAt, {
-          originalTimeout: true,
-          cleanupFailure: false,
-        });
         // Snapshot immediately at public result settlement, before any fixture cleanup.
         const atSettlement = {
           gitAlive: isProcessRunning(gitChild!.pid!),
           ownerAlive: isProcessRunning(pids!.owner),
           descendantAlive: isProcessRunning(pids!.descendant),
         };
-        recordOwnership("settlement", startedAt, atSettlement);
         expect(atSettlement, "Git timeout ownership: owners alive at public settlement").toEqual({
           gitAlive: false,
           ownerAlive: false,
@@ -344,17 +311,12 @@ describe("runGitCommand shell behavior", () => {
         try {
           rmSync(repo, { recursive: true, force: true });
         } catch (error) {
-          recordOwnership("cwd-delete", startedAt, {
-            removed: false,
-            code: error instanceof Error && "code" in error ? error.code : "unknown",
-          });
           if (error instanceof Error && "code" in error && error.code === "EBUSY") {
             throw new Error("Git timeout ownership: cwd EBUSY before cleanup", { cause: error });
           }
           throw error;
         }
         expect(existsSync(repo)).toBe(false);
-        recordOwnership("cwd-delete", startedAt, { removed: true });
       } catch (error) {
         failure = error;
         caseFailed = true;
@@ -368,19 +330,13 @@ describe("runGitCommand shell behavior", () => {
         }
         const cleanup = await cleanupWindowsOwners(pidFile, pids, gitChild, ownedTree);
         cleanupErrors.push(...cleanup.errors);
-        let cwdReleased = false;
         try {
-          cwdReleased = releaseWindowsFixtureCwd(repo);
+          releaseWindowsFixtureCwd(repo);
           const index = tempDirs.indexOf(repo);
           if (index >= 0) tempDirs.splice(index, 1);
         } catch (error) {
           cleanupErrors.push(error);
         }
-        recordOwnership("cleanup", startedAt, {
-          ownedPids: cleanup.owned,
-          cwdReleased,
-          errors: cleanupErrors.length,
-        });
       }
       if (cleanupErrors.length)
         throw new AggregateError(

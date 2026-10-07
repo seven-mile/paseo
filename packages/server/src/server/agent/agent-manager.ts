@@ -93,35 +93,6 @@ import { withTimeout } from "../../utils/promise-timeout.js";
 import { extractAttention } from "../persistence-hooks.js";
 
 const RELOAD_SESSION_CLOSE_TIMEOUT_MS = 3_000;
-let availabilityTraceSequence = 0;
-
-// Temporary Test 8 CI observation; do not add or change availability probes.
-function observeAvailabilityStages(provider: AgentProvider): (stage: string) => void {
-  if (!process.env.CI || process.env.PASEO_CLI_STATUS_TRACE !== "1") return () => {};
-  const sequence = ++availabilityTraceSequence;
-  let started: number | undefined;
-  return (stage) => {
-    try {
-      const atMs = performance.now();
-      started ??= atMs;
-      const providerId = /^[a-zA-Z0-9_.-]{1,64}$/.test(provider) ? provider : "custom";
-      console.info(
-        "[cli-status-stage] " +
-          JSON.stringify({
-            scope: "provider",
-            sequence,
-            stage,
-            provider: providerId,
-            atMs,
-            elapsedMs: atMs - started,
-          }),
-      );
-    } catch {
-      // Observation failures must not change the original availability result.
-    }
-  };
-}
-
 const INTERRUPT_SESSION_TIMEOUT_MS = 2_000;
 const IMPORTABLE_SESSION_LIST_TIMEOUT_MS = 90_000;
 const STORED_AGENT_CAPABILITIES: AgentCapabilityFlags = {
@@ -1102,18 +1073,14 @@ export class AgentManager {
       };
     }
 
-    const mark = observeAvailabilityStages(provider);
     try {
-      mark("is-available:start");
       const available = await client.isAvailable();
-      mark("is-available:end");
       return {
         provider,
         available,
         error: null,
       };
     } catch (error) {
-      mark("is-available:exception");
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn({ err: error, provider }, "Failed to check provider availability");
       return {

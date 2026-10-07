@@ -105,8 +105,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -132,28 +130,18 @@ jobs:
         run: npx playwright install --with-deps chromium webkit
 
       - name: Verify website mockups
-        id: website_checks
         shell: bash
         run: |
           unset WEBSITE_TEST_URL
-          set +e
-          node scripts/ci-website-hydration.mjs
-          old_status=$?
-          set -e
-          if [ "$old_status" -ne 0 ] && [ "$old_status" -ne 1 ]; then exit "$old_status"; fi
           npm run test:e2e --workspace=@getpaseo/website
-          exit "$old_status"
-        env:
-          PWTEST_CACHE_DIR: ${{ runner.temp }}/website-candidate-cache
 
       - name: Upload website test artifacts
         uses: actions/upload-artifact@v4
-        if: ${{ failure() || cancelled() || steps.website_checks.outcome == 'success' }}
+        if: ${{ failure() || cancelled() }}
         with:
           name: website-test-results
           path: |
             packages/website/test-results/
-            ${{ runner.temp }}/website-hydration/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -192,23 +180,10 @@ jobs:
       - name: Build server dependencies
         run: npm run build:server-deps
 
-      - name: Observe baseline Windows Git descendant ownership
-        id: git_ownership
-        shell: bash
-        if: ${{ runner.os == 'Windows' && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
-        run: |
-          set +e
-          node scripts/ci-windows-git-ownership.mjs
-          old_status=$?
-          set -e
-          echo "status=$old_status" >> "$GITHUB_OUTPUT"
-          if [ "$old_status" -ne 0 ] && [ "$old_status" -ne 1 ]; then exit "$old_status"; fi
-
       - name: Run server tests
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
         run: npm run test --workspace=@getpaseo/server
         env:
-          PASEO_GIT_OWNERSHIP_LOG: ${{ runner.temp }}/windows-git-ownership/new.ndjson
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -220,20 +195,6 @@ jobs:
       - name: Run Hub CLI/daemon contract
         if: ${{ needs.changes.outputs.full == 'false' && needs.changes.outputs.server == 'false' && needs.changes.outputs.hub != 'false' }}
         run: npm run test:hub-cli-contract --workspace=@getpaseo/server
-
-      - name: Retain invalid Windows ownership observation failure
-        if: ${{ !cancelled() && runner.os == 'Windows' && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') && steps.git_ownership.outputs.status == '1' }}
-        shell: bash
-        run: exit 1
-
-      - name: Upload Windows Git ownership evidence
-        if: ${{ runner.os == 'Windows' && (success() || failure() || cancelled()) }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-git-ownership
-          path: ${{ runner.temp }}/windows-git-ownership/
-          if-no-files-found: ignore
-          retention-days: 7
 
   server-tests-windows:
     name: server-tests (windows-latest)
@@ -460,8 +421,6 @@ jobs:
           npm run test:e2e --workspace=@getpaseo/app -- --shard=${{ env.PLAYWRIGHT_SHARD }} 2>&1 | tee "${RUNNER_TEMP}/playwright-${PLAYWRIGHT_ARTIFACT}.log"
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          EXPO_OVERRIDE_METRO_CONFIG: ${{ github.workspace }}/scripts/ci-metro-observer.cjs
-          CI_METRO_OBSERVER_LOG: ${{ runner.temp }}/metro-${{ env.PLAYWRIGHT_ARTIFACT }}.ndjson
           # Weight file groups by observed duration; raw test counts overload
           # early agent/Changes specs. Required check names remain unchanged.
           PWTEST_SHARD_WEIGHTS: "111:172:137:160"
@@ -475,7 +434,6 @@ jobs:
             packages/app/test-results/
             packages/app/playwright-report/
             ${{ runner.temp }}/playwright-${{ env.PLAYWRIGHT_ARTIFACT }}.log
-            ${{ runner.temp }}/metro-${{ env.PLAYWRIGHT_ARTIFACT }}.ndjson
           retention-days: 7
 
   playwright-2:

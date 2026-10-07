@@ -20,7 +20,6 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { createInterface, type Interface } from "node:readline";
 import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
@@ -227,7 +226,6 @@ try {
     const workerArgs = workerEntry.endsWith(".ts")
       ? ["--import", "tsx", workerEntry, "--relay"]
       : [workerEntry, "--relay"];
-    const traceStatus = Boolean(process.env.CI);
     const worker = spawn(process.execPath, workerArgs, {
       cwd: join(import.meta.dirname, ".."),
       env: {
@@ -237,84 +235,10 @@ try {
         PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: "0",
         PASEO_DICTATION_ENABLED: "0",
         PASEO_VOICE_MODE_ENABLED: "0",
-        PASEO_CLI_STATUS_TRACE: traceStatus ? "1" : "0",
         CI: "true",
       },
-      stdio: traceStatus ? ["ignore", "pipe", "pipe"] : "ignore",
+      stdio: "ignore",
     });
-    const stageReaders: Interface[] = [];
-    if (traceStatus) {
-      const prefix = "[cli-status-stage] ";
-      const daemonStages = new Set([
-        "entry",
-        "pid-lock:start",
-        "pid-lock:end",
-        "providers:start",
-        "providers:end",
-        "emit:start",
-        "emit:end",
-        "exception",
-        "fallback-emit:start",
-        "fallback-emit:end",
-      ]);
-      const providerStages = new Set([
-        "is-available:start",
-        "is-available:end",
-        "is-available:exception",
-      ]);
-      for (const stream of [worker.stdout, worker.stderr]) {
-        if (!stream) continue;
-        const reader = createInterface({ input: stream });
-        stageReaders.push(reader);
-        reader.on("line", (line) => {
-          if (!line.startsWith(prefix) || line.length > 512) return;
-          try {
-            const row = JSON.parse(line.slice(prefix.length));
-            if (
-              !Number.isSafeInteger(row.sequence) ||
-              row.sequence < 1 ||
-              !Number.isFinite(row.atMs) ||
-              row.atMs < 0 ||
-              !Number.isFinite(row.elapsedMs) ||
-              row.elapsedMs < 0
-            )
-              return;
-            if (row.scope === "daemon" && daemonStages.has(row.stage)) {
-              console.info(
-                prefix +
-                  JSON.stringify({
-                    scope: "daemon",
-                    sequence: row.sequence,
-                    stage: row.stage,
-                    atMs: row.atMs,
-                    elapsedMs: row.elapsedMs,
-                  }),
-              );
-            } else if (
-              row.scope === "provider" &&
-              providerStages.has(row.stage) &&
-              typeof row.provider === "string" &&
-              /^[a-zA-Z0-9_.-]{1,64}$/.test(row.provider)
-            ) {
-              console.info(
-                prefix +
-                  JSON.stringify({
-                    scope: "provider",
-                    sequence: row.sequence,
-                    stage: row.stage,
-                    provider: row.provider,
-                    atMs: row.atMs,
-                    elapsedMs: row.elapsedMs,
-                  }),
-              );
-            }
-          } catch {
-            // Discard arbitrary worker output; retain only the fixed safe stage schema.
-          }
-        });
-      }
-    }
-
     try {
       const relayProbe = await retryWhileWorkerRuns(
         worker,
@@ -415,15 +339,7 @@ try {
         await rm(foreignHome, { recursive: true, force: true });
       }
     } finally {
-      try {
-        await stopChildProcess(worker);
-      } finally {
-        for (const reader of stageReaders) reader.close();
-        if (traceStatus) {
-          worker.stdout?.destroy();
-          worker.stderr?.destroy();
-        }
-      }
+      await stopChildProcess(worker);
     }
     console.log("✓ daemon status probes live relay state over local IPC\n");
   }

@@ -1,213 +1,5 @@
-import { expect, test, type Page, type Request, type Route, type TestInfo } from "playwright/test";
-import { writeFileSync } from "node:fs";
+import { expect, test, type Page, type Route } from "playwright/test";
 import { CATEGORIES } from "../src/plugins/categories";
-
-const hydrationTest = test.extend({ trace: ["on", { scope: "worker" }] });
-
-async function observePluginSearch(page: Page) {
-  page.on("console", (message) => {
-    if (message.text().startsWith("plugin-search:")) console.info(message.text());
-  });
-  await page.addInitScript(() => {
-    (window as unknown as { __paseoPluginSearchTrace?: boolean }).__paseoPluginSearchTrace = true;
-    console.info(
-      "plugin-search:document-start",
-      performance.now(),
-      JSON.stringify({
-        browsePath: location.pathname === "/plugins/all",
-        hasQuery: Boolean(location.search),
-      }),
-    );
-    for (const method of ["pushState", "replaceState"] as const) {
-      const original = history[method];
-      history[method] = function (this: History, ...args: Parameters<History["pushState"]>) {
-        const result = Reflect.apply(original, this, args);
-        console.info(
-          "plugin-search:history",
-          performance.now(),
-          method,
-          JSON.stringify({
-            browsePath: location.pathname === "/plugins/all",
-            hasQuery: Boolean(location.search),
-            urlIsExpected:
-              location.pathname === "/plugins/all" && location.search === "?q=graphite",
-          }),
-        );
-        return result;
-      };
-    }
-    for (const eventName of ["beforeinput", "input", "change"]) {
-      document.addEventListener(
-        eventName,
-        (event) => {
-          const target = event.target;
-          if (target instanceof HTMLInputElement && target.name === "q") {
-            console.info(
-              "plugin-search:native",
-              performance.now(),
-              JSON.stringify({
-                event: eventName,
-                termIsGraphite: target.value === "graphite",
-                termLength: target.value.length,
-                nativeTime: event.timeStamp,
-                trusted: event.isTrusted,
-              }),
-            );
-          }
-        },
-        true,
-      );
-    }
-  });
-}
-
-function hydrationEvidence(page: Page) {
-  const started = performance.now();
-  let phase = "root";
-  let releasedAtMs: number | undefined;
-  let initialQueryReached = false;
-  let overflow = false;
-  const markers: string[] = [];
-  const pageErrors: string[] = [];
-  const requests = new Map<
-    Request,
-    {
-      id: number;
-      path: string;
-      type: string;
-      phase: string;
-      startedAtMs: number;
-      frameIsBrowse: boolean;
-      targetReferrer: boolean;
-      status?: number;
-      responseAtMs?: number;
-      heldAtMs?: number;
-      failed?: boolean;
-    }
-  >();
-  const declaredScripts = new Set<string>();
-  const bodies: Promise<null | void>[] = [];
-  const now = () => performance.now() - started;
-  page.on("console", (message) => {
-    const text = message.text();
-    if (text.startsWith("plugin-search:")) {
-      if (markers.length < 128 && text.length <= 1024) markers.push(text);
-      else overflow = true;
-    }
-  });
-  page.on("pageerror", () => pageErrors.push("pageerror"));
-  page.on("request", (request) => {
-    const url = new URL(request.url());
-    if (
-      url.origin !== "http://127.0.0.1:8187" ||
-      !(
-        request.isNavigationRequest() ||
-        (url.pathname.startsWith("/assets/") && url.pathname.endsWith(".js"))
-      )
-    )
-      return;
-    if (requests.size >= 256) {
-      overflow = true;
-      return;
-    }
-    const referer = request.headers().referer;
-    let targetReferrer = false;
-    try {
-      const source = new URL(referer);
-      targetReferrer =
-        source.origin === "http://127.0.0.1:8187" &&
-        source.pathname === "/plugins/all" &&
-        !source.search;
-    } catch {
-      /* A missing/ambiguous referrer remains unknown evidence. */
-    }
-    requests.set(request, {
-      id: requests.size + 1,
-      path: url.pathname,
-      type: request.resourceType(),
-      phase,
-      startedAtMs: now(),
-      targetReferrer,
-      frameIsBrowse: new URL(request.frame().url()).pathname === "/plugins/all",
-    });
-  });
-  page.on("requestfailed", (request) => {
-    const row = requests.get(request);
-    if (row) row.failed = true;
-  });
-  page.on("response", (response) => {
-    const row = requests.get(response.request());
-    if (!row) return;
-    row.status = response.status();
-    row.responseAtMs = now();
-    if (row.type === "document" && row.path === "/plugins/all" && row.phase === "target") {
-      bodies.push(
-        response
-          .text()
-          .then((html) => {
-            if (html.length > 2 * 1024 * 1024) {
-              overflow = true;
-              return null;
-            }
-            for (const match of html.matchAll(/(?:src|href)=["']([^"']+\.js)["']/g)) {
-              const url = new URL(match[1], response.url());
-              if (url.origin === "http://127.0.0.1:8187" && url.pathname.startsWith("/assets/")) {
-                if (declaredScripts.size < 256) declaredScripts.add(url.pathname);
-                else overflow = true;
-              }
-            }
-            return null;
-          })
-          .catch(() => {
-            pageErrors.push("document-body-unavailable");
-          }),
-      );
-    }
-  });
-  return {
-    target() {
-      phase = "target";
-    },
-    hold(request: Request) {
-      const row = requests.get(request);
-      if (row) {
-        row.heldAtMs = now();
-        row.frameIsBrowse = new URL(request.frame().url()).pathname === "/plugins/all";
-      }
-    },
-    release() {
-      releasedAtMs ??= now();
-    },
-    queryReached() {
-      initialQueryReached = true;
-      phase = "after-initial-query";
-    },
-    async attach(testInfo: TestInfo) {
-      await Promise.all(bodies);
-      const output = testInfo.outputPath("plugin-search-evidence.json");
-      writeFileSync(
-        output,
-        JSON.stringify({
-          markers,
-          pageErrors,
-          overflow,
-          requests: [...requests.values()],
-          declaredScripts: [...declaredScripts],
-          releasedAtMs,
-          initialQueryReached,
-          browserVersion: page.context().browser()?.version(),
-          projectName: testInfo.project.name,
-          associationLimit:
-            "Request/frame/phase is not a document ID; missing target document Referrer remains unknown.",
-        }),
-      );
-      await testInfo.attach("plugin-search-evidence", {
-        contentType: "application/json",
-        path: output,
-      });
-    },
-  };
-}
 
 async function openPlugins(page: Page) {
   await page.goto("/plugins");
@@ -313,37 +105,13 @@ test("keeps the directory's ranking window when searching", async ({ page }) => 
 });
 
 test("clears the search with the clear button", async ({ page }) => {
-  if (process.env.CI) await observePluginSearch(page);
   await page.goto("/plugins/all");
   const searchbox = page.getByRole("searchbox", { name: "Search plugins" });
   const clear = page.getByRole("button", { name: "Clear search" });
   await expect(clear).toHaveCount(0);
 
   await searchPlugins(page, "graphite");
-  try {
-    await expect(page).toHaveURL(/\/plugins\/all\?q=graphite$/);
-  } finally {
-    if (process.env.CI) {
-      await page
-        .evaluate(() => {
-          const input = document.querySelector<HTMLInputElement>('input[name="q"]');
-          console.info(
-            "plugin-search:snapshot",
-            performance.now(),
-            JSON.stringify({
-              urlIsExpected:
-                location.pathname === "/plugins/all" && location.search === "?q=graphite",
-              browsePath: location.pathname === "/plugins/all",
-              hasQuery: Boolean(location.search),
-              inputIsGraphite: input?.value === "graphite",
-              inputLength: input?.value.length,
-              clearPresent: Boolean(document.querySelector('[aria-label="Clear search"]')),
-            }),
-          );
-        })
-        .catch(() => console.info("plugin-search:snapshot-unavailable"));
-    }
-  }
+  await expect(page).toHaveURL(/\/plugins\/all\?q=graphite$/);
   await clear.click();
   await expect(page).toHaveURL(/\/plugins\/all$/);
   await expect(searchbox).toHaveValue("");
@@ -353,42 +121,16 @@ test("clears the search with the clear button", async ({ page }) => {
 });
 
 test("replaces history while typing a search", async ({ page }) => {
-  if (process.env.CI) await observePluginSearch(page);
   await page.goto("/");
   await page.goto("/plugins/all");
   await searchPlugins(page, "graphite");
-  try {
-    await expect(page).toHaveURL(/\/plugins\/all\?q=graphite$/);
-  } finally {
-    if (process.env.CI) {
-      await page
-        .evaluate(() => {
-          const input = document.querySelector<HTMLInputElement>('input[name="q"]');
-          console.info(
-            "plugin-search:snapshot",
-            performance.now(),
-            JSON.stringify({
-              urlIsExpected:
-                location.pathname === "/plugins/all" && location.search === "?q=graphite",
-              browsePath: location.pathname === "/plugins/all",
-              hasQuery: Boolean(location.search),
-              inputIsGraphite: input?.value === "graphite",
-              inputLength: input?.value.length,
-              clearPresent: Boolean(document.querySelector('[aria-label="Clear search"]')),
-            }),
-          );
-        })
-        .catch(() => console.info("plugin-search:snapshot-unavailable"));
-    }
-  }
+  await expect(page).toHaveURL(/\/plugins\/all\?q=graphite$/);
   await page.goBack();
   await expect(page).toHaveURL(/\/$/);
 });
 
 test.describe("early search input", () => {
-  hydrationTest("preserves search typed before hydration", async ({ page }, testInfo) => {
-    const evidence = hydrationEvidence(page);
-    if (process.env.CI) await observePluginSearch(page);
+  test("preserves search typed before hydration", async ({ page }, testInfo) => {
     const origin = new URL("/", testInfo.project.use.baseURL).origin;
     let releaseScripts!: () => void;
     const scripts = new Promise<void>((resolve) => {
@@ -401,7 +143,6 @@ test.describe("early search input", () => {
     await page.route(assets, async (route: Route) => {
       if (holdTargetScripts) {
         heldScripts++;
-        evidence.hold(route.request());
         await scripts;
       }
       await route.continue();
@@ -409,7 +150,6 @@ test.describe("early search input", () => {
     try {
       await page.goto("/");
       holdTargetScripts = true;
-      evidence.target();
       await page.goto("/plugins/all", { waitUntil: "commit" });
       const searchbox = page.getByRole("searchbox", { name: "Search plugins" });
       const clear = page.getByRole("button", { name: "Clear search" });
@@ -417,11 +157,9 @@ test.describe("early search input", () => {
       await searchPlugins(page, "graphite");
       expect(heldScripts).toBeGreaterThan(0);
       await expect(searchbox).toHaveValue("graphite");
-      evidence.release();
       releaseScripts();
       // Initial pre-hydration query assertion.
       await expect(page).toHaveURL(/\/plugins\/all\?q=graphite$/);
-      evidence.queryReached();
       await expect(
         page.getByRole("heading", { level: 1, name: /^Results for “graphite”/ }),
       ).toBeVisible();
@@ -438,7 +176,6 @@ test.describe("early search input", () => {
     } finally {
       releaseScripts();
       await page.unrouteAll({ behavior: "wait" });
-      await evidence.attach(testInfo);
     }
   });
 });

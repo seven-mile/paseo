@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsgo -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --exclude \"paseo-swarm/test/**\" && node --import tsx --test paseo-swarm/test/models.test.ts paseo-swarm/test/operations.test.ts paseo-swarm/test/pwa.test.ts paseo-swarm/test/refs.test.ts"
   },
   "dependencies": {
     "@getpaseo/plugin": "*",

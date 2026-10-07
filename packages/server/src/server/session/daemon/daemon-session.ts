@@ -13,33 +13,6 @@ import type { PersistedProjectRecord, PersistedWorkspaceRecord } from "../../wor
 import type { HubRelationshipManagement } from "../../hub/relationship-controller.js";
 import type { DaemonConfigReloadResult } from "../../daemon-config-store.js";
 
-let statusTraceSequence = 0;
-
-// Temporary Test 8 CI observation; retain the original status awaits and response.
-function observeStatusStages(): (stage: string) => void {
-  if (!process.env.CI || process.env.PASEO_CLI_STATUS_TRACE !== "1") return () => {};
-  const sequence = ++statusTraceSequence;
-  let started: number | undefined;
-  return (stage) => {
-    try {
-      const atMs = performance.now();
-      started ??= atMs;
-      console.info(
-        "[cli-status-stage] " +
-          JSON.stringify({
-            scope: "daemon",
-            sequence,
-            stage,
-            atMs,
-            elapsedMs: atMs - started,
-          }),
-      );
-    } catch {
-      // Observation failures must not change the original status response.
-    }
-  };
-}
-
 export interface DaemonRuntimeConfig {
   listen: string | null;
   worktreesRoot?: string;
@@ -199,20 +172,13 @@ export class DaemonSession {
   async handleGetStatusRequest(
     msg: Extract<SessionInboundMessage, { type: "daemon.get_status.request" }>,
   ): Promise<void> {
-    const mark = observeStatusStages();
-    mark("entry");
     try {
-      mark("pid-lock:start");
       const pidInfo = await getPidLockInfo(this.paseoHome);
-      mark("pid-lock:end");
-      mark("providers:start");
       const providers = (await this.listProviderAvailability()).map((p) => ({
         provider: p.provider,
         available: p.available,
         error: p.error ?? null,
       }));
-      mark("providers:end");
-      mark("emit:start");
       this.host.emit({
         type: "daemon.get_status.response",
         payload: {
@@ -227,11 +193,8 @@ export class DaemonSession {
           providers,
         },
       });
-      mark("emit:end");
     } catch (error) {
-      mark("exception");
       this.logger.error({ err: error }, "Failed to handle daemon status request");
-      mark("fallback-emit:start");
       this.host.emit({
         type: "daemon.get_status.response",
         payload: {
@@ -246,7 +209,6 @@ export class DaemonSession {
           providers: [],
         },
       });
-      mark("fallback-emit:end");
     }
   }
 

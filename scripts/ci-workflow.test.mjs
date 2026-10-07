@@ -117,10 +117,7 @@ test("Playwright workflow preserves failing command status and both Metro log st
   const command =
     "npm run test:e2e --workspace=@getpaseo/app -- --shard=${{ env.PLAYWRIGHT_SHARD }}";
   assert.equal(runBlock.split(command).length, 2, "substitute only the single npm invocation");
-  const observerEnvPath = runStep.match(/^          CI_METRO_OBSERVER_LOG: (.+)$/m)?.[1];
-  assert.ok(observerEnvPath, "missing actual observer step env path");
-  const observerMarker = '{"event":"ci-metro-retention-marker"}';
-  const producer = `bash -c 'printf "%s\\n" "[metro] stdout"; printf "%s\\n" "[metro] stderr" >&2; printf "%s\\n" "$CI_METRO_RETENTION_MARKER" > "$CI_METRO_OBSERVER_LOG"; exit 17'`;
+  const producer = `bash -c 'printf "%s\\n" "[metro] stdout"; printf "%s\\n" "[metro] stderr" >&2; exit 17'`;
   const script = runBlock.replace(/^          /gm, "").replace(command, producer);
   const artifactPath = playwright
     .split("      - name: Upload test artifacts\n")[1]
@@ -128,12 +125,6 @@ test("Playwright workflow preserves failing command status and both Metro log st
     .find((line) => /^\s+\$\{\{ runner\.temp \}\}\/.*\.log$/.test(line))
     ?.trim();
   assert.ok(artifactPath, "missing retained runner.temp log path");
-  const observerArtifactPath = playwright
-    .split("      - name: Upload test artifacts\n")[1]
-    ?.split("\n")
-    .find((line) => /^\s+\$\{\{ runner\.temp \}\}\/.*\.ndjson$/.test(line))
-    ?.trim();
-  assert.ok(observerArtifactPath, "missing actual retained NDJSON artifact path");
   const directory = mkdtempSync(join(tmpdir(), "paseo-ci-log-"));
   try {
     const expandRunnerPath = (value) =>
@@ -144,18 +135,11 @@ test("Playwright workflow preserves failing command status and both Metro log st
         ...process.env,
         RUNNER_TEMP: directory,
         PLAYWRIGHT_ARTIFACT: "3",
-        CI_METRO_OBSERVER_LOG: expandRunnerPath(observerEnvPath),
-        CI_METRO_RETENTION_MARKER: observerMarker,
       },
     });
     assert.ifError(result.error);
     assert.equal(result.status, 17, result.stderr);
     const log = readFileSync(expandRunnerPath(artifactPath), "utf8");
-    assert.equal(
-      readFileSync(expandRunnerPath(observerArtifactPath), "utf8"),
-      observerMarker + "\n",
-      "failing command must retain observer marker at actual uploader path",
-    );
     for (const marker of ["[metro] stdout", "[metro] stderr"]) {
       assert.ok(log.includes(marker), `missing retained ${marker}`);
       assert.ok(result.stdout.includes(marker), `missing console ${marker}`);
@@ -179,8 +163,6 @@ test("browser artifacts cover failures and cancellation in existing checks", () 
     /\$\{\{ runner\.temp \}\}\/playwright-\$\{\{ env\.PLAYWRIGHT_ARTIFACT \}\}\.log/,
   );
   assert.match(website, /packages\/website\/test-results\//);
-  assert.match(website, /\$\{\{ runner\.temp \}\}\/website-hydration\//);
-  assert.match(website, /steps\.website_checks\.outcome == 'success'/);
   for (const upload of [artifacts, website]) {
     assert.match(upload, /uses: actions\/upload-artifact@v4/);
     assert.match(upload, /if: \$\{\{ failure\(\) \|\| cancelled\(\)/);
@@ -198,9 +180,8 @@ test("browser artifacts cover failures and cancellation in existing checks", () 
   );
 });
 
-test("website observation preserves full-suite status and prevents unsafe port reuse", () => {
+test("website suite preserves command status and default server selection", () => {
   const typecheck = jobBlocks(readFileSync(ciWorkflowPath, "utf8")).get("typecheck").join("\n");
-  assert.match(typecheck, /fetch-depth: 0/);
   const step = typecheck
     .split("      - name: Verify website mockups\n")[1]
     .split("      - name:")[0];
@@ -208,28 +189,18 @@ test("website observation preserves full-suite status and prevents unsafe port r
   const script = step
     .match(/        run: \|\n((?:          .*\n)+)/)[1]
     .replace(/^          /gm, "");
-  for (const [oldStatus, candidateStatus, expected, runs] of [
-    [0, 0, 0, true],
-    [1, 0, 1, true],
-    [2, 0, 2, false],
-    [0, 17, 17, true],
-  ]) {
-    const simulated = script
-      .replace(
-        "node scripts/ci-website-hydration.mjs",
-        `bash -c 'if [[ -v WEBSITE_TEST_URL ]]; then exit 99; fi; exit ${oldStatus}'`,
-      )
-      .replace(
-        "npm run test:e2e --workspace=@getpaseo/website",
-        `bash -c 'if [[ -v WEBSITE_TEST_URL ]]; then exit 99; fi; echo candidate-ran; exit ${candidateStatus}'`,
-      );
+  for (const status of [0, 17]) {
+    const simulated = script.replace(
+      "npm run test:e2e --workspace=@getpaseo/website",
+      `bash -c 'if [[ -v WEBSITE_TEST_URL ]]; then exit 99; fi; echo candidate-ran; exit ${status}'`,
+    );
     const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", simulated], {
       encoding: "utf8",
       env: { ...process.env, WEBSITE_TEST_URL: "https://synthetic.invalid" },
     });
     assert.ifError(result.error);
-    assert.equal(result.status, expected, result.stderr);
-    assert.equal(result.stdout.includes("candidate-ran"), runs);
+    assert.equal(result.status, status, result.stderr);
+    assert.equal(result.stdout.includes("candidate-ran"), true);
   }
 });
 
@@ -244,29 +215,6 @@ test("change gating allows superseded workflow runs to cancel", () => {
   }
 });
 
-function assertWindowsOwnershipStatuses(baselineStep) {
-  const observedRun = baselineStep.match(/        run: \|\n((?:          .*\n)+)/)?.[1];
-  assert.ok(observedRun);
-  const ownershipOutput = mkdtempSync(join(tmpdir(), "paseo-ci-owned-status-"));
-  try {
-    for (const status of [0, 1, 2]) {
-      const filename = join(ownershipOutput, `status-${status}`);
-      const actual = observedRun
-        .replace(/^          /gm, "")
-        .replace("node scripts/ci-windows-git-ownership.mjs", `bash -c 'exit ${status}'`);
-      const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", actual], {
-        encoding: "utf8",
-        env: { ...process.env, GITHUB_OUTPUT: filename },
-      });
-      assert.ifError(result.error);
-      assert.equal(result.status, status === 2 ? 2 : 0, result.stderr);
-      assert.equal(readFileSync(filename, "utf8"), `status=${status}\n`);
-    }
-  } finally {
-    rmSync(ownershipOutput, { recursive: true, force: true });
-  }
-}
-
 test("focused contracts stay inside existing required checks", () => {
   const jobs = jobBlocks(readFileSync(ciWorkflowPath, "utf8"));
   const changes = jobs.get("changes")?.join("\n") ?? "";
@@ -280,43 +228,6 @@ test("focused contracts stay inside existing required checks", () => {
   assert.match(server, /npm run test --workspace=@getpaseo\/server/);
   assert.ok(!jobs.has("hub-cli-contract"));
 
-  const baselineStep =
-    server
-      .split("      - name: Observe baseline Windows Git descendant ownership\n")[1]
-      ?.split("      - name:")[0] ?? "";
-  assert.match(baselineStep, /runner\.os == 'Windows'/);
-  assert.match(
-    baselineStep,
-    /needs\.changes\.outputs\.full != 'false' \|\| needs\.changes\.outputs\.server != 'false'/,
-  );
-  assert.match(baselineStep, /id: git_ownership/);
-  assert.match(baselineStep, /shell: bash/);
-  assertWindowsOwnershipStatuses(baselineStep);
-  const finalGate =
-    server
-      .split("      - name: Retain invalid Windows ownership observation failure\n")[1]
-      ?.split("      - name:")[0] ?? "";
-  assert.match(finalGate, /!cancelled\(\)/);
-  assert.match(finalGate, /runner\.os == 'Windows'/);
-  assert.match(finalGate, /steps\.git_ownership\.outputs\.status == '1'/);
-  assert.match(finalGate, /run: exit 1/);
-  assert.ok(
-    server.indexOf("Observe baseline Windows Git descendant ownership") <
-      server.indexOf("Run server tests"),
-  );
-  const candidateStep =
-    server.split("      - name: Run server tests\n")[1]?.split("      - name:")[0] ?? "";
-  const evidenceUpload =
-    server.split("      - name: Upload Windows Git ownership evidence\n")[1] ?? "";
-  const candidateLog = candidateStep.match(/^          PASEO_GIT_OWNERSHIP_LOG: (.+)$/m)?.[1];
-  const evidenceDirectory = evidenceUpload.match(/^          path: (.+)\/$/m)?.[1];
-  assert.ok(candidateLog && evidenceDirectory);
-  assert.equal(candidateLog, `${evidenceDirectory}/new.ndjson`);
-  assert.match(
-    evidenceUpload,
-    /runner\.os == 'Windows' && \(success\(\) \|\| failure\(\) \|\| cancelled\(\)\)/,
-  );
-  assert.match(evidenceUpload, /uses: actions\/upload-artifact@v4/);
   assert.match(jobs.get("server-tests-windows")?.join("\n") ?? "", /steps: \*server_test_steps/);
 
   assert.match(desktop, /test:e2e:renderer/);
@@ -498,26 +409,7 @@ test("desktop packaging smokes main pushes and only the pull requests that touch
   for (const action of ["actions/checkout", "actions/setup-node", "actions/upload-artifact"]) {
     assert.match(source, new RegExp(`${action}@[0-9a-f]{40} # v\\d+\\.\\d+\\.\\d+`));
   }
-  const build =
-    source.split("      - name: Build Linux desktop artifacts\n")[1]?.split("      - name:")[0] ??
-    "";
   const upload = source.split("      - name: Upload packaged smoke diagnostics\n")[1] ?? "";
-  assert.match(
-    build,
-    /^          EXPO_OVERRIDE_METRO_CONFIG: \$\{\{ github\.workspace \}\}\/scripts\/ci-metro-observer\.cjs$/m,
-  );
-  const observerLog = build.match(/^          CI_METRO_OBSERVER_LOG: (.+)$/m)?.[1];
-  assert.ok(observerLog, "missing desktop export observer output path");
-  assert.match(observerLog, /^\$\{\{ runner\.temp \}\}\/[^/]+\.ndjson$/);
-  const retainedLog = upload
-    .split("\n")
-    .find((line) => /^            .*\.ndjson$/.test(line))
-    ?.trim();
-  assert.equal(
-    retainedLog,
-    observerLog,
-    "desktop export log must reach the actual artifact uploader",
-  );
   assert.match(upload, /^            \$\{\{ runner\.temp \}\}\/desktop-smoke$/m);
   assert.match(upload, /if: \$\{\{ !cancelled\(\) \}\}/);
   assert.match(upload, /if-no-files-found: ignore/);
