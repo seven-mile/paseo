@@ -742,7 +742,7 @@ export async function createPaseoToolCatalog(
         "swarm_activity_read",
         {
           description:
-            "Read one selected Activity, including its full body, decision metadata and canonical references. Use the Activity id from swarm_task_read; do not fetch entire histories to find one report.",
+            "Read one selected Activity, including its full body, decision metadata and canonical references. Use the Activity id from swarm_task_read; do not fetch entire histories to find one report. Interpret responseProfile: decision expresses a control decision, steering provides direction/context, and discussion requests explanation/exploration. A profile label alone grants no permission; honor the actual human instruction.",
           inputSchema: { activityId: z.string() },
         },
         async (input) => {
@@ -777,7 +777,7 @@ export async function createPaseoToolCatalog(
           "swarm_agent_create",
           {
             description:
-              "Create a named child through Swarm using a role from swarm_roles_read. Planners create supervisors; supervisors create workers. settings configures the child before its first turn.",
+              "Create a named child through Swarm using a role from swarm_roles_read. Planners create supervisors; supervisors create workers. The role supplies standing duties; brief supplies the assignment and expected evidence. settings configures the child before its first turn. Discover provider/model/mode options and follow project policy. A mode named auto does not establish automatic approvals. The framework maintains registration and MCP identity; do not reconstruct them manually.",
             inputSchema: {
               name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
               role: z.string().min(1),
@@ -835,7 +835,7 @@ export async function createPaseoToolCatalog(
           "swarm_task_update",
           {
             description:
-              "Update a Swarm task owned by the calling planner or supervisor, including its named workers after team creation.",
+              "Update a Swarm task owned by the calling planner or supervisor, including its named workers after team creation. Set actual workerNames before Task-scoped messaging. Supplied workerNames replaces the participant list; it is not a separate assignment or execution state.",
             inputSchema: {
               taskId: z.string(),
               status: z.string().min(1).optional(),
@@ -850,7 +850,8 @@ export async function createPaseoToolCatalog(
         registerTool(
           "swarm_activity_append",
           {
-            description: "Append a manager activity to a Swarm task.",
+            description:
+              "Append a manager activity to a Swarm task. Use Markdown links with real targets: paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, and paseo-swarm://file/<workspace-id>/<path>. Obtain the workspace ID from the roster/runtime. File paths are relative to that workspace; verify existence there and URL-encode each path segment.",
             inputSchema: {
               taskId: z.string(),
               kind: z.string().min(1),
@@ -874,7 +875,8 @@ export async function createPaseoToolCatalog(
       registerTool(
         "swarm_message_send",
         {
-          description: "Send an actionable message to a named Swarm agent.",
+          description:
+            "Send an actionable message to a named Swarm agent. Use local relationship names within your team and roster-qualified names outside it; do not guess. Include taskId when the recipient is that Task's manager or named worker and you are authorized for that Task; omit it for other coordination. Input steers an active turn without canceling its tool call. A receipt proves acceptance, not durable delivery or action. A timeout is not proof of agent failure.",
           inputSchema: {
             recipient: z.string().min(1),
             body: z.string().min(1),
