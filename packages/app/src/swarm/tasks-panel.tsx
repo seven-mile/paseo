@@ -325,16 +325,23 @@ export function SwarmTasksContent({
     [tabId, workspaceKey],
   );
   const onOpenReference = useCallback(
-    (reference: SwarmTaskReference) =>
+    (reference: SwarmTaskReference) => {
+      if (!backingTabId) return;
+      const currentLayout = useWorkspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+      const current =
+        currentLayout &&
+        collectAllTabs(currentLayout.root).find((tab) => tab.tabId === backingTabId);
+      if (!current || current.target.kind !== "swarm_tasks") return;
       openSwarmReference({
         serverId,
         workspaceId,
         reference,
         isCompact,
         host: presentation,
-        selection,
-      }),
-    [isCompact, presentation, selection, serverId, workspaceId],
+        selection: readSwarmTaskSelection(current.state),
+      });
+    },
+    [backingTabId, isCompact, presentation, serverId, workspaceId, workspaceKey],
   );
   if (!retainedState || retainedState.isClosed()) return null;
   return (
