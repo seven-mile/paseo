@@ -1,3 +1,4 @@
+import { SwarmCreationError } from "./parent-selection";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -44,7 +45,7 @@ export function SwarmNewWorkspaceScreen({
   const options = useMemo<SwarmWorkspaceOptions>(() => {
     function installationFor(targetServerId: string) {
       const installation = installations.find((plugin) => plugin.serverId === targetServerId);
-      if (!installation) throw new Error("Swarm is not installed on the selected host.");
+      if (!installation) throw new SwarmCreationError("swarm.creation.notInstalled");
       return installation;
     }
     return {
@@ -100,7 +101,7 @@ export function SwarmNewWorkspaceScreen({
       projectId={projectId}
       displayName={displayName}
       draftId={draftId}
-      title={t("newWorkspace.roleTitle", { role: roleClass })}
+      title={t("newWorkspace.roleTitle", { role: t(`swarm.roles.${roleClass}`) })}
       swarm={options}
     />
   );

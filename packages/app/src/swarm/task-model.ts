@@ -1,11 +1,12 @@
 import { z } from "zod";
+import { i18n } from "@/i18n/i18next";
 
 const responseProfileSchema = z.enum(["decision", "steering", "discussion"]);
 export type SwarmResponseProfile = z.infer<typeof responseProfileSchema>;
-export const responseProfiles: Array<{ value: SwarmResponseProfile; label: string }> = [
-  { value: "decision", label: "Decision" },
-  { value: "steering", label: "Steering" },
-  { value: "discussion", label: "Discussion" },
+export const responseProfiles: Array<{ value: SwarmResponseProfile; labelKey: string }> = [
+  { value: "decision", labelKey: "swarm.tasks.profiles.decision" },
+  { value: "steering", labelKey: "swarm.tasks.profiles.steering" },
+  { value: "discussion", labelKey: "swarm.tasks.profiles.discussion" },
 ];
 
 const referenceSchema = z.discriminatedUnion("kind", [
@@ -225,10 +226,13 @@ export function swarmTaskScopeOptions(
     return ownership.workspaceId !== null && project.has(ownership.workspaceId);
   });
   return [
-    { value: "", label: "Project" },
+    { value: "", label: i18n.t("swarm.tasks.project") },
     ...agents.map((agent) => ({
       value: agent.qualifiedName ?? agent.name,
-      label: `${agent.roleClass === "planner" ? "Planner" : "Supervisor"} · ${agent.qualifiedName ?? agent.name}`,
+      label: i18n.t(
+        agent.roleClass === "planner" ? "swarm.tasks.plannerScope" : "swarm.tasks.supervisorScope",
+        { name: agent.qualifiedName ?? agent.name },
+      ),
     })),
   ];
 }
@@ -296,7 +300,7 @@ export interface HumanActivityInput {
 export function openSwarmReply(taskId: string, initialActivities: readonly SwarmActivity[]) {
   let activities = initialActivities;
   let closed = false;
-  let submissionError: string | null = null;
+  let submissionError: (() => string) | null = null;
   const listeners = new Set<() => void>();
   let state = {
     body: "",
@@ -310,20 +314,20 @@ export function openSwarmReply(taskId: string, initialActivities: readonly Swarm
   };
   function replyError(): string | null {
     const target = activities.find((activity) => activity.id === state.replyTo);
-    if (state.replyTo && !target) return "This reply is unavailable. Cancel the reply to continue.";
+    if (state.replyTo && !target) return i18n.t("swarm.tasks.errors.replyUnavailable");
     const choice = target ? activityChoice(target) : null;
     const option = choice?.options.find((item) => item.id === state.selectedOption);
     if (
       state.selectedOption &&
       (!option || !unansweredChoices(activities).some((activity) => activity.id === state.replyTo))
     )
-      return "This choice is no longer available. Cancel the reply or select an available choice.";
+      return i18n.t("swarm.tasks.errors.choiceUnavailable");
     if (
       state.replyTo &&
       choice?.responseProfiles &&
       !choice.responseProfiles.includes(state.responseProfile)
     )
-      return "This response profile changed. Choose an available profile.";
+      return i18n.t("swarm.tasks.errors.profileChanged");
     return null;
   }
   function payload(): HumanActivityInput | null {
@@ -350,13 +354,16 @@ export function openSwarmReply(taskId: string, initialActivities: readonly Swarm
     state = next;
     state = {
       ...state,
-      error: replyError() ?? submissionError,
+      error: replyError() ?? submissionError?.() ?? null,
       canSubmit: !state.pending && payload() !== null,
     };
     for (const listener of listeners) listener();
   }
   return {
     getState: () => state,
+    refreshTranslations() {
+      publish(state);
+    },
     subscribe(listener: () => void) {
       listeners.add(listener);
       return () => {
@@ -410,7 +417,7 @@ export function openSwarmReply(taskId: string, initialActivities: readonly Swarm
       if (closed || state.pending) return false;
       const input = payload();
       if (!input) {
-        submissionError = "Write Activity or select an available choice.";
+        submissionError = () => i18n.t("swarm.tasks.errors.bodyRequired");
         publish(state);
         return false;
       }
@@ -429,7 +436,8 @@ export function openSwarmReply(taskId: string, initialActivities: readonly Swarm
         });
         return !closed;
       } catch (cause) {
-        submissionError = cause instanceof Error ? cause.message : String(cause);
+        const message = cause instanceof Error ? cause.message : String(cause);
+        submissionError = () => message;
         publish({
           ...state,
           pending: false,

@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import { getOpenAgentTabLabel } from "@getpaseo/protocol/agent-labels";
@@ -340,7 +341,7 @@ function getFallbackTabOptionLabel(
     return labels.files;
   }
   if (tab.target.kind === "swarm_tasks") {
-    return "Tasks";
+    return i18n.t("swarm.tasks.title");
   }
   if (tab.target.kind === "pull_request") {
     return labels.pullRequest;
@@ -402,7 +403,7 @@ function getFallbackTabOptionDescription(
     return tab.target.panelId;
   }
   if (tab.target.kind === "swarm_tasks") {
-    return "Tasks and activity";
+    return i18n.t("swarm.tasks.description");
   }
   return tab.target.path;
 }

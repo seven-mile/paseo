@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
+import { useTranslation } from "react-i18next";
+import { i18n } from "@/i18n/i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import Animated from "react-native-reanimated";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -142,6 +144,7 @@ function TaskSurface({
   keyboardInsetHandled = false,
   ...selection
 }: SwarmTaskSurfaceProps) {
+  useTranslation();
   const { plugin, invoke } = useSwarmRpc(serverId);
   const connection = useHostRuntimeConnectionStatus(serverId);
   const retainedActive = useRetainedPanelActive();
@@ -265,6 +268,7 @@ function TaskLoadContent({
   connecting: boolean;
   active: boolean;
 }) {
+  const { t } = useTranslation();
   if (unavailable)
     return (
       <Text style={styles.error} accessibilityRole="alert">
@@ -272,12 +276,16 @@ function TaskLoadContent({
       </Text>
     );
   if (!online && !query.data)
-    return <TaskPlaceholder message={connecting ? "Connecting to host…" : "Host is offline."} />;
+    return (
+      <TaskPlaceholder
+        message={connecting ? t("swarm.tasks.connecting") : t("swarm.tasks.offline")}
+      />
+    );
   if (query.isPending || !hydrated)
     return (
       <View style={styles.center}>
         <ThemedLoadingSpinner uniProps={spinnerMapping} />
-        <Text style={styles.meta}>Loading Tasks…</Text>
+        <Text style={styles.meta}>{t("swarm.tasks.loading")}</Text>
       </View>
     );
   if (query.isError && !query.data)
@@ -287,7 +295,7 @@ function TaskLoadContent({
           {query.error.message}
         </Text>
         <Button variant="outline" size="sm" onPress={props.onRefresh}>
-          Retry
+          {t("common.actions.retry")}
         </Button>
       </View>
     );
@@ -296,7 +304,7 @@ function TaskLoadContent({
     <>
       {!online ? (
         <Text style={styles.error} accessibilityRole="alert">
-          Host is offline.
+          {t("swarm.tasks.offline")}
         </Text>
       ) : null}
       {query.isError ? (
@@ -322,9 +330,10 @@ function taskAvailability(input: {
   projectId: string | null;
   hasProject: boolean;
 }) {
-  if (input.online && !input.installed) return "Swarm is unavailable on this host.";
-  if (input.hydrated && !input.projectId) return "Workspace is unavailable.";
-  if (input.hydrated && input.projectId && !input.hasProject) return "Project is unavailable.";
+  if (input.online && !input.installed) return i18n.t("swarm.tasks.swarmUnavailable");
+  if (input.hydrated && !input.projectId) return i18n.t("swarm.tasks.workspaceUnavailable");
+  if (input.hydrated && input.projectId && !input.hasProject)
+    return i18n.t("swarm.tasks.projectUnavailable");
   return null;
 }
 
@@ -341,10 +350,11 @@ function TaskToolbar({
   disabled: boolean;
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <View style={styles.toolbar}>
       <View style={styles.heading}>
-        <Text style={styles.title}>Tasks</Text>
+        <Text style={styles.title}>{t("swarm.tasks.title")}</Text>
         <Text style={styles.meta} numberOfLines={1}>
           {label}
         </Text>
@@ -355,21 +365,22 @@ function TaskToolbar({
         loading={refreshing}
         disabled={disabled}
         onPress={onRefresh}
-        accessibilityLabel="Refresh Tasks"
+        accessibilityLabel={t("swarm.tasks.refreshLabel")}
       >
-        Refresh
+        {t("swarm.tasks.refresh")}
       </Button>
     </View>
   );
 }
 
 function TaskPlaceholder({ message, onBack }: { message: string; onBack?: () => void }) {
+  const { t } = useTranslation();
   return (
     <View style={styles.center}>
       <Text style={styles.meta}>{message}</Text>
       {onBack ? (
         <Button variant="ghost" size="sm" onPress={onBack}>
-          All Tasks
+          {t("swarm.tasks.allTasks")}
         </Button>
       ) : null}
     </View>
@@ -395,6 +406,7 @@ function LoadedTasks({
   presentation = "main",
   defaultAgentId,
 }: LoadedTasksProps) {
+  const { t } = useTranslation();
   const initialScope = initialTaskScope(
     board,
     workspaceId,
@@ -463,19 +475,16 @@ function LoadedTasks({
   );
   const filtered = useMemo(() => filterTasks(tasks, status, search), [tasks, status, search]);
   const selected = tasks.find((task) => task.id === selectedTaskId);
-  const scopeOptions = useMemo(
-    () => swarmTaskScopeOptions(board, projectWorkspaceIds, knownWorkspaceIds),
-    [board, projectWorkspaceIds, knownWorkspaceIds],
-  );
+  const scopeOptions = swarmTaskScopeOptions(board, projectWorkspaceIds, knownWorkspaceIds);
   const statusOptions = useMemo(
     () => [
-      { value: "", label: "All statuses" },
+      { value: "", label: t("swarm.tasks.allStatuses") },
       ...swarmTaskColumns(board, tasks).map(({ status: stage }) => ({
         value: stage,
         label: stage,
       })),
     ],
-    [board, tasks],
+    [board, tasks, t],
   );
   const filterStyle = useMemo(() => [styles.filters, wide && styles.filtersWide], [wide]);
   let content: ReactNode;
@@ -497,7 +506,7 @@ function LoadedTasks({
       />
     );
   else if (selectedTaskId)
-    content = <TaskPlaceholder message="Task is unavailable in this scope." onBack={back} />;
+    content = <TaskPlaceholder message={t("swarm.tasks.unavailableInScope")} onBack={back} />;
   else if (presentation === "main" && wide)
     content = <TaskKanban tasks={filtered} board={board} status={status} onOpen={openTask} />;
   else
@@ -506,14 +515,19 @@ function LoadedTasks({
         tasks={filtered}
         board={board}
         selectedTaskId={selectedTaskId}
-        emptyMessage={tasks.length === 0 ? "No Tasks in this scope." : "No matching Tasks."}
+        emptyMessage={tasks.length === 0 ? t("swarm.tasks.emptyScope") : t("swarm.tasks.noMatches")}
         onOpen={openTask}
       />
     );
   return (
     <View style={styles.loaded}>
       <View style={filterStyle}>
-        <TaskSelect label="Scope" value={scope} options={scopeOptions} onSelect={changeScope} />
+        <TaskSelect
+          label={t("swarm.tasks.scope")}
+          value={scope}
+          options={scopeOptions}
+          onSelect={changeScope}
+        />
         {!selectedTaskId ? (
           <>
             <View style={wide ? styles.searchWide : undefined}>
@@ -521,13 +535,13 @@ function LoadedTasks({
                 initialValue={search}
                 size={compact ? "md" : "sm"}
                 onChangeText={setSearch}
-                placeholder="Find Task"
-                accessibilityLabel="Find Task"
+                placeholder={t("swarm.tasks.findTask")}
+                accessibilityLabel={t("swarm.tasks.findTask")}
                 testID="swarm-task-search"
               />
             </View>
             <TaskSelect
-              label="Task status"
+              label={t("swarm.tasks.status")}
               value={status}
               options={statusOptions}
               onSelect={setStatus}
@@ -572,10 +586,11 @@ function TaskKanban({
   status: string;
   onOpen: (id: string) => void;
 }) {
+  const { t } = useTranslation();
   const columns = swarmTaskColumns(board, tasks).filter(
     (column) => !status || column.status === status,
   );
-  if (!columns.length) return <TaskPlaceholder message="No Tasks in this scope." />;
+  if (!columns.length) return <TaskPlaceholder message={t("swarm.tasks.emptyScope")} />;
   return (
     <ScrollView
       horizontal
@@ -591,7 +606,7 @@ function TaskKanban({
           </View>
           <ScrollView contentContainerStyle={styles.columnCards} nestedScrollEnabled>
             {column.tasks.length === 0 ? (
-              <Text style={styles.meta}>No Tasks</Text>
+              <Text style={styles.meta}>{t("swarm.tasks.emptyTasks")}</Text>
             ) : (
               column.tasks.map((task) => (
                 <SurfaceCard key={task.id}>
@@ -670,6 +685,7 @@ function TaskRow({
   attention: number;
   onOpen: (id: string) => void;
 }) {
+  const { t } = useTranslation();
   const open = useCallback(() => onOpen(task.id), [onOpen, task.id]);
   const accessibilityState = useMemo(() => ({ selected }), [selected]);
   const rowStyle = useCallback(
@@ -699,7 +715,10 @@ function TaskRow({
         </Text>
       </View>
       {attention > 0 ? (
-        <StatusBadge variant="warning" label={`${attention} awaiting reply`} />
+        <StatusBadge
+          variant="warning"
+          label={t("swarm.tasks.awaitingReply", { count: attention })}
+        />
       ) : null}
     </Pressable>
   );
@@ -730,6 +749,7 @@ function TaskDetail({
   online: boolean;
   knownWorkspaceIds: readonly string[];
 }) {
+  const { t } = useTranslation();
   const activities = useMemo(
     () => board.activities.filter((activity) => activity.taskId === task.id),
     [board.activities, task.id],
@@ -738,10 +758,13 @@ function TaskDetail({
   const reply = useSyncExternalStore(model.subscribe, model.getState, model.getState);
   const editor = useRef<EditingTextInputHandle>(null);
   const [actor, setActor] = useState("");
-  const [referenceError, setReferenceError] = useState<string | null>(null);
+  const [referenceUnavailable, setReferenceUnavailable] = useState(false);
   useEffect(() => {
     model.applyActivities(activities);
   }, [activities, model]);
+  useEffect(() => {
+    model.refreshTranslations();
+  }, [model, t]);
   useEffect(() => () => model.close(), [model]);
   const visible = activities.filter((activity) => !actor || activity.actorName === actor);
   const actors = useMemo(
@@ -772,10 +795,10 @@ function TaskDetail({
       if (!/^paseo-swarm:\/\//i.test(uri)) return true;
       const reference = resolveSwarmTaskReference(uri, board, knownWorkspaceIds);
       if (!reference) {
-        setReferenceError("Reference is unavailable or invalid. Refresh Tasks and try again.");
+        setReferenceUnavailable(true);
         return false;
       }
-      setReferenceError(null);
+      setReferenceUnavailable(false);
       if (reference.kind === "task" && !reference.workspaceId) onOpenTask(reference.taskId);
       else onOpenReference?.(reference);
       return false;
@@ -804,37 +827,37 @@ function TaskDetail({
   const actorFilter = useMemo(
     () => (
       <TaskSelect
-        label="Activity actor"
+        label={t("swarm.tasks.activityActor")}
         value={actor}
         options={[
-          { value: "", label: "All actors" },
+          { value: "", label: t("swarm.tasks.allActors") },
           ...actors.map((value) => ({ value, label: value })),
         ]}
         onSelect={setActor}
       />
     ),
-    [actor, actors],
+    [actor, actors, t],
   );
   const cancelReply = useMemo(
     () =>
       reply.replyTo ? (
         <Button variant="ghost" size="xs" disabled={reply.pending} onPress={model.cancelReply}>
-          Cancel reply
+          {t("swarm.tasks.cancelReply")}
         </Button>
       ) : null,
-    [reply.replyTo, reply.pending, model],
+    [reply.replyTo, reply.pending, model, t],
   );
   return (
     <View style={styles.detail} testID="swarm-task-detail">
-      {referenceError ? (
+      {referenceUnavailable ? (
         <Text style={styles.error} accessibilityRole="alert">
-          {referenceError}
+          {t("swarm.tasks.referenceUnavailable")}
         </Text>
       ) : null}
       <ScrollView contentContainerStyle={styles.detailContent} keyboardShouldPersistTaps="handled">
         {showBack ? (
           <Button variant="ghost" size="sm" onPress={onBack}>
-            All Tasks
+            {t("swarm.tasks.allTasks")}
           </Button>
         ) : null}
         <View style={styles.rowMeta}>
@@ -844,17 +867,17 @@ function TaskDetail({
         <Text style={styles.meta}>{task.id}</Text>
         <MarkdownRenderer text={task.brief} compact onLinkPress={openLink} />
         <View style={styles.participants}>
-          <Text style={styles.meta}>Manager</Text>
+          <Text style={styles.meta}>{t("swarm.tasks.manager")}</Text>
           <PersonButton name={task.managerName} onOpen={openAgent} />
-          <Text style={styles.meta}>Created by</Text>
+          <Text style={styles.meta}>{t("swarm.tasks.createdBy")}</Text>
           <PersonButton name={task.createdBy} onOpen={openAgent} />
           {task.workerNames.map((name) => (
             <PersonButton key={name} name={name} onOpen={openAgent} />
           ))}
         </View>
-        <SettingsSection title="Activity" flush trailing={actorFilter}>
+        <SettingsSection title={t("swarm.tasks.activity")} flush trailing={actorFilter}>
           {visible.length === 0 ? (
-            <Text style={styles.meta}>No Activity yet.</Text>
+            <Text style={styles.meta}>{t("swarm.tasks.emptyActivity")}</Text>
           ) : (
             visible.map((activity) => (
               <ActivityRow
@@ -874,11 +897,15 @@ function TaskDetail({
       <View style={styles.composer}>
         {reply.notificationWarning ? (
           <Text style={styles.meta} accessibilityRole="alert">
-            Activity saved; manager notification failed: {reply.notificationWarning}
+            {t("swarm.tasks.notificationFailed", { reason: reply.notificationWarning })}
           </Text>
         ) : null}
         <Field
-          label={reply.replyTo ? `Reply to ${target?.actorName ?? reply.replyTo}` : "Add Activity"}
+          label={
+            reply.replyTo
+              ? t("swarm.tasks.replyTo", { actor: target?.actorName ?? reply.replyTo })
+              : t("swarm.tasks.addActivity")
+          }
           error={reply.error}
           testID="swarm-activity-field"
           trailing={cancelReply}
@@ -889,8 +916,8 @@ function TaskDetail({
             multiline
             onChangeText={model.setBody}
             editable={!reply.pending}
-            placeholder="Write Activity"
-            accessibilityLabel="Activity message"
+            placeholder={t("swarm.tasks.writeActivity")}
+            accessibilityLabel={t("swarm.tasks.activityMessage")}
             style={styles.editor}
             testID="swarm-activity-input"
           />
@@ -898,11 +925,11 @@ function TaskDetail({
         <View style={styles.sendRow}>
           {reply.replyTo ? (
             <TaskSelect
-              label="Response profile"
+              label={t("swarm.tasks.responseProfile")}
               value={reply.responseProfile}
-              options={responseProfiles.filter(
-                (profile) => !profiles || profiles.includes(profile.value),
-              )}
+              options={responseProfiles
+                .filter((profile) => !profiles || profiles.includes(profile.value))
+                .map((profile) => ({ value: profile.value, label: t(profile.labelKey) }))}
               onSelect={setProfile}
               disabled={reply.pending}
             />
@@ -915,7 +942,7 @@ function TaskDetail({
             onPress={send}
             testID="swarm-activity-send"
           >
-            Send Activity
+            {t("swarm.tasks.sendActivity")}
           </Button>
         </View>
       </View>
@@ -940,6 +967,7 @@ function ActivityRow({
   onOpenActor: (name: string) => void;
   onLinkPress: (uri: string) => boolean;
 }) {
+  const { t } = useTranslation();
   const choice = activityChoice(activity);
   const reply = useCallback(() => onReply(activity.id), [onReply, activity.id]);
   return (
@@ -959,14 +987,14 @@ function ActivityRow({
           size="xs"
           disabled={pending}
           onPress={reply}
-          accessibilityLabel={`Reply to ${activity.actorName} Activity`}
+          accessibilityLabel={t("swarm.tasks.replyAccessibility", { actor: activity.actorName })}
         >
-          Reply
+          {t("swarm.tasks.reply")}
         </Button>
       </View>
       <Text style={styles.meta}>
         {new Date(activity.createdAt).toLocaleString()}
-        {activity.replyTo ? ` · Reply to ${activity.replyTo}` : ""}
+        {activity.replyTo ? ` · ${t("swarm.tasks.replyToActivity", { id: activity.replyTo })}` : ""}
       </Text>
       <MarkdownRenderer text={activity.body} compact onLinkPress={onLinkPress} />
       {choice && canChoose ? (

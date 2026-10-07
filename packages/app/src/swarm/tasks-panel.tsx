@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { ListTodo } from "lucide-react-native";
 import { withUnistyles } from "react-native-unistyles";
@@ -256,9 +257,9 @@ function SwarmTasksPanel() {
 export const swarmTasksPanelRegistration = definePanel("swarm_tasks", {
   component: SwarmTasksPanel,
   presentation: {
-    label: () => "Tasks",
-    subtitle: () => "Tasks and activity",
-    tooltip: () => "Tasks and activity",
+    label: () => i18n.t("swarm.tasks.title"),
+    subtitle: () => i18n.t("swarm.tasks.description"),
+    tooltip: () => i18n.t("swarm.tasks.description"),
     icon: ThemedListTodo,
   },
 });

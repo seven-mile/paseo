@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { filterSwarmParents, resolveSwarmParent, type SwarmParentChoice } from "./parent-selection";
+import { i18n } from "@/i18n/i18next";
+import {
+  SwarmCreationError,
+  filterSwarmParents,
+  resolveSwarmParent,
+  type SwarmParentChoice,
+} from "./parent-selection";
 
 const parents: SwarmParentChoice[] = [
   {
@@ -37,6 +43,24 @@ const parents: SwarmParentChoice[] = [
 ];
 
 describe("Swarm parent selection", () => {
+  it("retains cached client error identity across language changes without classifying raw errors", async () => {
+    const previousLanguage = i18n.language;
+    try {
+      await i18n.changeLanguage("en");
+      const cached = new SwarmCreationError("swarm.creation.notInstalled");
+      const english = i18n.t(cached.translationKey);
+      const raw = new Error(english);
+      await i18n.changeLanguage("zh-CN");
+      expect(i18n.t(cached.translationKey)).not.toBe(english);
+      expect(i18n.t(cached.translationKey)).not.toBe(cached.translationKey);
+      expect(cached.translationKey).toBe("swarm.creation.notInstalled");
+      expect(raw).not.toBeInstanceOf(SwarmCreationError);
+      expect(raw.message).toBe(english);
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
+  });
+
   it("offers only planners in the selected project and host", () => {
     expect(
       filterSwarmParents(parents, "supervisor", "host", ["host:workspace-a"]).map(

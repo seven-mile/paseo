@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ListTodo, Plus, Users } from "lucide-react-native";
 import { router } from "expo-router";
@@ -67,8 +68,8 @@ const rosterSchema = z.object({
 });
 type Agent = z.infer<typeof rosterSchema>["agents"][number];
 const modes: Array<{ value: Mode; label: string; testID: string }> = [
-  { value: "classical", label: "Classical", testID: "swarm-sidebar-classical" },
-  { value: "swarm", label: "Swarm", testID: "swarm-sidebar-swarm" },
+  { value: "classical", label: "swarm.sidebar.classical", testID: "swarm-sidebar-classical" },
+  { value: "swarm", label: "swarm.sidebar.swarm", testID: "swarm-sidebar-swarm" },
 ];
 const ThemedUsers = withUnistyles(Users);
 const ThemedListTodo = withUnistyles(ListTodo);
@@ -76,6 +77,7 @@ const ThemedPlus = withUnistyles(Plus);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
 export function SwarmCreatePlannerNavRow({ onBeforeNavigate }: { onBeforeNavigate?: () => void }) {
+  const { t } = useTranslation();
   const installation = usePluginInstallations("paseo-swarm")[0];
   const selection = useActiveWorkspaceSelection();
   const shortcutKeys = useShortcutKeys(builtinSidebarNavShortcutAction("new-workspace"));
@@ -88,7 +90,7 @@ export function SwarmCreatePlannerNavRow({ onBeforeNavigate }: { onBeforeNavigat
   return (
     <SidebarHeaderRow
       icon={Plus}
-      label="Add supervisor"
+      label={t("swarm.sidebar.addSupervisor")}
       variant="compact"
       shortcutKeys={shortcutKeys}
       onPress={open}
@@ -127,6 +129,7 @@ function PlannerGroup({
   onOpenTasks: (agent: Agent, planner: Agent) => void;
   onOpenSurface: (surfaceId: string, params?: Record<string, string>) => void;
 }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(true);
   const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
   const openAgent = useCallback(
@@ -193,7 +196,7 @@ function PlannerGroup({
             <View style={styles.workspaceRow}>
               <View style={styles.workspaceRowMain}>
                 <View style={styles.supervisorStatusSlot} />
-                <Text style={styles.workspaceTitle}>No supervisors yet</Text>
+                <Text style={styles.workspaceTitle}>{t("swarm.sidebar.noSupervisors")}</Text>
               </View>
             </View>
           ) : null}
@@ -220,6 +223,7 @@ function PlannerRow({
   onOpenTasks: () => void;
   onAddSupervisor: () => void;
 }) {
+  const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
   const [pressed, setPressed] = useState(false);
   const handlePointerEnter = useCallback(() => setHovered(true), []);
@@ -277,7 +281,9 @@ function PlannerRow({
         <View style={styles.projectRowLeft}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`${expanded ? "Collapse" : "Expand"} ${planner.name}`}
+            accessibilityLabel={t(expanded ? "swarm.sidebar.collapse" : "swarm.sidebar.expand", {
+              name: planner.name,
+            })}
             onTouchStart={handleControlPressStart}
             onPointerDown={handleControlPressStart}
             onPress={handleTogglePress}
@@ -300,7 +306,7 @@ function PlannerRow({
         <View style={styles.projectTrailingActions}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Add supervisor under ${planner.name}`}
+            accessibilityLabel={t("swarm.sidebar.addSupervisorUnder", { name: planner.name })}
             onTouchStart={handleControlPressStart}
             onPointerDown={handleControlPressStart}
             onPress={handleAddSupervisor}
@@ -310,7 +316,7 @@ function PlannerRow({
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Open ${planner.name} Tasks`}
+            accessibilityLabel={t("swarm.sidebar.openTasks", { name: planner.name })}
             testID={`swarm-planner-tasks-${planner.paseoAgentId}`}
             onTouchStart={handleControlPressStart}
             onPointerDown={handleControlPressStart}
@@ -340,6 +346,7 @@ function AgentRow({
   onOpenTasks: (agent: Agent) => void;
   onAddWorker: (agent: Agent) => void;
 }) {
+  const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
   const handlePointerEnter = useCallback(() => setHovered(true), []);
   const handlePointerLeave = useCallback(() => setHovered(false), []);
@@ -379,7 +386,7 @@ function AgentRow({
       <View style={styles.projectTrailingActions}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Open ${agent.name} Tasks`}
+          accessibilityLabel={t("swarm.sidebar.openTasks", { name: agent.name })}
           testID={`swarm-agent-tasks-${agent.paseoAgentId}`}
           onPress={handleTasks}
           style={styles.projectIconActionButton}
@@ -411,17 +418,18 @@ function RosterHoverCard({
   onOpenTasks: (agent: Agent) => void;
   onAddWorker: () => void;
 }) {
+  const { t } = useTranslation();
   const isCompact = useIsCompactFormFactor();
   if (isCompact || !isWeb)
     return (
       <DropdownMenu compactMode="sheet">
         <DropdownMenuTrigger
-          accessibilityLabel={`Open ${agent.name} team`}
+          accessibilityLabel={t("swarm.sidebar.openTeam", { name: agent.name })}
           style={styles.teamTrigger}
         >
           <ThemedUsers size={14} uniProps={mutedColorMapping} />
         </DropdownMenuTrigger>
-        <DropdownMenuContent sheetTitle="Agent team">
+        <DropdownMenuContent sheetTitle={t("swarm.sidebar.agentTeam")}>
           {[agent, ...members].map((member) => (
             <RosterMenuEntry
               key={member.paseoAgentId}
@@ -430,19 +438,22 @@ function RosterHoverCard({
               onOpenTasks={onOpenTasks}
             />
           ))}
-          <DropdownMenuItem onSelect={onAddWorker}>Add worker</DropdownMenuItem>
+          <DropdownMenuItem onSelect={onAddWorker}>{t("swarm.sidebar.addWorker")}</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     );
   return (
     <HoverCard>
-      <HoverCardTrigger focusable accessibilityLabel={`Open ${agent.name} team`}>
+      <HoverCardTrigger
+        focusable
+        accessibilityLabel={t("swarm.sidebar.openTeam", { name: agent.name })}
+      >
         <View style={styles.teamTrigger}>
           <ThemedUsers size={14} uniProps={mutedColorMapping} />
         </View>
       </HoverCardTrigger>
       <HoverCardContent placement="right" role="menu" style={styles.rosterCard}>
-        <Text style={styles.rosterTitle}>Agent team</Text>
+        <Text style={styles.rosterTitle}>{t("swarm.sidebar.agentTeam")}</Text>
         <RosterEntry agent={agent} current onOpen={onOpen} onOpenTasks={onOpenTasks} />
         {members.map((member) => (
           <RosterEntry
@@ -452,15 +463,17 @@ function RosterHoverCard({
             onOpenTasks={onOpenTasks}
           />
         ))}
-        {members.length === 0 ? <Text style={styles.hint}>No workers yet</Text> : null}
+        {members.length === 0 ? (
+          <Text style={styles.hint}>{t("swarm.sidebar.noWorkers")}</Text>
+        ) : null}
         <Pressable
           accessibilityRole="menuitem"
-          accessibilityLabel={`Add worker under ${agent.name}`}
+          accessibilityLabel={t("swarm.sidebar.addWorkerUnder", { name: agent.name })}
           onPress={onAddWorker}
           style={styles.rosterAction}
         >
           <ThemedPlus size={14} uniProps={mutedColorMapping} />
-          <Text style={styles.rosterActionText}>Add worker</Text>
+          <Text style={styles.rosterActionText}>{t("swarm.sidebar.addWorker")}</Text>
         </Pressable>
       </HoverCardContent>
     </HoverCard>
@@ -478,6 +491,7 @@ function RosterEntry({
   onOpen: (agent: Agent) => void;
   onOpenTasks: (agent: Agent) => void;
 }) {
+  const { t } = useTranslation();
   const handlePress = useCallback(() => onOpen(agent), [agent, onOpen]);
   const handleTasks = useCallback(() => onOpenTasks(agent), [agent, onOpenTasks]);
   return (
@@ -486,17 +500,19 @@ function RosterEntry({
         <ThemedUsers size={14} uniProps={mutedColorMapping} />
         <View style={styles.rosterEntryText}>
           <Text style={styles.rosterName}>{agent.name}</Text>
-          <Text style={styles.rosterMeta}>{current ? "supervisor" : agent.roleClass}</Text>
+          <Text style={styles.rosterMeta}>
+            {t(`swarm.roles.${current ? "supervisor" : agent.roleClass}`)}
+          </Text>
         </View>
       </Pressable>
       <Button
         variant="ghost"
         size="xs"
         onPress={handleTasks}
-        accessibilityLabel={`Open ${agent.name} Tasks`}
+        accessibilityLabel={t("swarm.sidebar.openTasks", { name: agent.name })}
         testID={`swarm-roster-tasks-${agent.paseoAgentId}`}
       >
-        Tasks
+        {t("swarm.tasks.title")}
       </Button>
     </View>
   );
@@ -511,17 +527,21 @@ function RosterMenuEntry({
   onOpen: (agent: Agent) => void;
   onOpenTasks: (agent: Agent) => void;
 }) {
+  const { t } = useTranslation();
   const open = useCallback(() => onOpen(agent), [agent, onOpen]);
   const tasks = useCallback(() => onOpenTasks(agent), [agent, onOpenTasks]);
   return (
     <>
       <DropdownMenuItem onSelect={open}>{agent.name}</DropdownMenuItem>
-      <DropdownMenuItem onSelect={tasks}>Tasks for {agent.name}</DropdownMenuItem>
+      <DropdownMenuItem onSelect={tasks}>
+        {t("swarm.sidebar.tasksFor", { name: agent.name })}
+      </DropdownMenuItem>
     </>
   );
 }
 
 function HostRoster({ plugin }: { plugin: InstalledPlugin }) {
+  const { t } = useTranslation();
   const selection = useActiveWorkspaceSelection();
   const isCompact = useIsCompactFormFactor();
   const query = useFetchQuery(
@@ -567,12 +587,12 @@ function HostRoster({ plugin }: { plugin: InstalledPlugin }) {
     },
     [isCompact, plugin.serverId],
   );
-  if (query.isPending) return <Text style={styles.hint}>Loading agents…</Text>;
+  if (query.isPending) return <Text style={styles.hint}>{t("swarm.sidebar.loadingAgents")}</Text>;
   if (query.isError)
     return (
       <View>
         <Text style={styles.hint}>{query.error.message}</Text>
-        <RetryButton onRetry={retry}>Retry</RetryButton>
+        <RetryButton onRetry={retry}>{t("common.actions.retry")}</RetryButton>
       </View>
     );
   const agents = query.data.agents.filter((agent) => !agent.retired);
@@ -584,7 +604,7 @@ function HostRoster({ plugin }: { plugin: InstalledPlugin }) {
   return (
     <View>
       <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Planners</Text>
+        <Text style={styles.sectionTitle}>{t("swarm.sidebar.planners")}</Text>
       </View>
       {planners.map((planner) => (
         <PlannerGroup
@@ -597,7 +617,9 @@ function HostRoster({ plugin }: { plugin: InstalledPlugin }) {
           onOpenSurface={openSurface}
         />
       ))}
-      {planners.length === 0 ? <Text style={styles.hint}>No planners yet</Text> : null}
+      {planners.length === 0 ? (
+        <Text style={styles.hint}>{t("swarm.sidebar.noPlanners")}</Text>
+      ) : null}
     </View>
   );
 }
@@ -612,13 +634,20 @@ function RetryButton({ onRetry, children }: { onRetry: () => void; children: Rea
 }
 
 export function SwarmSidebar({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   const { mode, setMode } = useSwarmSidebar();
   const installations = usePluginInstallations("paseo-swarm");
   return (
     <View style={styles.container}>
       <View style={styles.picker}>
         <SegmentedControl
-          options={modes}
+          options={modes.map((option) => ({
+            value: option.value,
+            testID: option.testID,
+            label: t(
+              option.value === "classical" ? "swarm.sidebar.classical" : "swarm.sidebar.swarm",
+            ),
+          }))}
           value={mode}
           onValueChange={setMode}
           size="xs"
@@ -638,7 +667,7 @@ export function SwarmSidebar({ children }: { children: ReactNode }) {
             <HostRoster key={plugin.serverId} plugin={plugin} />
           ))}
           {installations.length === 0 ? (
-            <Text style={styles.hint}>Connect to a host with Swarm enabled.</Text>
+            <Text style={styles.hint}>{t("swarm.sidebar.connectHost")}</Text>
           ) : null}
         </ScrollView>
       )}

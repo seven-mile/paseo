@@ -1,3 +1,12 @@
+import { i18n } from "@/i18n/i18next";
+
+export class SwarmCreationError extends Error {
+  constructor(readonly translationKey: string) {
+    super(i18n.t(translationKey));
+    this.name = "SwarmCreationError";
+  }
+}
+
 export interface SwarmParentChoice {
   name: string;
   title: string;
