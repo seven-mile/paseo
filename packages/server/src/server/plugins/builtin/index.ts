@@ -13,6 +13,7 @@ export const builtinPlugins = [
   "minimax-usage-source",
   "muse-provider",
   "opencode-go-usage-source",
+  "paseo-swarm",
   "zai-usage-source",
 ] as const;
 
@@ -50,5 +51,9 @@ export class BuiltinPluginLoader {
     for (const id of this.list) {
       await start({ id, directory: path.join(this.root, id) });
     }
+  }
+
+  get(id: string): BuiltinPlugin | null {
+    return this.ids.has(id) ? { id, directory: path.join(this.root, id) } : null;
   }
 }

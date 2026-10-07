@@ -414,6 +414,23 @@ export class PluginService {
 
   async reloadPlugin(pluginId: string): Promise<PluginListItem> {
     return this.enqueue(async () => {
+      const builtin = this.builtinPlugins.get(pluginId);
+      if (builtin) {
+        if (!this.runtime.startBuiltinPlugin)
+          throw new Error("Built-in plugin loading is unavailable");
+        await this.stopPlugin(pluginId);
+        try {
+          await this.runtime.startBuiltinPlugin(builtin);
+          await this.publishProviderRegistrations(pluginId, builtin.directory);
+          this.publishUsageSources(pluginId);
+        } catch (error) {
+          await this.stopPlugin(pluginId);
+          this.notify(pluginId);
+          throw error;
+        }
+        this.notify(pluginId);
+        return { id: pluginId, path: builtin.directory, enabled: true, status: "running" };
+      }
       const source = this.requireEnabledSource(pluginId);
       if (this.configStore.get().pluginsEnabled !== true) {
         throw new Error("Plugins are globally disabled");
