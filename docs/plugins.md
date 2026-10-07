@@ -102,9 +102,15 @@ one because it resolves through the repository's `node_modules`.
 The packaged-app smoke check requires every listed built-in to start without relying on
 account credentials.
 
+Swarm’s packaged server entry inlines YAML at build time; development reloads compile
+the checkout source, while packaged reloads recompile the shipped entry. Changes to
+raw Swarm server modules require rebuilding that packaged entry before reload. The embedded
+PWA directory is content only and does not configure a runtime source.
+
 Built-ins run in process and remain active independently of `pluginsEnabled`. They are
 absent from the installed plugin list and source configuration; their client bundles
-appear in the plugin catalog. Editing one in development requires a daemon restart.
+appear in the plugin catalog. After editing one, use `paseo plugin reload <id>` to
+tear down and recompile it without restarting the daemon. A failed reload leaves it stopped.
 Directory, Git, and npm installs cannot use a built-in ID.
 
 Provider plugins use separate installation and provider IDs. `muse-provider` registers the

@@ -24,7 +24,7 @@ async function findEntry(directory, names) {
   return null;
 }
 
-test("built output compiles and starts every listed built-in", async () => {
+async function verifyBuiltins(ids) {
   assert.equal(resolveBuiltinPluginsRoot(), packagedRoot);
   const { version } = JSON.parse(
     await readFile(path.join(repoRoot, "packages/server/package.json"), "utf8"),
@@ -58,7 +58,7 @@ test("built output compiles and starts every listed built-in", async () => {
     },
   });
   try {
-    for (const id of builtinPlugins) {
+    for (const id of ids) {
       const directory = path.join(packagedRoot, id);
       assert.equal((await readPluginManifest(directory)).id, id);
       const bundles = await compilePlugin({
@@ -66,6 +66,11 @@ test("built output compiles and starts every listed built-in", async () => {
         client: await findEntry(directory, ["index.client.ts", "index.client.tsx"]),
       });
       assert.ok(bundles.serverBundle, `${id} must compile a server bundle`);
+      if (id === "paseo-swarm") {
+        const entry = await readFile(path.join(directory, "index.server.ts"), "utf8");
+        assert.ok(entry.includes("YAMLParseError"), "packaged Swarm entry must include YAML");
+        assert.doesNotMatch(bundles.serverBundle, /require\(["']yaml["']\)/);
+      }
       await runtime.startBuiltinPlugin({ id, directory });
       assert.ok(runtime.catalog().some((plugin) => plugin.id === id));
       if (id.endsWith("-usage-source")) {
@@ -80,4 +85,8 @@ test("built output compiles and starts every listed built-in", async () => {
     await runtime.stopAll();
     await rm(settingsDirectory, { recursive: true, force: true });
   }
-});
+}
+
+test("built output compiles and starts every listed built-in", () =>
+  verifyBuiltins(builtinPlugins));
+test("packaged Swarm starts with YAML inlined", () => verifyBuiltins(["paseo-swarm"]));
