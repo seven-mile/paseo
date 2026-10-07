@@ -47,6 +47,7 @@ export const LEGACY_SKILL_NAMES = [
   "paseo-epic",
   "paseo-orchestrate",
   "paseo-orchestrator",
+  "paseo-swarm",
 ] as const;
 
 type SkillFiles = Map<string, string>;

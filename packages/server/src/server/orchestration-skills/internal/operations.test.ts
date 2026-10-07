@@ -606,6 +606,50 @@ describe("installSkills / updateSkills", () => {
     ).toBe("loop-v1");
   });
 
+  it("preserves retired Swarm skill edits during maintenance until explicit uninstall", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await installSkills(sandbox.targets, ALL_SKILLS);
+    const retiredFiles = {
+      "SKILL.md": "user-edited Swarm instructions",
+      "notes/mine.md": "personal Swarm notes",
+    };
+    await writeOnDiskSkillToAllTargets(sandbox.targets, "paseo-swarm", retiredFiles);
+
+    const expectedStatus = {
+      state: "drift",
+      ops: [{ kind: "delete", name: "paseo-swarm" }],
+      available: ["paseo", "paseo-loop"],
+      installed: ["paseo", "paseo-loop", "paseo-swarm"],
+    };
+    expect(await getSkillsStatus(sandbox.targets, ALL_SKILLS)).toEqual(expectedStatus);
+
+    for (const maintain of [autoUpdateInstalledSkills, updateSkills]) {
+      expect(await maintain(sandbox.targets, ALL_SKILLS)).toEqual(expectedStatus);
+      for (const root of [
+        sandbox.targets.agentsDir,
+        sandbox.targets.claudeDir,
+        sandbox.targets.codexDir,
+      ]) {
+        for (const [relativePath, content] of Object.entries(retiredFiles)) {
+          expect(await fs.readFile(path.join(root, "paseo-swarm", relativePath), "utf8")).toBe(
+            content,
+          );
+        }
+      }
+    }
+
+    expect(await uninstallSkills(sandbox.targets, ALL_SKILLS)).toEqual({
+      state: "not-installed",
+      ops: [
+        { kind: "add", name: "paseo" },
+        { kind: "add", name: "paseo-loop" },
+      ],
+      available: ["paseo", "paseo-loop"],
+      installed: [],
+    });
+    expect(await installedIn(sandbox.targets, "paseo-swarm")).toEqual([false, false, false]);
+  });
+
   it("auto-updates drifted installed skills", async () => {
     await writeCurrentBundle(sandbox.targets.sourceDir);
     await writeOnDiskSkill(sandbox.targets.agentsDir, "paseo", {
