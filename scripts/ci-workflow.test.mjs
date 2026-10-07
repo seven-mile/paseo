@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
-import { relative as relativePath } from "node:path";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative as relativePath } from "node:path";
 import test from "node:test";
 
 const repoRoot = new URL("../", import.meta.url);
@@ -85,6 +87,10 @@ test("gated checks are statically named jobs with real job-level gating", () => 
   const trigger = workflowSource.split("jobs:", 1)[0];
 
   assert.match(trigger, /^\s+merge_group:\s*$/m);
+  assert.match(
+    jobs.get("changes")?.join("\n") ?? "",
+    /^      full: \$\{\{ github\.event_name != 'pull_request' \|\| steps\.filter\.outputs\.routing != 'false' \|\| steps\.filter\.outputs\.workspace != 'false' \|\| steps\.filter\.outputs\.ci != 'false' \}\}$/m,
+  );
   assert.doesNotMatch(workflowSource, /strategy:\s*\n\s+matrix:/);
   assert.doesNotMatch(workflowSource, /RUN_TESTS|Skip unaffected|No .* changes detected/);
 
@@ -97,6 +103,80 @@ test("gated checks are statically named jobs with real job-level gating", () => 
       assert.match(job, new RegExp(`needs\\.changes\\.outputs\\.${contract} != 'false'`));
     }
   }
+});
+
+test("Playwright workflow preserves failing command status and both Metro log streams", () => {
+  const jobs = jobBlocks(readFileSync(ciWorkflowPath, "utf8"));
+  const playwright = jobs.get("playwright-1")?.join("\n") ?? "";
+  const runStep =
+    playwright.split("      - name: Run Playwright E2E tests\n")[1]?.split("      - name:")[0] ??
+    "";
+  assert.match(runStep, /shell: bash/);
+  const runBlock = runStep.match(/        run: \|\n((?:          .*\n)+)/)?.[1];
+  assert.ok(runBlock, "missing literal Bash run block");
+  const command =
+    "npm run test:e2e --workspace=@getpaseo/app -- --shard=${{ env.PLAYWRIGHT_SHARD }}";
+  assert.equal(runBlock.split(command).length, 2, "substitute only the single npm invocation");
+  const producer = `bash -c 'printf "%s\\n" "[metro] stdout"; printf "%s\\n" "[metro] stderr" >&2; exit 17'`;
+  const script = runBlock.replace(/^          /gm, "").replace(command, producer);
+  const artifactPath = playwright
+    .split("      - name: Upload test artifacts\n")[1]
+    ?.split("\n")
+    .find((line) => /^\s+\$\{\{ runner\.temp \}\}\/.*\.log$/.test(line))
+    ?.trim();
+  assert.ok(artifactPath, "missing retained runner.temp log path");
+  const directory = mkdtempSync(join(tmpdir(), "paseo-ci-log-"));
+  try {
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", script], {
+      encoding: "utf8",
+      env: { ...process.env, RUNNER_TEMP: directory, PLAYWRIGHT_ARTIFACT: "3" },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 17, result.stderr);
+    const log = readFileSync(
+      artifactPath
+        .replace("${{ runner.temp }}", directory)
+        .replace("${{ env.PLAYWRIGHT_ARTIFACT }}", "3"),
+      "utf8",
+    );
+    for (const marker of ["[metro] stdout", "[metro] stderr"]) {
+      assert.ok(log.includes(marker), `missing retained ${marker}`);
+      assert.ok(result.stdout.includes(marker), `missing console ${marker}`);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("browser artifacts cover failures and cancellation in existing checks", () => {
+  const jobs = jobBlocks(readFileSync(ciWorkflowPath, "utf8"));
+  const playwright = jobs.get("playwright-1")?.join("\n") ?? "";
+  const artifacts = playwright.split("      - name: Upload test artifacts\n")[1] ?? "";
+  const website =
+    (jobs.get("typecheck")?.join("\n") ?? "")
+      .split("      - name: Upload website test artifacts\n")[1]
+      ?.split("      - name:")[0] ?? "";
+  assert.match(artifacts, /packages\/app\/test-results\//);
+  assert.match(
+    artifacts,
+    /\$\{\{ runner\.temp \}\}\/playwright-\$\{\{ env\.PLAYWRIGHT_ARTIFACT \}\}\.log/,
+  );
+  assert.match(website, /path: packages\/website\/test-results\//);
+  for (const upload of [artifacts, website]) {
+    assert.match(upload, /uses: actions\/upload-artifact@v4/);
+    assert.match(upload, /if: \$\{\{ failure\(\) \|\| cancelled\(\) \}\}/);
+    assert.match(upload, /retention-days: 7/);
+  }
+  for (const shard of [2, 3, 4]) {
+    assert.match(
+      jobs.get(`playwright-${shard}`)?.join("\n") ?? "",
+      /steps: \*playwright_test_steps/,
+    );
+  }
+  assert.match(
+    readFileSync(new URL("packages/website/playwright.config.ts", repoRoot), "utf8"),
+    /trace: "retain-on-failure"/,
+  );
 });
 
 test("change gating allows superseded workflow runs to cancel", () => {

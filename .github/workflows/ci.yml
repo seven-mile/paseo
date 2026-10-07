@@ -132,6 +132,15 @@ jobs:
       - name: Verify website mockups
         run: npm run test:e2e --workspace=@getpaseo/website
 
+      - name: Upload website test artifacts
+        uses: actions/upload-artifact@v4
+        if: ${{ failure() || cancelled() }}
+        with:
+          name: website-test-results
+          path: packages/website/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Verify public package contents
         run: |
           npm pack --dry-run --ignore-scripts --workspace=@getpaseo/protocol
@@ -402,7 +411,10 @@ jobs:
         run: node scripts/npm-retry.mjs install -g @anthropic-ai/claude-code @openai/codex@0.105.0 opencode-ai
 
       - name: Run Playwright E2E tests
-        run: npm run test:e2e --workspace=@getpaseo/app -- --shard=${{ env.PLAYWRIGHT_SHARD }}
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:e2e --workspace=@getpaseo/app -- --shard=${{ env.PLAYWRIGHT_SHARD }} 2>&1 | tee "${RUNNER_TEMP}/playwright-${PLAYWRIGHT_ARTIFACT}.log"
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # Weight file groups by observed duration; raw test counts overload
@@ -411,12 +423,13 @@ jobs:
 
       - name: Upload test artifacts
         uses: actions/upload-artifact@v4
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         with:
           name: playwright-results-${{ env.PLAYWRIGHT_ARTIFACT }}
           path: |
             packages/app/test-results/
             packages/app/playwright-report/
+            ${{ runner.temp }}/playwright-${{ env.PLAYWRIGHT_ARTIFACT }}.log
           retention-days: 7
 
   playwright-2:

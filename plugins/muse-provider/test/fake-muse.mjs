@@ -73,7 +73,12 @@ function receiveFrame(line) {
   while (end < rows.length && !(rows[end].dir === "out" && rows[end].msg.method)) end++;
   const messages = rows.slice(position + 1, end).filter((row) => row.dir === "in");
   if (!messages.includes(response)) messages.unshift(response);
-  if (process.env.MUSE_TEST_ACK_LAST && frame.method === "turn/start") {
+  if (process.env.MUSE_TEST_SILENT && frame.method === "turn/start") {
+    // The prompt result marks the end of this initial live notification batch.
+    for (const row of messages.filter((message) => message !== response))
+      emitFixtureMessage(row.msg, recorded, frame);
+    emitFixtureMessage(response.msg, recorded, frame);
+  } else if (process.env.MUSE_TEST_ACK_LAST && frame.method === "turn/start") {
     const terminalFirst = messages.filter((row) => row !== response);
     for (const row of terminalFirst) emitFixtureMessage(row.msg, recorded, frame);
     setTimeout(() => emitFixtureMessage(response.msg, recorded, frame), 50);

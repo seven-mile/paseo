@@ -35,14 +35,31 @@ async function logins(options: Parameters<typeof discover>[1]) {
     (account) => account.input as Parameters<typeof fetchUsage>[0],
   );
 }
-async function database(path: string) {
-  await mkdir((await import("node:path")).dirname(path), { recursive: true });
+async function database(
+  path: string,
+  mark: (stage: string, phase: "start" | "end") => void = () => {},
+) {
+  mark("importPath", "start");
+  const { dirname } = await import("node:path");
+  mark("importPath", "end");
+  mark("mkdir", "start");
+  await mkdir(dirname(path), { recursive: true });
+  mark("mkdir", "end");
+  mark("importSqlite", "start");
   const { DatabaseSync } = await import("node:sqlite");
+  mark("importSqlite", "end");
+  mark("open", "start");
   const db = new DatabaseSync(path);
+  mark("open", "end");
+  mark("create", "start");
   db.exec(
     "CREATE TABLE auth_credentials (id INTEGER PRIMARY KEY, provider TEXT, credential_type TEXT, data TEXT, disabled_cause TEXT)",
   );
+  mark("create", "end");
+  mark("prepare", "start");
   const insert = db.prepare("INSERT INTO auth_credentials VALUES (?, ?, ?, ?, ?)");
+  mark("prepare", "end");
+  mark("insert1", "start");
   insert.run(
     1,
     "openai-codex",
@@ -50,6 +67,8 @@ async function database(path: string) {
     JSON.stringify({ access: "fixture-omp", accountId: "omp-account", expires: 2000 }),
     null,
   );
+  mark("insert1", "end");
+  mark("insert2", "start");
   insert.run(
     2,
     "openai-codex",
@@ -57,6 +76,8 @@ async function database(path: string) {
     JSON.stringify({ access: "fixture-expired", expires: 500 }),
     null,
   );
+  mark("insert2", "end");
+  mark("insert3", "start");
   insert.run(
     3,
     "openai-codex",
@@ -64,6 +85,8 @@ async function database(path: string) {
     JSON.stringify({ access: "fixture-disabled", expires: 2000 }),
     "revoked",
   );
+  mark("insert3", "end");
+  mark("insert4", "start");
   insert.run(
     4,
     "openai-codex",
@@ -71,8 +94,13 @@ async function database(path: string) {
     JSON.stringify({ access: "fixture-key", expires: 2000 }),
     null,
   );
+  mark("insert4", "end");
+  mark("insert5", "start");
   insert.run(5, "openai-codex", "oauth", "invalid", null);
+  mark("insert5", "end");
+  mark("close", "start");
   db.close();
+  mark("close", "end");
 }
 
 test("Pi uses its own OAuth identity and re-reads rotated tokens without writing", async () => {
@@ -144,6 +172,27 @@ test("expired Pi tokens are unavailable without calling usage or refreshing", as
 
 for (const location of ["default", "profile", "xdg", "override", "config"]) {
   test(`OMP discovers enabled live OAuth rows in ${location} store read-only`, async () => {
+    const origin = performance.now();
+    const starts = new Map<string, number>();
+    const mark =
+      process.platform === "win32" && process.env.CI
+        ? (stage: string, phase: "start" | "end") => {
+            const now = performance.now();
+            if (phase === "start") starts.set(stage, now);
+            console.info(
+              "[omp-stage]",
+              JSON.stringify({
+                location,
+                stage,
+                phase,
+                monotonicMs: now,
+                elapsedMs: now - origin,
+                ...(phase === "end" ? { durationMs: now - starts.get(stage)! } : {}),
+              }),
+            );
+          }
+        : () => {};
+    mark("case", "start");
     let path = join(home, ".omp", "agent", "agent.db");
     let env: NodeJS.ProcessEnv = { OMP_AUTH_BROKER_URL: "https://broker.test" };
     if (location === "profile") {
@@ -163,27 +212,43 @@ for (const location of ["default", "profile", "xdg", "override", "config"]) {
       env.PI_CONFIG_DIR = "custom-config";
       path = join(home, "custom-config", "agent", "agent.db");
     }
-    await database(path);
+    mark("fixture", "start");
+    await database(path, mark);
+    mark("fixture", "end");
+    mark("readBefore", "start");
     const before = await readFile(path);
+    mark("readBefore", "end");
+    mark("discover", "start");
     const inputs = await logins(lookup(env));
+    mark("discover", "end");
     expect(inputs).toEqual([
       { route: { store: "omp", path, credentialId: 1 } },
       { route: { store: "omp", path, credentialId: 2 } },
     ]);
+    mark("accountIdentity.assert", "start");
     expect(await accountIdentity(inputs[0]!, env)).toEqual({ key: "omp-account" });
+    mark("accountIdentity.assert", "end");
+    mark("fetchUsage.assert", "start");
     expect(
       (
         await fetchUsage(
           inputs[0]!,
           async (_url, init) => {
+            mark("injectedFetch", "start");
             expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer fixture-omp");
-            return new Response("{}", { status: 401 });
+            const response = new Response("{}", { status: 401 });
+            mark("injectedFetch", "end");
+            return response;
           },
           lookup(env),
         )
       ).status,
     ).toBe("unavailable");
+    mark("fetchUsage.assert", "end");
+    mark("readAfter.assert", "start");
     expect(await readFile(path)).toEqual(before);
+    mark("readAfter.assert", "end");
+    mark("case", "end");
   });
 }
 
