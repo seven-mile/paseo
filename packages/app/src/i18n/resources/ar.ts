@@ -55,6 +55,7 @@ export const ar: TranslationResources = {
       plannerScope: "مخطط · {{name}}",
       supervisorScope: "مشرف · {{name}}",
       allStatuses: "كل الحالات",
+      selectedStatuses: "المحدد: {{count}}",
       findTask: "بحث عن مهمة",
       status: "حالة المهمة",
       unavailableInScope: "المهمة غير متاحة في هذا النطاق.",

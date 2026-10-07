@@ -186,7 +186,7 @@ export function createSidebarWorkspaceEntry(input: {
 
 const EMPTY_WORKSPACE_LABELS: string[] = [];
 
-function deriveEffectiveWorkspaceStatus(input: {
+export function deriveEffectiveWorkspaceStatus(input: {
   serverId: string;
   workspace: WorkspaceDescriptor;
   pendingCreateAttempts?: Record<string, PendingCreateAttempt>;

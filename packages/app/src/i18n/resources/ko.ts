@@ -55,6 +55,7 @@ export const ko: TranslationResources = {
       plannerScope: "플래너 · {{name}}",
       supervisorScope: "관리자 · {{name}}",
       allStatuses: "모든 상태",
+      selectedStatuses: "선택됨: {{count}}",
       findTask: "작업 찾기",
       status: "작업 상태",
       unavailableInScope: "이 범위에서 작업을 사용할 수 없습니다.",

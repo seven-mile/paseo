@@ -1,5 +1,5 @@
 import { i18n } from "@/i18n/i18next";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ListTodo } from "lucide-react-native";
 import { withUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
@@ -8,9 +8,13 @@ import { usePaneContext } from "@/panels/pane-context";
 import { definePanel } from "@/panels/panel-registry";
 import { collectAllTabs, useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { useSessionStore } from "@/stores/session-store";
-import { normalizeWorkspaceOpaqueId } from "@/utils/workspace-identity";
+import {
+  normalizeWorkspaceOpaqueId,
+  resolveWorkspaceMapKeyByIdentity,
+} from "@/utils/workspace-identity";
 import { SwarmTaskSurface } from "./task-surface";
-import type { SwarmTaskReference } from "./task-model";
+import { openSwarmTaskSurfaceState, type SwarmTaskReference } from "./task-model";
+import { buildPanelInstanceKey } from "@/panels/panel-instance-attributes";
 import {
   ensureSwarmTasksTab,
   openSwarmReference,
@@ -21,6 +25,95 @@ import {
 } from "./navigation";
 
 const ThemedListTodo = withUnistyles(ListTodo);
+
+// Tab identity remains stable when workspace chrome replaces its responsive host.
+const retainedTasks = new Map<
+  string,
+  {
+    serverId: string;
+    workspaceId: string;
+    workspaceKey: string;
+    tabId: string;
+    workspaceObserved: boolean;
+    state: ReturnType<typeof openSwarmTaskSurfaceState>;
+  }
+>();
+let stopLayoutObserver: (() => void) | undefined;
+let stopWorkspaceObserver: (() => void) | undefined;
+
+function closeRetainedTasks(key: string) {
+  retainedTasks.get(key)?.state.close();
+  retainedTasks.delete(key);
+  if (retainedTasks.size === 0) {
+    stopLayoutObserver?.();
+    stopWorkspaceObserver?.();
+    stopLayoutObserver = undefined;
+    stopWorkspaceObserver = undefined;
+  }
+}
+
+// Called only by the committed tab adapter. An abandoned render never registers state.
+function retainTasksState(serverId: string, workspaceId: string, tabId: string) {
+  const workspaceKey = `${serverId}:${workspaceId}`;
+  const initialLayout = useWorkspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+  if (!initialLayout || !collectAllTabs(initialLayout.root).some((tab) => tab.tabId === tabId))
+    return null;
+  const initialSession = useSessionStore.getState().sessions[serverId];
+  const workspaceExists = Boolean(
+    resolveWorkspaceMapKeyByIdentity({ workspaces: initialSession?.workspaces, workspaceId }),
+  );
+  if (initialSession?.hasHydratedWorkspaces && !workspaceExists) return null;
+  const key = buildPanelInstanceKey({ serverId, workspaceId, tabId });
+  let entry = retainedTasks.get(key);
+  if (!entry) {
+    entry = {
+      serverId,
+      workspaceId,
+      workspaceKey,
+      tabId,
+      workspaceObserved: workspaceExists,
+      state: openSwarmTaskSurfaceState(),
+    };
+    retainedTasks.set(key, entry);
+  }
+  if (!stopLayoutObserver) {
+    stopLayoutObserver = useWorkspaceLayoutStore.subscribe((next, before) => {
+      for (const [entryKey, retained] of retainedTasks) {
+        const oldLayout = before.layoutByWorkspace[retained.workspaceKey];
+        const layout = next.layoutByWorkspace[retained.workspaceKey];
+        if (layout === oldLayout) continue;
+        if (oldLayout && !layout) closeRetainedTasks(entryKey);
+        else if (retained.tabId && oldLayout && layout) {
+          const existed = collectAllTabs(oldLayout.root).some(
+            (tab) => tab.tabId === retained.tabId,
+          );
+          const exists = collectAllTabs(layout.root).some((tab) => tab.tabId === retained.tabId);
+          if (existed && !exists) closeRetainedTasks(entryKey);
+        }
+      }
+    });
+    stopWorkspaceObserver = useSessionStore.subscribe((next, before) => {
+      for (const [entryKey, retained] of retainedTasks) {
+        const oldSession = before.sessions[retained.serverId];
+        const session = next.sessions[retained.serverId];
+        if (!session) continue;
+        if (
+          oldSession?.workspaces === session.workspaces &&
+          oldSession.hasHydratedWorkspaces === session.hasHydratedWorkspaces
+        )
+          continue;
+        const exists = resolveWorkspaceMapKeyByIdentity({
+          workspaces: session.workspaces,
+          workspaceId: retained.workspaceId,
+        });
+        if (exists) retained.workspaceObserved = true;
+        else if (retained.workspaceObserved && session.hasHydratedWorkspaces)
+          closeRetainedTasks(entryKey);
+      }
+    });
+  }
+  return entry.state;
+}
 
 export function SwarmTasksContent({
   serverId,
@@ -49,6 +142,24 @@ export function SwarmTasksContent({
     );
   });
   const selection = useMemo(() => readSwarmTaskSelection(backingTab?.state), [backingTab?.state]);
+  const backingTabId = backingTab?.tabId;
+  const retainedKey = backingTabId
+    ? buildPanelInstanceKey({ serverId, workspaceId, tabId: backingTabId })
+    : null;
+  const [attached, setAttached] = useState<{
+    key: string;
+    state: ReturnType<typeof openSwarmTaskSurfaceState>;
+  } | null>(null);
+  const retainedState = attached?.key === retainedKey ? attached?.state : null;
+  useLayoutEffect(() => {
+    if (!backingTabId || !retainedKey) {
+      setAttached(null);
+      return;
+    }
+    const state = retainTasksState(serverId, workspaceId, backingTabId);
+    setAttached(state ? { key: retainedKey, state } : null);
+    // Component detach leaves the live backing tab's models available to the next shell.
+  }, [serverId, workspaceId, backingTabId, retainedKey]);
   const focusedSessionAgent = useSessionStore((state) => {
     const session = state.sessions[serverId];
     const focusedId = session?.focusedAgentId;
@@ -224,6 +335,7 @@ export function SwarmTasksContent({
       }),
     [isCompact, presentation, selection, serverId, workspaceId],
   );
+  if (!retainedState || retainedState.isClosed()) return null;
   return (
     <SwarmTaskSurface
       serverId={serverId}
@@ -231,6 +343,7 @@ export function SwarmTasksContent({
       {...selection}
       plannerName={inheritedScope.plannerName ?? selection.plannerName}
       agentName={inheritedScope.agentName ?? selection.agentName}
+      retainedState={retainedState}
       defaultAgentId={defaultAgentId}
       isActive={isActive}
       keyboardInsetHandled={keyboardInsetHandled}

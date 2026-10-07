@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import { i18n } from "@/i18n/i18next";
 import {
   findSwarmTaskAgent,
+  isSwarmActivitySubmitShortcut,
+  filterSwarmTasks,
   defaultSwarmTaskScope,
   openSwarmReply,
+  openSwarmTaskSurfaceState,
   resolveSwarmTaskReference,
   scopedSwarmTasks,
   swarmTaskScopeOptions,
@@ -77,7 +80,51 @@ function taskIdOf(task: SwarmTaskBoard["tasks"][number]) {
   return task.id;
 }
 
+describe("Swarm Activity submit shortcut", () => {
+  it("recognizes Ctrl/Meta Enter while leaving ordinary Enter and other chords alone", () => {
+    expect(isSwarmActivitySubmitShortcut({ key: "Enter", ctrlKey: true })).toBe(true);
+    expect(isSwarmActivitySubmitShortcut({ key: "Enter", metaKey: true })).toBe(true);
+    expect(isSwarmActivitySubmitShortcut({ key: "Enter" })).toBe(false);
+    expect(isSwarmActivitySubmitShortcut({ key: "Enter", shiftKey: true })).toBe(false);
+    expect(isSwarmActivitySubmitShortcut({ key: "Enter", ctrlKey: true, shiftKey: true })).toBe(
+      false,
+    );
+    expect(isSwarmActivitySubmitShortcut({ key: "Enter", metaKey: true, altKey: true })).toBe(
+      false,
+    );
+    expect(isSwarmActivitySubmitShortcut({ key: "a", ctrlKey: true })).toBe(false);
+  });
+  it("leaves IME composition and confirmation events untouched", () => {
+    expect(isSwarmActivitySubmitShortcut({ key: "Enter", ctrlKey: true, isComposing: true })).toBe(
+      false,
+    );
+    expect(isSwarmActivitySubmitShortcut({ key: "Enter", metaKey: true, keyCode: 229 })).toBe(
+      false,
+    );
+    expect(isSwarmActivitySubmitShortcut({ key: "Process", ctrlKey: true })).toBe(false);
+  });
+});
+
 describe("Swarm Task scope", () => {
+  it("filters multiple raw statuses as a union and combines them with task search", () => {
+    const tasks = ["development", "review", "completed"].map((status, index) => {
+      const task = board().tasks[0];
+      task.id = `task-${index}`;
+      task.title = index === 1 ? "Layout Review" : "Keyboard";
+      task.status = status;
+      return task;
+    });
+    expect(filterSwarmTasks(tasks, ["development", "review"], "").map(taskIdOf)).toEqual([
+      "task-0",
+      "task-1",
+    ]);
+    expect(filterSwarmTasks(tasks, ["development", "review"], " REVIEW ").map(taskIdOf)).toEqual([
+      "task-1",
+    ]);
+    expect(filterSwarmTasks(tasks, [], "Keyboard").map(taskIdOf)).toEqual(["task-0", "task-2"]);
+    expect(filterSwarmTasks(tasks, [], "")).toEqual(tasks);
+    expect(filterSwarmTasks(tasks, ["unknown"], "")).toEqual([]);
+  });
   it("defaults Explorer to an unambiguous live workspace planner or supervisor", () => {
     const value = board();
     expect(defaultSwarmTaskScope(value, "manager-workspace")).toBe("planner.manager");
@@ -482,5 +529,82 @@ describe("Swarm Task references", () => {
       "paseo-swarm://file/manager-workspace/C%3A/secret",
     ])
       expect(resolveSwarmTaskReference(uri, value, ["manager-workspace"])).toBeNull();
+  });
+});
+
+describe("Tasks responsive shell state", () => {
+  it("reattaches the same pending reply without replay and keeps other tabs independent", async () => {
+    const session = openSwarmTaskSurfaceState();
+    const first = session.detail("task", [activity()]);
+    first.model.replyTo("question", "yes");
+    first.model.setBody("Latest committed draft");
+    first.actor = "manager";
+    first.selection = { start: 2, end: 5 };
+    session.view = {
+      selectedTaskId: "task",
+      visitedTaskIds: ["task"],
+      scope: "planner",
+      statuses: ["development", "review"],
+      search: "task",
+    };
+    let finish = () => {};
+    const sent: HumanActivityInput[] = [];
+    const pending = first.model.submit((input) => {
+      sent.push(input);
+      return new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    });
+    const remounted = session.detail("task", [activity()]);
+    expect(remounted).toBe(first);
+    expect(remounted.model.getState()).toMatchObject({
+      pending: true,
+      body: "Latest committed draft",
+      replyTo: "question",
+      selectedOption: "yes",
+      responseProfile: "steering",
+    });
+    expect(remounted.actor).toBe("manager");
+    expect(remounted.selection).toEqual({ start: 2, end: 5 });
+    expect(session.view).toEqual({
+      selectedTaskId: "task",
+      visitedTaskIds: ["task"],
+      scope: "planner",
+      statuses: ["development", "review"],
+      search: "task",
+    });
+    expect(
+      await remounted.model.submit(async (input) => {
+        sent.push(input);
+      }),
+    ).toBe(false);
+    const otherTab = openSwarmTaskSurfaceState();
+    expect(otherTab.detail("task", []).model.getState()).toMatchObject({
+      body: "",
+      pending: false,
+    });
+    finish();
+    expect(await pending).toBe(true);
+    expect(session.detail("task", []).model.getState()).toMatchObject({
+      body: "",
+      canSubmit: false,
+    });
+    expect(sent).toHaveLength(1);
+    session.close();
+    otherTab.close();
+  });
+  it("closes retained reply models only when the owning session is removed", async () => {
+    const session = openSwarmTaskSurfaceState();
+    const detail = session.detail("task", []);
+    detail.model.setBody("Unsent");
+    session.close();
+    const sent: HumanActivityInput[] = [];
+    expect(
+      await detail.model.submit(async (input) => {
+        sent.push(input);
+      }),
+    ).toBe(false);
+    expect(sent).toEqual([]);
+    expect(() => session.detail("another-task", [])).toThrow("Tasks tab state is closed");
   });
 });

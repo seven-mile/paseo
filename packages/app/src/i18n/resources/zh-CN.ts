@@ -55,6 +55,7 @@ export const zhCN: TranslationResources = {
       plannerScope: "规划者 · {{name}}",
       supervisorScope: "主管 · {{name}}",
       allStatuses: "全部状态",
+      selectedStatuses: "已选：{{count}}",
       findTask: "查找任务",
       status: "任务状态",
       unavailableInScope: "此范围内无法访问该任务。",

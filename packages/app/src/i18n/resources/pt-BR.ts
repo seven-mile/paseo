@@ -55,6 +55,7 @@ export const ptBR: TranslationResources = {
       plannerScope: "Planejador · {{name}}",
       supervisorScope: "Supervisor · {{name}}",
       allStatuses: "Todos os estados",
+      selectedStatuses: "Selecionados: {{count}}",
       findTask: "Buscar tarefa",
       status: "Estado da tarefa",
       unavailableInScope: "A tarefa não está disponível neste escopo.",

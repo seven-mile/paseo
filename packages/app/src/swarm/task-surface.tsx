@@ -1,21 +1,24 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
-  type ReactNode,
+  type ComponentProps,
 } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
+import { ArrowLeft } from "lucide-react-native";
 import { i18n } from "@/i18n/i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import Animated from "react-native-reanimated";
 import type { UseQueryResult } from "@tanstack/react-query";
-import { useRetainedPanelActive } from "@/components/retained-panel";
+import { RetainedPanel, useRetainedPanelActive } from "@/components/retained-panel";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { isNative } from "@/constants/platform";
+import { useContainerWidthBelow } from "@/hooks/use-container-width";
 import { useKeyboardShiftStyle } from "@/keyboard/shift";
 import type { Theme } from "@/styles/theme";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
@@ -27,7 +30,11 @@ import { DropdownTrigger } from "@/components/ui/dropdown-trigger";
 import { Field, FormTextInput } from "@/components/ui/form-field";
 import { StatusBadge } from "@/components/ui/status-badge";
 import type { EditingTextInputHandle } from "@/components/ui/text-input";
-import { useIsCompactFormFactor } from "@/constants/layout";
+import {
+  SETTINGS_DESKTOP_SIDEBAR_WIDTH,
+  SETTINGS_DESKTOP_SPLIT_MIN_WIDTH,
+  useIsCompactFormFactor,
+} from "@/constants/layout";
 import { useFetchQuery } from "@/data/query";
 import { useHostRuntimeConnectionStatus } from "@/runtime/host-runtime";
 import {
@@ -40,7 +47,9 @@ import {
   activityChoice,
   defaultSwarmTaskScope,
   findSwarmTaskAgent,
-  openSwarmReply,
+  filterSwarmTasks,
+  isSwarmActivitySubmitShortcut,
+  openSwarmTaskSurfaceState,
   responseProfiles,
   resolveSwarmTaskReference,
   scopedSwarmTasks,
@@ -53,11 +62,13 @@ import {
   type SwarmTask,
   type SwarmTaskBoard,
   type SwarmTaskReference,
+  type SwarmTaskSurfaceState,
 } from "./task-model";
 
 export interface SwarmTaskSurfaceProps {
   serverId: string;
   workspaceId: string;
+  retainedState?: SwarmTaskSurfaceState;
   plannerName?: string;
   agentName?: string;
   taskId?: string;
@@ -113,28 +124,65 @@ function TaskSelectOption({
   label,
   selected,
   onSelect,
+  closeOnSelect = true,
 }: {
   value: string;
   label: string;
   selected: boolean;
   onSelect: (value: string) => void;
+  closeOnSelect?: boolean;
 }) {
   const select = useCallback(() => onSelect(value), [onSelect, value]);
   return (
-    <DropdownMenuItem selected={selected} onSelect={select}>
+    <DropdownMenuItem selected={selected} onSelect={select} closeOnSelect={closeOnSelect}>
       {label}
     </DropdownMenuItem>
   );
 }
 
-export function SwarmTaskSurface(props: SwarmTaskSurfaceProps) {
-  // Changing hosts or scope creates a new selection and composer lifetime.
+function TaskStatusFilter({
+  statuses,
+  options,
+  onToggle,
+}: {
+  statuses: readonly string[];
+  options: Array<{ value: string; label: string }>;
+  onToggle: (value: string) => void;
+}) {
+  const { t } = useTranslation();
+  const compact = useIsCompactFormFactor();
+  let label = t("swarm.tasks.allStatuses");
+  if (statuses.length === 1) label = statuses[0];
+  else if (statuses.length > 1)
+    label = t("swarm.tasks.selectedStatuses", { count: statuses.length });
   return (
-    <TaskSurface
-      key={`${props.serverId}:${props.workspaceId}:${props.plannerName ?? ""}:${props.agentName ?? ""}`}
-      {...props}
-    />
+    <DropdownMenu compactMode="sheet">
+      <DropdownTrigger
+        size={compact ? "md" : "sm"}
+        accessibilityLabel={`${t("swarm.tasks.status")}: ${statuses.length ? statuses.join(", ") : label}`}
+        testID="swarm-task-status-filter"
+      >
+        {label}
+      </DropdownTrigger>
+      <DropdownMenuContent sheetTitle={t("swarm.tasks.status")}>
+        {options.map((option) => (
+          <TaskSelectOption
+            key={option.value}
+            selected={option.value ? statuses.includes(option.value) : statuses.length === 0}
+            value={option.value}
+            label={option.label}
+            onSelect={onToggle}
+            closeOnSelect={false}
+          />
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
+}
+
+export function SwarmTaskSurface(props: SwarmTaskSurfaceProps) {
+  // Scope/reference navigation keeps per-task drafts within this host/workspace lifetime.
+  return <TaskSurface key={`${props.serverId}:${props.workspaceId}`} {...props} />;
 }
 
 function TaskSurface({
@@ -142,9 +190,13 @@ function TaskSurface({
   workspaceId,
   isActive = true,
   keyboardInsetHandled = false,
+  retainedState: providedState,
   ...selection
 }: SwarmTaskSurfaceProps) {
   useTranslation();
+  const [localState] = useState(openSwarmTaskSurfaceState);
+  const retainedState = providedState ?? localState;
+  useEffect(() => () => localState.close(), [localState]);
   const { plugin, invoke } = useSwarmRpc(serverId);
   const connection = useHostRuntimeConnectionStatus(serverId);
   const retainedActive = useRetainedPanelActive();
@@ -211,6 +263,7 @@ function TaskSurface({
           onRefresh={refresh}
         />
         <TaskLoadContent
+          retainedState={retainedState}
           query={query}
           unavailable={unavailable}
           hydrated={hydrated}
@@ -220,7 +273,6 @@ function TaskSurface({
           workspaceId={workspaceId}
           projectWorkspaceIds={projectWorkspaceIds}
           knownWorkspaceIds={knownWorkspaceIds}
-          wide={!compact && selection.presentation !== "explorer"}
           compact={compact}
           invoke={invoke}
           onRefresh={refresh}
@@ -232,11 +284,11 @@ function TaskSurface({
 }
 
 type LoadedTasksProps = {
+  retainedState: SwarmTaskSurfaceState;
   board: SwarmTaskBoard;
   workspaceId: string;
   projectWorkspaceIds: readonly string[];
   knownWorkspaceIds: readonly string[];
-  wide: boolean;
   compact: boolean;
   online: boolean;
   invoke: <T>(method: string, input: unknown) => Promise<T>;
@@ -374,25 +426,41 @@ function TaskToolbar({
 }
 
 function TaskPlaceholder({ message, onBack }: { message: string; onBack?: () => void }) {
-  const { t } = useTranslation();
   return (
-    <View style={styles.center}>
-      <Text style={styles.meta}>{message}</Text>
-      {onBack ? (
-        <Button variant="ghost" size="sm" onPress={onBack}>
-          {t("swarm.tasks.allTasks")}
-        </Button>
-      ) : null}
+    <View style={styles.detail}>
+      {onBack ? <TaskBackHeader onBack={onBack} /> : null}
+      <View style={styles.center}>
+        <Text style={styles.meta}>{message}</Text>
+      </View>
+    </View>
+  );
+}
+
+function TaskBackHeader({ onBack }: { onBack: () => void }) {
+  const { t } = useTranslation();
+  const compact = useIsCompactFormFactor();
+  return (
+    <View style={styles.backHeader}>
+      <Button
+        variant="ghost"
+        size={compact ? "md" : "sm"}
+        leftIcon={ArrowLeft}
+        onPress={onBack}
+        accessibilityLabel={`${t("common.actions.back")}, ${t("swarm.tasks.allTasks")}`}
+        testID="swarm-task-back"
+      >
+        {t("common.actions.back")}
+      </Button>
     </View>
   );
 }
 
 function LoadedTasks({
+  retainedState,
   board,
   workspaceId,
   projectWorkspaceIds,
   knownWorkspaceIds,
-  wide,
   compact,
   online,
   invoke,
@@ -415,12 +483,30 @@ function LoadedTasks({
     agentName,
     defaultAgentId,
   );
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(taskId ?? null);
-  const [scope, setScope] = useState(initialScope);
-  const [status, setStatus] = useState("");
-  const [search, setSearch] = useState("");
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(
+    taskId ?? retainedState.view.selectedTaskId,
+  );
+  // Keep visited detail roots in visit order: moving retained native roots loses editor identity.
+  const [visitedTaskIds, setVisitedTaskIds] = useState<string[]>(() => {
+    const ids = retainedState.view.visitedTaskIds;
+    return taskId && !ids.includes(taskId) ? [...ids, taskId] : ids;
+  });
+  const [scope, setScope] = useState(retainedState.view.scope ?? initialScope);
+  const [statuses, setStatuses] = useState<string[]>(retainedState.view.statuses);
+  const [search, setSearch] = useState(retainedState.view.search);
+  useLayoutEffect(() => {
+    retainedState.view = { selectedTaskId, visitedTaskIds, scope, statuses, search };
+  }, [retainedState, selectedTaskId, visitedTaskIds, scope, statuses, search]);
+  const { onLayout, isBelow } = useContainerWidthBelow(SETTINGS_DESKTOP_SPLIT_MIN_WIDTH);
+  const wide = !isBelow;
+  const split = wide && Boolean(selectedTaskId);
+  useEffect(() => {
+    // Clearing explicit scope must restore Project/default scope without remounting drafts.
+    setScope(initialScope);
+  }, [agentName, plannerName, initialScope]);
   useEffect(() => {
     setSelectedTaskId(taskId ?? null);
+    if (taskId) setVisitedTaskIds((ids) => (ids.includes(taskId) ? ids : [...ids, taskId]));
   }, [taskId]);
   useEffect(() => {
     if (
@@ -446,6 +532,7 @@ function LoadedTasks({
   ]);
   const openTask = useCallback(
     (id: string) => {
+      setVisitedTaskIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
       setSelectedTaskId(id);
       onOpenTask?.(id);
     },
@@ -459,7 +546,6 @@ function LoadedTasks({
     (value: string) => {
       setScope(value);
       setSelectedTaskId(null);
-      setStatus("");
       onScopeChange?.(taskScopeSelection(board, value));
     },
     [board, onScopeChange],
@@ -473,7 +559,17 @@ function LoadedTasks({
       }),
     [board, projectWorkspaceIds, knownWorkspaceIds, scope],
   );
-  const filtered = useMemo(() => filterTasks(tasks, status, search), [tasks, status, search]);
+  const filtered = useMemo(
+    () => filterSwarmTasks(tasks, statuses, search),
+    [tasks, statuses, search],
+  );
+  const toggleStatus = useCallback((value: string) => {
+    setStatuses((current) => {
+      if (!value) return [];
+      if (current.includes(value)) return current.filter((status) => status !== value);
+      return [...current, value];
+    });
+  }, []);
   const selected = tasks.find((task) => task.id === selectedTaskId);
   const scopeOptions = swarmTaskScopeOptions(board, projectWorkspaceIds, knownWorkspaceIds);
   const statusOptions = useMemo(
@@ -486,51 +582,40 @@ function LoadedTasks({
     ],
     [board, tasks, t],
   );
-  const filterStyle = useMemo(() => [styles.filters, wide && styles.filtersWide], [wide]);
-  let content: ReactNode;
-  if (selected)
-    content = (
-      <TaskDetail
-        key={selected.id}
-        task={selected}
-        board={board}
-        compact={compact}
-        showBack
-        onBack={back}
-        onOpenTask={openTask}
-        onOpenReference={onOpenReference}
-        invoke={invoke}
-        onRefresh={onRefresh}
-        online={online}
-        knownWorkspaceIds={knownWorkspaceIds}
-      />
-    );
-  else if (selectedTaskId)
-    content = <TaskPlaceholder message={t("swarm.tasks.unavailableInScope")} onBack={back} />;
-  else if (presentation === "main" && wide)
-    content = <TaskKanban tasks={filtered} board={board} status={status} onOpen={openTask} />;
-  else
-    content = (
-      <TaskRows
-        tasks={filtered}
-        board={board}
-        selectedTaskId={selectedTaskId}
-        emptyMessage={tasks.length === 0 ? t("swarm.tasks.emptyScope") : t("swarm.tasks.noMatches")}
-        onOpen={openTask}
-      />
-    );
+  const filterStyle = useMemo(
+    () => [styles.filters, wide && !split && styles.filtersWide],
+    [wide, split],
+  );
+  const navigatorStyle = useMemo(
+    () => [
+      styles.navigator,
+      split && styles.navigatorSplit,
+      selectedTaskId && !split && styles.hidden,
+    ],
+    [selectedTaskId, split],
+  );
+  const detailHostStyle = useMemo(
+    () => [styles.detailHost, !selectedTaskId && styles.hidden],
+    [selectedTaskId],
+  );
+  const bodyStyle = useMemo(() => [styles.taskBody, split && styles.taskBodySplit], [split]);
+  const showKanban = !selectedTaskId && presentation === "main" && wide;
   return (
-    <View style={styles.loaded}>
-      <View style={filterStyle}>
-        <TaskSelect
-          label={t("swarm.tasks.scope")}
-          value={scope}
-          options={scopeOptions}
-          onSelect={changeScope}
-        />
-        {!selectedTaskId ? (
-          <>
-            <View style={wide ? styles.searchWide : undefined}>
+    <View style={styles.loaded} onLayout={onLayout}>
+      <View style={bodyStyle}>
+        <RetainedPanel
+          active={!selectedTaskId || split}
+          style={navigatorStyle}
+          testID="swarm-task-navigator"
+        >
+          <View style={filterStyle}>
+            <TaskSelect
+              label={t("swarm.tasks.scope")}
+              value={scope}
+              options={scopeOptions}
+              onSelect={changeScope}
+            />
+            <View style={wide && !split ? styles.searchWide : undefined}>
               <FormTextInput
                 initialValue={search}
                 size={compact ? "md" : "sm"}
@@ -540,16 +625,52 @@ function LoadedTasks({
                 testID="swarm-task-search"
               />
             </View>
-            <TaskSelect
-              label={t("swarm.tasks.status")}
-              value={status}
-              options={statusOptions}
-              onSelect={setStatus}
+            <TaskStatusFilter statuses={statuses} options={statusOptions} onToggle={toggleStatus} />
+          </View>
+          <RetainedPanel active={showKanban}>
+            <TaskKanban tasks={filtered} board={board} statuses={statuses} onOpen={openTask} />
+          </RetainedPanel>
+          <RetainedPanel active={!showKanban}>
+            <TaskRows
+              tasks={filtered}
+              board={board}
+              selectedTaskId={selectedTaskId}
+              emptyMessage={
+                tasks.length === 0 ? t("swarm.tasks.emptyScope") : t("swarm.tasks.noMatches")
+              }
+              onOpen={openTask}
             />
-          </>
-        ) : null}
+          </RetainedPanel>
+        </RetainedPanel>
+        <View style={detailHostStyle} testID="swarm-task-detail-host">
+          <RetainedPanel active={Boolean(selectedTaskId && !selected)}>
+            <TaskPlaceholder message={t("swarm.tasks.unavailableInScope")} onBack={back} />
+          </RetainedPanel>
+          {visitedTaskIds.map((id) => {
+            const task = board.tasks.find((candidate) => candidate.id === id);
+            if (!task) return null;
+            const visible = selected?.id === id;
+            return (
+              <RetainedPanel key={id} active={visible}>
+                <TaskDetail
+                  retainedState={retainedState}
+                  task={task}
+                  board={board}
+                  compact={compact}
+                  showBack={!split}
+                  onBack={back}
+                  onOpenTask={openTask}
+                  onOpenReference={onOpenReference}
+                  invoke={invoke}
+                  onRefresh={onRefresh}
+                  online={online && visible}
+                  knownWorkspaceIds={knownWorkspaceIds}
+                />
+              </RetainedPanel>
+            );
+          })}
+        </View>
       </View>
-      {content}
     </View>
   );
 }
@@ -578,17 +699,17 @@ function taskScopeSelection(board: SwarmTaskBoard, value: string) {
 function TaskKanban({
   tasks,
   board,
-  status,
+  statuses,
   onOpen,
 }: {
   tasks: readonly SwarmTask[];
   board: SwarmTaskBoard;
-  status: string;
+  statuses: readonly string[];
   onOpen: (id: string) => void;
 }) {
   const { t } = useTranslation();
   const columns = swarmTaskColumns(board, tasks).filter(
-    (column) => !status || column.status === status,
+    (column) => statuses.length === 0 || statuses.includes(column.status),
   );
   if (!columns.length) return <TaskPlaceholder message={t("swarm.tasks.emptyScope")} />;
   return (
@@ -627,15 +748,6 @@ function TaskKanban({
         </View>
       ))}
     </ScrollView>
-  );
-}
-
-function filterTasks(tasks: readonly SwarmTask[], status: string, search: string) {
-  const text = search.trim().toLowerCase();
-  return tasks.filter(
-    (task) =>
-      (!status || task.status === status) &&
-      (!text || `${task.id} ${task.title} ${task.managerName}`.toLowerCase().includes(text)),
   );
 }
 
@@ -725,6 +837,7 @@ function TaskRow({
 }
 
 function TaskDetail({
+  retainedState,
   task,
   board,
   compact,
@@ -737,6 +850,7 @@ function TaskDetail({
   online,
   knownWorkspaceIds,
 }: {
+  retainedState: SwarmTaskSurfaceState;
   task: SwarmTask;
   board: SwarmTaskBoard;
   compact: boolean;
@@ -754,18 +868,63 @@ function TaskDetail({
     () => board.activities.filter((activity) => activity.taskId === task.id),
     [board.activities, task.id],
   );
-  const [model] = useState(() => openSwarmReply(task.id, activities));
+  const [detail] = useState(() => retainedState.detail(task.id, activities));
+  const model = detail.model;
   const reply = useSyncExternalStore(model.subscribe, model.getState, model.getState);
   const editor = useRef<EditingTextInputHandle>(null);
-  const [actor, setActor] = useState("");
-  const [referenceUnavailable, setReferenceUnavailable] = useState(false);
+  const [actor, setActor] = useState(detail.actor);
+  const [referenceUnavailable, setReferenceUnavailable] = useState(detail.referenceUnavailable);
+  const active = useRetainedPanelActive();
+  const initialEditorState = useRef({
+    selection: detail.selection,
+    restoreFocus: active && !reply.pending && detail.restoreFocus,
+  }).current;
+  useLayoutEffect(() => {
+    detail.actor = actor;
+    detail.referenceUnavailable = referenceUnavailable;
+  }, [detail, actor, referenceUnavailable]);
+  const rememberSelection = useCallback<
+    NonNullable<ComponentProps<typeof FormTextInput>["onSelectionChange"]>
+  >(
+    (event) => {
+      detail.selection = event.nativeEvent.selection;
+    },
+    [detail],
+  );
+  useLayoutEffect(() => {
+    const input = editor.current;
+    // Receipt may have completed since the first render fixed initialValue.
+    const text = model.getState().body;
+    const selection = initialEditorState.selection
+      ? {
+          start: Math.min(initialEditorState.selection.start, text.length),
+          end: Math.min(initialEditorState.selection.end, text.length),
+        }
+      : undefined;
+    if (selection || input?.getText() !== text) input?.replaceText(text, selection);
+    detail.restoreFocus = false;
+    let pending = model.getState().pending;
+    const unsubscribe = model.subscribe(() => {
+      const next = model.getState();
+      // A send started in the previous shell clears this shell's editing owner too.
+      if (pending && !next.pending && !next.error && next.body === "") {
+        input?.replaceText("");
+        detail.selection = null;
+      }
+      pending = next.pending;
+    });
+    return () => {
+      detail.restoreFocus = input?.isFocused() ?? false;
+      unsubscribe();
+    };
+  }, [detail, model, initialEditorState]);
   useEffect(() => {
     model.applyActivities(activities);
   }, [activities, model]);
   useEffect(() => {
     model.refreshTranslations();
   }, [model, t]);
-  useEffect(() => () => model.close(), [model]);
+
   const visible = activities.filter((activity) => !actor || activity.actorName === actor);
   const actors = useMemo(
     () => [...new Set(activities.map((activity) => activity.actorName))],
@@ -806,9 +965,10 @@ function TaskDetail({
     [board, knownWorkspaceIds, onOpenReference, onOpenTask],
   );
   const send = useCallback(async () => {
-    if (!online) return;
+    if (!online || model.getState().pending) return;
     // Read the editing owner once at submission, including the latest committed keystroke.
     model.setBody(editor.current?.getText() ?? model.getState().body);
+    if (!model.getState().canSubmit) return;
     const sent = await model.submit(async (input) =>
       swarmHumanActivityReceiptSchema.parse(await invoke("swarm.activity.append_human", input)),
     );
@@ -817,6 +977,18 @@ function TaskDetail({
       onRefresh();
     }
   }, [invoke, model, onRefresh, online]);
+  const handleActivityKeyPress = useCallback<
+    NonNullable<ComponentProps<typeof FormTextInput>["onKeyPress"]>
+  >(
+    (event) => {
+      const key = event.nativeEvent as Parameters<typeof isSwarmActivitySubmitShortcut>[0];
+      if (!isSwarmActivitySubmitShortcut(key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!key.repeat) void send();
+    },
+    [send],
+  );
   const setProfile = useCallback(
     (value: string) => {
       const profile = responseProfiles.find((candidate) => candidate.value === value);
@@ -849,17 +1021,13 @@ function TaskDetail({
   );
   return (
     <View style={styles.detail} testID="swarm-task-detail">
+      {showBack ? <TaskBackHeader onBack={onBack} /> : null}
       {referenceUnavailable ? (
         <Text style={styles.error} accessibilityRole="alert">
           {t("swarm.tasks.referenceUnavailable")}
         </Text>
       ) : null}
       <ScrollView contentContainerStyle={styles.detailContent} keyboardShouldPersistTaps="handled">
-        {showBack ? (
-          <Button variant="ghost" size="sm" onPress={onBack}>
-            {t("swarm.tasks.allTasks")}
-          </Button>
-        ) : null}
         <View style={styles.rowMeta}>
           <Text style={styles.title}>{task.title}</Text>
           <StatusBadge label={task.status} />
@@ -912,9 +1080,13 @@ function TaskDetail({
         >
           <FormTextInput
             ref={editor}
+            initialValue={reply.body}
+            autoFocus={initialEditorState.restoreFocus}
+            onSelectionChange={rememberSelection}
             size={compact ? "md" : "sm"}
             multiline
             onChangeText={model.setBody}
+            onKeyPress={handleActivityKeyPress}
             editable={!reply.pending}
             placeholder={t("swarm.tasks.writeActivity")}
             accessibilityLabel={t("swarm.tasks.activityMessage")}
@@ -1092,6 +1264,20 @@ const styles = StyleSheet.create((theme) => ({
     padding: theme.spacing[4],
   },
   loaded: { flex: 1, minHeight: 0 },
+  taskBody: { flex: 1, minHeight: 0 },
+  taskBodySplit: { flexDirection: "row" },
+  navigator: { flex: 1, minWidth: 0, minHeight: 0 },
+  navigatorSplit: {
+    flex: 0,
+    flexBasis: SETTINGS_DESKTOP_SIDEBAR_WIDTH,
+    flexShrink: 0,
+    width: SETTINGS_DESKTOP_SIDEBAR_WIDTH,
+    backgroundColor: theme.colors.surfaceSidebar,
+    borderRightWidth: 1,
+    borderRightColor: theme.colors.border,
+  },
+  detailHost: { flex: 1, minWidth: 0, minHeight: 0 },
+  hidden: { display: "none" },
   kanban: { flex: 1 },
   columns: { gap: theme.spacing[3], padding: theme.spacing[3] },
   column: { width: 260, gap: theme.spacing[2] },
@@ -1116,6 +1302,14 @@ const styles = StyleSheet.create((theme) => ({
   pressedRow: { backgroundColor: theme.colors.surface2 },
   rowMeta: { flexDirection: "row", alignItems: "center", gap: theme.spacing[2], flexWrap: "wrap" },
   detail: { flex: 1, minWidth: 0 },
+  backHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[1],
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
   detailContent: { padding: theme.spacing[4], gap: theme.spacing[2] },
   participants: {
     flexDirection: "row",
