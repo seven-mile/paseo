@@ -167,7 +167,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.publish == 'false'
     permissions:
       contents: read
-    runs-on: ubuntu-24.04
+    runs-on: macos-15-intel
     timeout-minutes: 60
     env:
       APP_VARIANT: production
@@ -215,7 +215,7 @@ jobs:
           tools="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)"
           "$tools" verify --print-certs candidate/*.apk > candidate/signature.txt
           "$(dirname "$tools")/aapt" dump badging candidate/*.apk > candidate/package.txt
-          sha256sum candidate/*.apk > candidate/SHA256SUMS
+          shasum -a 256 candidate/*.apk > candidate/SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: android-candidate-arm64-test-signed
