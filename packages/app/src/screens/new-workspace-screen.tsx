@@ -1,4 +1,3 @@
-import { i18n } from "@/i18n/i18next";
 import type {
   CreateAgentRequestOptions,
   CreateWorkspaceRequestOptions,
@@ -40,10 +39,12 @@ import { HostPicker } from "@/components/hosts/host-picker";
 import { ProjectIconView } from "@/components/project-icon-view";
 import { ProjectLeadingVisual } from "@/components/sidebar/project-leading-visual";
 import {
-  SwarmCreationError,
+  getSwarmCreationValidationKey,
+  getSwarmCreationLoadKey,
   filterSwarmParents,
   resolveSwarmParent,
   type SwarmParentChoice,
+  type SwarmCreationLoadState,
 } from "@/swarm/parent-selection";
 import { Combobox, ComboboxItem } from "@/components/ui/combobox";
 import type { ComboboxOption as ComboboxOptionType, ComboboxProps } from "@/components/ui/combobox";
@@ -229,6 +230,10 @@ export interface SwarmWorkspaceOptions {
   roleClass: "planner" | "supervisor" | "worker";
   initialParent?: string;
   initialName?: string;
+  forServer(serverId: string): SwarmWorkspaceOperations | undefined;
+}
+
+export interface SwarmWorkspaceOperations {
   loadTarget(target: SwarmWorkspaceTarget): Promise<SwarmWorkspaceTargetOptions>;
   prepareAgent: (input: {
     target: SwarmWorkspaceTarget;
@@ -240,32 +245,47 @@ export interface SwarmWorkspaceOptions {
   bindAgent: (input: { serverId: string; agentId: string; workspaceId: string }) => Promise<void>;
 }
 
-function presentSwarmCreationError(error: unknown, t: TFunction): string {
-  return error instanceof SwarmCreationError ? t(error.translationKey) : toErrorMessage(error);
-}
-
 function swarmTargetState(
   target: SwarmWorkspaceTarget | null,
+  operations: SwarmWorkspaceOperations | undefined,
   connected: boolean,
   query: UseQueryResult<SwarmWorkspaceTargetOptions, Error>,
   selectedRole: string,
+  t: TFunction,
 ) {
   const roles = query.data?.roles ?? [];
   const role = roles.some((choice) => choice.role === selectedRole)
     ? selectedRole
     : (roles[0]?.role ?? "");
-  let targetError: string | null = null;
-  if (!target) targetError = i18n.t("swarm.creation.chooseProject");
-  else if (connected && query.isError)
-    targetError =
-      query.error instanceof SwarmCreationError
-        ? i18n.t(query.error.translationKey)
-        : toErrorMessage(query.error);
-  else if (connected && query.data && roles.length === 0)
-    targetError = i18n.t("swarm.creation.noRoles");
-  const waitingForRoles = !query.data && !query.isError;
-  const targetPending = target !== null && (!connected || waitingForRoles);
-  return { roles, role, targetError, targetPending };
+  let loadState: SwarmCreationLoadState = "loaded";
+  if (!target) loadState = "missing-project";
+  else if (!operations) loadState = "not-installed";
+  else if (!connected) loadState = "pending";
+  else if (query.isError) loadState = "error";
+  else if (!query.data) loadState = "pending";
+  const rawError = loadState === "error" ? toErrorMessage(query.error) : null;
+  const targetPending = loadState === "pending";
+  const loadKey = getSwarmCreationLoadKey(loadState, roles);
+  const targetError = targetPending ? null : (rawError ?? (loadKey ? t(loadKey) : null));
+  return { roles, role, loadState, rawError, targetPending, targetError };
+}
+
+function swarmWorkspaceSubmission(
+  operations: SwarmWorkspaceOperations | undefined,
+  target: SwarmWorkspaceTarget | null,
+  loadState: SwarmCreationLoadState,
+  validationKey: string | null,
+  selection: { role: string; name: string; reportsTo: string | null },
+) {
+  if (!operations || !target || loadState !== "loaded" || validationKey) return undefined;
+  return {
+    prepareAgent: operations.prepareAgent,
+    target,
+    role: selection.role,
+    name: selection.name,
+    reportsTo: selection.reportsTo,
+    brief: "",
+  };
 }
 
 function useSwarmWorkspaceState(
@@ -273,7 +293,7 @@ function useSwarmWorkspaceState(
   project: HostProjectListItem | null,
   serverId: string,
 ) {
-  useTranslation();
+  const { t } = useTranslation();
   const connected = useHostRuntimeIsConnected(serverId);
   const [selectedRole, setRole] = useState("");
   const [parent, setParent] = useState<string | null>(options?.initialParent ?? null);
@@ -283,19 +303,22 @@ function useSwarmWorkspaceState(
     () => (placement ? { serverId, projectId: placement.projectId } : null),
     [placement, serverId],
   );
+  const operations = options?.forServer(serverId);
   const query = useFetchQuery({
     queryKey: ["swarm", "creation-target", serverId, target?.projectId, options?.roleClass],
-    queryFn: options && target ? () => options.loadTarget(target) : skipToken,
+    queryFn: operations && target ? () => operations.loadTarget(target) : skipToken,
     enabled: connected,
     dataShape: "value",
     staleTimeMs: 0,
     retry: false,
   });
-  const { roles, role, targetError, targetPending } = swarmTargetState(
+  const { roles, role, loadState, rawError, targetPending, targetError } = swarmTargetState(
     target,
+    operations,
     connected,
     query,
     selectedRole,
+    t,
   );
   const parents = useMemo(
     () =>
@@ -310,6 +333,14 @@ function useSwarmWorkspaceState(
     [options, project, query.data, serverId],
   );
   const effectiveParent = resolveSwarmParent(parents, parent);
+  const validationKey = getSwarmCreationValidationKey({
+    loadState,
+    roleClass: options?.roleClass ?? "planner",
+    roles,
+    role,
+    parents,
+    reportsTo: effectiveParent,
+  });
   const form = options
     ? {
         roleClass: options.roleClass,
@@ -323,39 +354,15 @@ function useSwarmWorkspaceState(
         onNameChange: setName,
         targetError,
         targetPending,
-        onRetry: target ? () => void query.refetch() : null,
+        onRetry: target && operations ? () => void query.refetch() : null,
       }
     : undefined;
-  const submission = options
-    ? {
-        prepareAgent: (input: Parameters<SwarmWorkspaceOptions["prepareAgent"]>[0]) => {
-          if (!target || targetError || targetPending) {
-            if (!target) throw new SwarmCreationError("swarm.creation.chooseProject");
-            if (query.error instanceof SwarmCreationError) throw query.error;
-            if (roles.length === 0 && !targetPending && !query.isError)
-              throw new SwarmCreationError("swarm.creation.noRoles");
-            if (targetError) throw new Error(targetError);
-            throw new SwarmCreationError("swarm.creation.waitRoles");
-          }
-          if (!roles.some((choice) => choice.role === input.role)) {
-            throw new SwarmCreationError("swarm.creation.chooseRole");
-          }
-          if (
-            options.roleClass !== "planner" &&
-            !parents.some((choice) => choice.name === input.reportsTo)
-          ) {
-            throw new SwarmCreationError("swarm.creation.chooseManager");
-          }
-          return options.prepareAgent({ ...input, target });
-        },
-        target,
-        role,
-        name,
-        reportsTo: effectiveParent,
-        brief: "",
-      }
-    : undefined;
-  return { form, submission, bindAgent: options?.bindAgent };
+  const submission = swarmWorkspaceSubmission(operations, target, loadState, validationKey, {
+    role,
+    name,
+    reportsTo: effectiveParent,
+  });
+  return { form, submission, validationKey, rawError, bindAgent: operations?.bindAgent };
 }
 
 interface NewWorkspaceScreenProps {
@@ -366,6 +373,19 @@ interface NewWorkspaceScreenProps {
   draftId?: string;
   title?: string;
   swarm?: SwarmWorkspaceOptions;
+}
+
+function NewWorkspaceCreationError({
+  validationKey,
+  errorMessage,
+}: {
+  validationKey: string | null;
+  errorMessage: string | null;
+}) {
+  const { t } = useTranslation();
+  const message = validationKey ? t(validationKey) : errorMessage;
+  if (!message) return null;
+  return <Text style={styles.errorText}>{message}</Text>;
 }
 
 // A terminal launch sends argv, not a message: there is nothing to attach and
@@ -1328,8 +1348,8 @@ interface CreateChatAgentInput {
     selectModel: string;
   };
   swarm?: {
-    prepareAgent: SwarmWorkspaceOptions["prepareAgent"];
-    target: SwarmWorkspaceTarget | null;
+    prepareAgent: SwarmWorkspaceOperations["prepareAgent"];
+    target: SwarmWorkspaceTarget;
     role: string;
     name: string;
     reportsTo: string | null;
@@ -1422,7 +1442,6 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
   let navigated = false;
   let outcome: SubmitOutcome = "background";
   const swarmTarget = input.swarm?.target;
-  if (input.swarm && !swarmTarget) throw new SwarmCreationError("swarm.creation.chooseProject");
   const preparedSwarmAgent =
     input.swarm && swarmTarget
       ? await input.swarm.prepareAgent({
@@ -2165,7 +2184,8 @@ export function NewWorkspaceScreen({
     draftId: draftId ?? generateDraftId(),
     worktreeSlug: createNameId(),
   }));
-  const [errorMessage, setErrorMessage] = useState<string | SwarmCreationError | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [validationKey, setValidationKey] = useState<string | null>(null);
   const [creationResult, setCreationResult] = useState<
     WorkspaceCreationResult | { workspace: null }
   >({ workspace: null });
@@ -2615,6 +2635,17 @@ export function NewWorkspaceScreen({
     async (payload: MessagePayload) => {
       try {
         setErrorMessage(null);
+        setValidationKey(null);
+        if (swarm && !isEmptyWorkspaceSubmission(payload) && !swarmState.submission) {
+          setValidationKey(swarmState.validationKey);
+          if (swarmState.rawError) {
+            setErrorMessage(swarmState.rawError);
+            toast.error(swarmState.rawError);
+          } else if (swarmState.validationKey) {
+            toast.error(t(swarmState.validationKey));
+          }
+          return;
+        }
         await composerState?.persistFormPreferences();
         await updateFormPreferences({ launchTarget });
         if (isEmptyWorkspaceSubmission(payload)) {
@@ -2666,9 +2697,9 @@ export function NewWorkspaceScreen({
           setPendingAction(null);
         }
       } catch (error) {
-        const message = presentSwarmCreationError(error, t);
+        const message = toErrorMessage(error);
         setPendingAction(null);
-        setErrorMessage(error instanceof SwarmCreationError ? error : message);
+        setErrorMessage(message);
         toast.error(message);
       }
     },
@@ -2684,7 +2715,8 @@ export function NewWorkspaceScreen({
       launchTarget,
       selectedServerId,
       supportsForgeSearch,
-      swarmState.submission,
+      swarm,
+      swarmState,
       t,
       toast,
       updateFormPreferences,
@@ -2695,6 +2727,7 @@ export function NewWorkspaceScreen({
   const handleSubmitTerminalLaunch = useCallback(async () => {
     try {
       setErrorMessage(null);
+      setValidationKey(null);
       await updateFormPreferences({ launchTarget });
       setPendingAction("terminal");
       let outcome: SubmitOutcome = "background";
@@ -2746,9 +2779,9 @@ export function NewWorkspaceScreen({
         setPendingAction(null);
       }
     } catch (error) {
-      const message = presentSwarmCreationError(error, t);
+      const message = toErrorMessage(error);
       setPendingAction(null);
-      setErrorMessage(error instanceof SwarmCreationError ? error : message);
+      setErrorMessage(message);
       toast.error(message);
     }
   }, [
@@ -2953,9 +2986,7 @@ export function NewWorkspaceScreen({
           onImportSession={importSession.open}
         >
           {composer}
-          {errorMessage ? (
-            <Text style={styles.errorText}>{presentSwarmCreationError(errorMessage, t)}</Text>
-          ) : null}
+          <NewWorkspaceCreationError validationKey={validationKey} errorMessage={errorMessage} />
         </NewWorkspaceLayout>
       </View>
       {importSession.sheet}
