@@ -314,6 +314,48 @@ jobs:
           path: ${{ env.DESKTOP_PACKAGE_PATH }}/release/${{ env.RELEASE_CHANNEL }}-linux.yml
           retention-days: 1
 
+      - name: Pack Linux daemon candidate from desktop build
+        if: env.SHOULD_PUBLISH != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p daemon-candidate daemon-archive
+          npm pack --ignore-scripts --json --pack-destination daemon-candidate \
+            --workspace=@getpaseo/highlight --workspace=@getpaseo/relay \
+            --workspace=@getpaseo/protocol --workspace=@getpaseo/client \
+            --workspace=@getpaseo/plugin --workspace=@getpaseo/server \
+            --workspace=@getpaseo/cli > daemon-candidate/packages.json
+          test "$(node -p "require('./daemon-candidate/packages.json').length")" = 7
+          git rev-parse HEAD > daemon-candidate/source-commit.txt
+          printf '%s\n' "$GITHUB_SHA" > daemon-candidate/workflow-commit.txt
+          node <<'NODE'
+          const fs = require('node:fs');
+          const packages = JSON.parse(fs.readFileSync('daemon-candidate/packages.json', 'utf8'));
+          if (packages.some(pkg => !pkg.files.some(file => file.path.startsWith('dist/')))) throw new Error('Missing compiled package files');
+          fs.writeFileSync('daemon-candidate/manifest.json', JSON.stringify({sourceCommit: fs.readFileSync('daemon-candidate/source-commit.txt', 'utf8').trim(), workflowCommit: process.env.GITHUB_SHA, webUiBundled: false, packages: packages.map(({name, version, filename, integrity}) => ({name, version, filename, integrity}))}, null, 2) + '\n');
+          NODE
+          { node --version; npm --version; uname -sm; } > daemon-candidate/tool-versions.txt
+          cat > daemon-candidate/README.md <<'README'
+          # Linux Daemon / CLI 候选
+          源码和 workflow 身份见 source-commit.txt 与 workflow-commit.txt；包版本见 packages.json。
+          解包后先 `cd daemon-candidate`，执行 `sha256sum -c SHA256SUMS`，再执行 `npm install --prefix ./paseo-candidate --no-audit --no-fund ./getpaseo-*.tgz`，七包必须一起安装。
+          使用 Node 22+ 和全新 home：`PASEO_HOME="$PWD/candidate-home" node ./paseo-candidate/node_modules/@getpaseo/cli/dist/index.js --help`。
+          实际运行前确认监听端口空闲，使用独立 home；不得覆盖或重启现有 daemon。
+          此候选未正式发布，不含 browser web UI；依赖安装需要网络。目标机安装、provider 凭据、语音和手机配对仍需验收。
+          README
+          (cd daemon-candidate && sha256sum *.tgz > SHA256SUMS)
+          tar -czf daemon-archive/paseo-daemon-linux-candidate.tar.gz daemon-candidate
+          (cd daemon-archive && sha256sum *.tar.gz > SHA256SUMS)
+
+      - name: Upload Linux daemon candidate
+        if: env.SHOULD_PUBLISH != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-linux-candidate
+          path: daemon-archive/
+          retention-days: 7
+          if-no-files-found: error
+
   publish-windows:
     needs: [create-release]
     if: ${{ always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && (github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows')) || (github.event_name == 'push' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'desktop-v') || startsWith(github.ref_name, 'desktop-windows-v')))) }}
