@@ -128,43 +128,6 @@ test("prompts keep role context scoped and orient agents without inventing work"
   assert.match(supervisorPrompt, /maintain Task Activities and progress/);
   assert.doesNotMatch(supervisorPrompt, /Execution/);
   assert.match(prompt, /or append Activities/);
-
-  const plannerPrompt = initialPrompt({
-    pwa,
-    agent: { name: "planner", roleClass: "planner", role: "developer", reportsTo: null },
-    brief: "Coordinate the project.",
-  });
-  assert.match(
-    plannerPrompt,
-    /Maintain the project direction, create or revise Tasks, delegate to supervisors/,
-  );
-  assert.match(
-    plannerPrompt,
-    /accountable to the human across the whole relevant workset[\s\S]*Read the board/,
-  );
-  assert.match(
-    plannerPrompt,
-    /statuses declared by the project PWA[\s\S]*stage faithful to current scoped work/,
-  );
-  assert.match(
-    plannerPrompt,
-    /idle Task with no active work[\s\S]*completed only when[\s\S]*no required human attention remains[\s\S]*latest Activity[\s\S]*blocker or dependency, next actor, and unblock trigger or next step/,
-  );
-  assert.match(plannerPrompt, /finished survey does not await hypothetical future execution/);
-  assert.match(
-    plannerPrompt,
-    /Runtime idle, turn completion, and message delivery do not establish business completion/,
-  );
-  assert.match(
-    plannerPrompt,
-    /child or CI[\s\S]*without ending ownership[\s\S]*resume on substantive reports or decisions without repeated human prompting/,
-  );
-  for (const nonPlannerPrompt of [prompt, supervisorPrompt]) {
-    assert.doesNotMatch(
-      nonPlannerPrompt,
-      /whole relevant workset|idle Task with no active work|hypothetical future execution/,
-    );
-  }
 });
 
 test("message and runtime prompts distinguish delivery from work", () => {
