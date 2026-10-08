@@ -1,4 +1,4 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -428,6 +428,7 @@ test("a file classified with no parent bucket yet still gets its delete emitted"
   const root = await mkdtemp(join(tmpdir(), "native-orphan-"));
   const paths = createObserverPaths(process.platform);
   const newDirectory = join(root, "newdir");
+  const filePath = join(newDirectory, "orphan.txt");
   const events: FileChange[] = [];
   const notifications = new EventEmitter();
   const observer = createFileObserver();
@@ -439,7 +440,10 @@ test("a file classified with no parent bucket yet still gets its delete emitted"
       isActive: () => active,
       isIgnored: () => false,
       isPathInside: paths.isInside,
-      queueEvent: (type, path) => events.push({ type, path }),
+      queueEvent: (type, path) => {
+        events.push({ type, path });
+        if (type === "create" && path === filePath) notifications.emit("file-created");
+      },
       fail: (error) => {
         throw error;
       },
@@ -455,24 +459,28 @@ test("a file classified with no parent bucket yet still gets its delete emitted"
   );
   try {
     await backend.start(); // Tracks the (empty) root only.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
 
     // A brand-new directory with no directory-created event processed for
     // it yet (coalesced away) has no entries bucket: entries.get(scope) is
     // undefined for a file inside it.
     await mkdir(newDirectory);
-    const filePath = join(newDirectory, "orphan.txt");
     await writeFile(filePath, "content");
+    // Await the real fs.stat callback without polling or advancing the audit clock.
+    const created = once(notifications, "file-created", { signal: AbortSignal.timeout(5_000) });
     notifications.emit("change", "rename", filePath);
+    await created;
 
     // The file must stay tracked so a later removal can still find and
     // retract the create that startClassification already queued.
-    await expect.poll(() => backend.getDiagnostics().nativeTrackedFileCount).toBe(1);
+    expect(backend.getDiagnostics().nativeTrackedFileCount).toBe(1);
     expect(events.some((event) => event.type === "create" && event.path === filePath)).toBe(true);
 
     // Remove the whole directory before any audit ever scans it. Nothing
     // will see filePath as "on disk and gone from a known listing" through
     // the normal directory-scan diff, since newdir never had one.
     await rm(newDirectory, { recursive: true, force: true });
+    await vi.advanceTimersByTimeAsync(2_000); // Run the scoped audit after removal, below full-audit timing.
 
     await expect
       .poll(() => events.some((event) => event.type === "delete" && event.path === filePath), {
@@ -481,6 +489,7 @@ test("a file classified with no parent bucket yet still gets its delete emitted"
       .toBe(true);
     expect(backend.getDiagnostics().nativeTrackedFileCount).toBe(0);
   } finally {
+    vi.useRealTimers();
     active = false;
     await backend.close();
     await observer.close();
