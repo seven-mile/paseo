@@ -777,7 +777,7 @@ export async function createPaseoToolCatalog(
           "swarm_agent_create",
           {
             description:
-              "Create a named child through Swarm using a role from swarm_roles_read. Planners create supervisors; supervisors create workers. The role supplies standing duties; brief supplies the assignment and expected evidence. settings configures the child before its first turn. Discover provider/model/mode options and follow project policy. A mode named auto does not establish automatic approvals. The framework maintains registration and MCP identity; do not reconstruct them manually.",
+              "Create a named child through Swarm using a role from swarm_roles_read. Planners create supervisors; supervisors create workers. The role supplies standing duties; brief supplies the assignment and expected evidence. settings configures the child before its first turn. Discover provider/model/mode options and follow project policy. A mode named auto does not establish automatic approvals. The framework maintains registration and MCP identity; do not reconstruct them manually. Omit workspaceId to use the caller's workspace, or create an isolated worktree workspace and pass its ID. Every current agent in that workspace must be the caller or a direct roster member; descendants and other teams are not allowed. Placement never changes the reporting relationship.",
             inputSchema: {
               name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
               role: z.string().min(1),
@@ -785,11 +785,12 @@ export async function createPaseoToolCatalog(
               settings: CreateAgentSettingsInputSchema.optional(),
               brief: z.string().min(1),
               title: z.string().optional(),
+              workspaceId: z.string().min(1).optional(),
             },
           },
           async (input) => {
             if (!callerAgentId) throw new Error("Swarm agent creation requires an agent caller");
-            const { actor, name } = await readSwarm();
+            const { name } = await readSwarm();
             const roleClass = swarmRole === "planner" ? "supervisor" : "worker";
             return swarmResult(
               await invokePlugin("paseo-swarm", "swarm.agent.create", {
@@ -800,7 +801,7 @@ export async function createPaseoToolCatalog(
                 roleClass,
                 actorPaseoAgentId: callerAgentId,
                 reportsTo: name,
-                workspaceId: roleClass === "worker" ? actor.workspaceId : null,
+                workspaceId: input.workspaceId ?? null,
               }),
             );
           },
