@@ -168,7 +168,7 @@ jobs:
     permissions:
       contents: read
     runs-on: macos-15-intel
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       APP_VARIANT: production
       ONNXRUNTIME_NODE_INSTALL: skip
@@ -182,6 +182,15 @@ jobs:
         run: |
           [[ "$CANDIDATE_REF" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$CANDIDATE_REF"
+      - name: Initialize candidate diagnostics
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/android-candidate-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/android-candidate-evidence/source-commit.txt"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/android-candidate-evidence/workflow-commit.txt"
+          printf '%s\n' "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/android-candidate-evidence/run-attempt.txt"
+          printf '%s\n' "publish=false" "checkout_ref=$CANDIDATE_REF" "tag=$SOURCE_TAG" > "$RUNNER_TEMP/android-candidate-evidence/inputs.txt"
+          shasum -a 256 package-lock.json > "$RUNNER_TEMP/android-candidate-evidence/lock-sha256.txt"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -194,15 +203,30 @@ jobs:
         with:
           packages: platform-tools
       - name: Install and prepare app dependencies
+        shell: bash
         run: |
-          node scripts/npm-retry.mjs ci
-          npm run eas-build-post-install --workspace=@getpaseo/app
-      - name: Build self-contained test-signed ARM64 APK
+          set -euo pipefail
+          node scripts/npm-retry.mjs ci 2>&1 | tee "$RUNNER_TEMP/android-candidate-evidence/npm-ci.log"
+          npm run eas-build-post-install --workspace=@getpaseo/app 2>&1 | tee "$RUNNER_TEMP/android-candidate-evidence/app-hooks.log"
+      - name: Prebuild production Android
+        id: candidate_prebuild
         working-directory: packages/app
+        shell: bash
         run: |
-          npx expo prebuild --platform android --clean --no-install
-          cd android
-          ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --max-workers=1 -Dorg.gradle.parallel=false
+          set -euo pipefail
+          date -u +%FT%TZ > "$RUNNER_TEMP/android-candidate-evidence/prebuild-start.txt"
+          npx expo prebuild --platform android --clean --no-install 2>&1 | tee "$RUNNER_TEMP/android-candidate-evidence/prebuild.log"
+          date -u +%FT%TZ > "$RUNNER_TEMP/android-candidate-evidence/prebuild-end.txt"
+      - name: Build self-contained test-signed ARM64 APK
+        id: candidate_build
+        timeout-minutes: 100
+        working-directory: packages/app/android
+        shell: bash
+        run: |
+          set -euo pipefail
+          date -u +%FT%TZ > "$RUNNER_TEMP/android-candidate-evidence/gradle-start.txt"
+          ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --max-workers=1 -Dorg.gradle.parallel=false --info --console=plain 2>&1 | tee "$RUNNER_TEMP/android-candidate-evidence/gradle.log"
+          date -u +%FT%TZ > "$RUNNER_TEMP/android-candidate-evidence/gradle-end.txt"
       - name: Record candidate identity and signature
         run: |
           mkdir -p candidate
@@ -222,3 +246,56 @@ jobs:
           path: candidate/
           retention-days: 7
           if-no-files-found: error
+      - name: Preserve existing Android diagnostics
+        if: always()
+        timeout-minutes: 3
+        shell: bash
+        env:
+          PREBUILD_OUTCOME: ${{ steps.candidate_prebuild.outcome }}
+          BUILD_OUTCOME: ${{ steps.candidate_build.outcome }}
+        run: |
+          set -euo pipefail
+          diag="$RUNNER_TEMP/android-candidate-evidence"
+          mkdir -p "$diag/generated"
+          printf '%s\n' "prebuild=$PREBUILD_OUTCOME" "build=$BUILD_OUTCOME" > "$diag/step-outcomes.txt"
+          date -u +%FT%TZ > "$diag/collect-time.txt"
+          { node --version; npm --version; java -version; } > "$diag/tool-versions.txt" 2>&1 || true
+          printf '%s\n' "ANDROID_HOME=${ANDROID_HOME:-}" "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}" > "$diag/sdk-paths.txt"
+          if compiler="$(cd packages/app && node -p "require('node:path').join(require('node:path').dirname(require.resolve('react-native/package.json')), 'sdks/hermesc/osx-bin/hermesc')")" && [ -f "$compiler" ]; then
+            printf '%s\n' "$compiler" > "$diag/resolved-hermes-path.txt"
+            "$compiler" -version > "$diag/hermes-version.txt" 2>&1 || true
+            shasum -a 256 "$compiler" > "$diag/hermes-binary-SHA256SUMS"
+          fi
+          if [ -f packages/app/android/app/build.gradle ]; then
+            cp packages/app/android/app/build.gradle "$diag/generated/app-build.gradle"
+          fi
+          if [ -f packages/app/android/gradle/wrapper/gradle-wrapper.properties ]; then
+            cp packages/app/android/gradle/wrapper/gradle-wrapper.properties "$diag/generated/gradle-wrapper.properties"
+          fi
+          if [ -d packages/app/android/app/build ]; then
+            find packages/app/android/app/build -type f \( -name 'index.android.bundle' -o -name '*.hbc' -o -name 'index.android.bundle*.map' \) -print0 |
+              while IFS= read -r -d '' file; do
+                relative="${file#packages/app/android/app/build/}"
+                mkdir -p "$diag/generated/$(dirname "$relative")"
+                if cp "$file" "$diag/generated/$relative"; then
+                  (cd "$diag" && shasum -a 256 "generated/$relative") >> "$diag/generated-SHA256SUMS"
+                  (cd "$diag" && stat -f '%z %N' "generated/$relative") >> "$diag/generated-bytes.txt"
+                else
+                  rm -f "$diag/generated/$relative"
+                  printf '%s\n' "$relative" >> "$diag/copy-failures.txt"
+                fi
+              done
+          fi
+          if [ -d candidate ]; then
+            find candidate -type f ! -name '*.apk' -exec cp {} "$diag/" \;
+          fi
+          printf '%s\n' 'Generated files are snapshots: index.android.bundle can be JS or renamed HBC; incomplete HBC is not a valid APK; missing compiler-return/input hash remains unknown.' > "$diag/limitations.txt"
+      - name: Upload existing Android diagnostics
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-candidate-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-candidate-evidence/
+          retention-days: 7
+          if-no-files-found: warn
