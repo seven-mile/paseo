@@ -55,6 +55,7 @@ export const fr: TranslationResources = {
       plannerScope: "Planificateur · {{name}}",
       supervisorScope: "Superviseur · {{name}}",
       allStatuses: "Tous les états",
+      selectedStatuses: "Sélectionnés : {{count}}",
       findTask: "Rechercher une tâche",
       status: "État de la tâche",
       unavailableInScope: "La tâche est indisponible dans ce périmètre.",

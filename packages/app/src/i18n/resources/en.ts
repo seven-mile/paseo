@@ -52,6 +52,7 @@ export const en = {
       plannerScope: "Planner · {{name}}",
       supervisorScope: "Supervisor · {{name}}",
       allStatuses: "All statuses",
+      selectedStatuses: "Selected: {{count}}",
       findTask: "Find Task",
       status: "Task status",
       unavailableInScope: "Task is unavailable in this scope.",

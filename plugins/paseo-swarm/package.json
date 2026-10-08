@@ -1,0 +1,32 @@
+{
+  "name": "paseo-swarm",
+  "version": "0.0.0",
+  "private": true,
+  "files": [
+    "paseo-plugin.json",
+    "index.client.ts",
+    "index.client.tsx",
+    "index.server.ts",
+    "index.server.tsx",
+    "client/",
+    "server/",
+    "shared/"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@getpaseo/client": "0.11.0-beta.4",
+    "yaml": "^2.9.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@getpaseo/plugin": "0.11.0-beta.4",
+    "@tanstack/react-query": "^5.90.11",
+    "@types/node": "^26.6.4",
+    "@types/react": "~19.2.0",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "^5.9.3"
+  }
+}

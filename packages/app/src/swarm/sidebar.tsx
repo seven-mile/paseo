@@ -1,8 +1,15 @@
 import { useTranslation } from "react-i18next";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { ListTodo, Plus, Users } from "lucide-react-native";
+import { ChevronDown, ChevronRight, ListTodo, Plus, Users } from "lucide-react-native";
 import { router } from "expo-router";
-import { useCallback, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useMemo,
+  useState,
+  type MutableRefObject,
+  type ReactNode,
+  type Ref,
+} from "react";
 import {
   Pressable,
   ScrollView,
@@ -12,8 +19,11 @@ import {
   type PressableStateCallbackType,
 } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import type { GestureType } from "react-native-gesture-handler";
+import { NestableScrollContainer } from "react-native-draggable-flatlist";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { useStoreWithEqualityFn } from "zustand/traditional";
 import { z } from "zod";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import { Button } from "@/components/ui/button";
@@ -25,7 +35,7 @@ import type { Theme } from "@/styles/theme";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { useFetchQuery } from "@/data/query";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { isWeb } from "@/constants/platform";
+import { isNative, isWeb } from "@/constants/platform";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { openSwarmTasks } from "./navigation";
 import {
@@ -40,6 +50,22 @@ import { ProjectLeadingVisual } from "@/components/sidebar/project-leading-visua
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
 import { builtinSidebarNavShortcutAction } from "@/sidebar-nav/model";
 import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
+import { useSessionStore } from "@/stores/session-store";
+import { useCreateFlowStore } from "@/stores/create-flow-store";
+import {
+  applyStoredOrdering,
+  areSidebarWorkspaceSessionsEqual,
+  deriveEffectiveWorkspaceStatus,
+  selectSidebarWorkspaceSessions,
+  type SidebarWorkspaceEntry,
+} from "@/hooks/sidebar-workspaces-view-model";
+import { WorkspaceStatusIndicator } from "@/components/sidebar/sidebar-workspace-row-content";
+import { resolveWorkspaceMapKeyByIdentity } from "@/utils/workspace-identity";
+import { DraggableList, type DraggableRenderItemInfo } from "@/components/draggable-list";
+import type { DraggableListDragHandleProps } from "@/components/draggable-list.types";
+import { useLongPressDragInteraction } from "@/components/sidebar/use-long-press-drag-interaction";
+import { useSidebarOrderStore } from "@/stores/sidebar-order-store";
+import { hasVisibleOrderChanged, mergeWithRemainder } from "@/utils/sidebar-reorder";
 
 // Follows the Classical sidebar's project/workspace rows; Swarm changes only the semantic slots.
 
@@ -67,6 +93,19 @@ const rosterSchema = z.object({
   ),
 });
 type Agent = z.infer<typeof rosterSchema>["agents"][number];
+type WorkspaceState = Pick<SidebarWorkspaceEntry, "statusBucket" | "workspaceKind">;
+interface SwarmSidebarGestureProps {
+  parentGestureRef?: MutableRefObject<GestureType | undefined>;
+  dragGestureHostActive?: boolean;
+}
+interface SwarmRowDragProps {
+  drag: () => void;
+  isDragging: boolean;
+  dragHandleProps?: DraggableListDragHandleProps;
+}
+const EMPTY_ORDER: string[] = [];
+const EMPTY_AGENTS: Agent[] = [];
+const agentKeyExtractor = (agent: Agent) => agent.paseoAgentId;
 const modes: Array<{ value: Mode; label: string; testID: string }> = [
   { value: "classical", label: "swarm.sidebar.classical", testID: "swarm-sidebar-classical" },
   { value: "swarm", label: "swarm.sidebar.swarm", testID: "swarm-sidebar-swarm" },
@@ -74,7 +113,31 @@ const modes: Array<{ value: Mode; label: string; testID: string }> = [
 const ThemedUsers = withUnistyles(Users);
 const ThemedListTodo = withUnistyles(ListTodo);
 const ThemedPlus = withUnistyles(Plus);
+const ThemedChevronDown = withUnistyles(ChevronDown);
+const ThemedChevronRight = withUnistyles(ChevronRight);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+
+function useOrderedSwarmAgents(agents: Agent[], scope: string) {
+  const order = useSidebarOrderStore(
+    (state) => state.workspaceOrderByProject[scope] ?? EMPTY_ORDER,
+  );
+  const getOrder = useSidebarOrderStore((state) => state.getWorkspaceOrder);
+  const setOrder = useSidebarOrderStore((state) => state.setWorkspaceOrder);
+  const orderedAgents = useMemo(
+    () => applyStoredOrdering({ items: agents, storedOrder: order, getKey: agentKeyExtractor }),
+    [agents, order],
+  );
+  const onDragEnd = useCallback(
+    (reordered: Agent[]) => {
+      const currentOrder = getOrder(scope);
+      const reorderedVisibleKeys = reordered.map(agentKeyExtractor);
+      if (!hasVisibleOrderChanged({ currentOrder, reorderedVisibleKeys })) return;
+      setOrder(scope, mergeWithRemainder({ currentOrder, reorderedVisibleKeys }));
+    },
+    [getOrder, scope, setOrder],
+  );
+  return { orderedAgents, onDragEnd };
+}
 
 export function SwarmCreatePlannerNavRow({ onBeforeNavigate }: { onBeforeNavigate?: () => void }) {
   const { t } = useTranslation();
@@ -119,16 +182,24 @@ function PlannerGroup({
   agents,
   serverId,
   selectedAgent,
+  workspaceStates,
+  drag,
+  isDragging,
+  dragHandleProps,
+  parentGestureRef,
+  dragGestureHostActive,
   onOpenTasks,
   onOpenSurface,
-}: {
-  planner: Agent;
-  agents: Agent[];
-  serverId: string;
-  selectedAgent?: Agent;
-  onOpenTasks: (agent: Agent, planner: Agent) => void;
-  onOpenSurface: (surfaceId: string, params?: Record<string, string>) => void;
-}) {
+}: SwarmSidebarGestureProps &
+  SwarmRowDragProps & {
+    planner: Agent;
+    agents: Agent[];
+    serverId: string;
+    selectedAgent?: Agent;
+    workspaceStates: ReadonlyMap<string, WorkspaceState>;
+    onOpenTasks: (agent: Agent, planner: Agent) => void;
+    onOpenSurface: (surfaceId: string, params?: Record<string, string>) => void;
+  }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(true);
   const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
@@ -141,10 +212,18 @@ function PlannerGroup({
       }),
     [serverId],
   );
-  const supervisors = agents.filter(
-    (agent) =>
-      agent.roleClass === "supervisor" &&
-      agent.reportsTo === (planner.qualifiedName ?? planner.name),
+  const supervisors = useMemo(
+    () =>
+      agents.filter(
+        (agent) =>
+          agent.roleClass === "supervisor" &&
+          agent.reportsTo === (planner.qualifiedName ?? planner.name),
+      ),
+    [agents, planner.qualifiedName, planner.name],
+  );
+  const { orderedAgents: orderedSupervisors, onDragEnd } = useOrderedSwarmAgents(
+    supervisors,
+    `swarm:supervisors:${serverId}:${planner.paseoAgentId}`,
   );
   const isSelected = useCallback(
     (agent: Agent) => selectedAgent?.paseoAgentId === agent.paseoAgentId,
@@ -166,6 +245,34 @@ function PlannerGroup({
       onOpenSurface("native-create-worker", { parent: agent.qualifiedName ?? agent.name }),
     [onOpenSurface],
   );
+  const renderSupervisor = useCallback(
+    ({
+      item: agent,
+      drag: supervisorDrag,
+      isActive,
+      dragHandleProps: supervisorDragHandleProps,
+    }: DraggableRenderItemInfo<Agent>) => (
+      <AgentRow
+        agent={agent}
+        selected={isSelected(agent)}
+        workspaceState={workspaceStates.get(agent.paseoAgentId)}
+        members={agents.filter(
+          (member) => member.reportsTo === (agent.qualifiedName ?? agent.name),
+        )}
+        onOpen={openAgent}
+        onOpenTasks={openAgentTasks}
+        onAddWorker={openCreateWorker}
+        drag={supervisorDrag}
+        isDragging={isActive}
+        dragHandleProps={supervisorDragHandleProps}
+      />
+    ),
+    [agents, isSelected, openAgent, openAgentTasks, openCreateWorker, workspaceStates],
+  );
+  const supervisorExtraData = useMemo(
+    () => ({ selectedAgent, workspaceStates, agents, openAgent, openAgentTasks, openCreateWorker }),
+    [selectedAgent, workspaceStates, agents, openAgent, openAgentTasks, openCreateWorker],
+  );
   return (
     <View>
       <PlannerRow
@@ -176,22 +283,26 @@ function PlannerGroup({
         onOpen={openPlanner}
         onOpenTasks={openPlannerTasks}
         onAddSupervisor={openCreateSupervisor}
+        drag={drag}
+        isDragging={isDragging}
+        dragHandleProps={dragHandleProps}
       />
       {expanded ? (
         <View style={styles.members}>
-          {supervisors.map((agent) => (
-            <AgentRow
-              key={agent.paseoAgentId}
-              agent={agent}
-              selected={isSelected(agent)}
-              members={agents.filter(
-                (member) => member.reportsTo === (agent.qualifiedName ?? agent.name),
-              )}
-              onOpen={openAgent}
-              onOpenTasks={openAgentTasks}
-              onAddWorker={openCreateWorker}
-            />
-          ))}
+          <DraggableList
+            testID={`swarm-supervisor-list-${serverId}-${planner.paseoAgentId}`}
+            data={orderedSupervisors}
+            keyExtractor={agentKeyExtractor}
+            renderItem={renderSupervisor}
+            onDragEnd={onDragEnd}
+            extraData={supervisorExtraData}
+            scrollEnabled={false}
+            useDragHandle
+            nestable={isNative}
+            simultaneousGestureRef={parentGestureRef}
+            gestureHostPresented={dragGestureHostActive}
+            containerStyle={styles.members}
+          />
           {supervisors.length === 0 ? (
             <View style={styles.workspaceRow}>
               <View style={styles.workspaceRowMain}>
@@ -214,7 +325,10 @@ function PlannerRow({
   onOpen,
   onOpenTasks,
   onAddSupervisor,
-}: {
+  drag,
+  isDragging,
+  dragHandleProps,
+}: SwarmRowDragProps & {
   planner: Agent;
   selected: boolean;
   expanded: boolean;
@@ -224,14 +338,40 @@ function PlannerRow({
   onAddSupervisor: () => void;
 }) {
   const { t } = useTranslation();
+  const selectionAccessibilityState = useMemo(() => ({ selected }), [selected]);
+  const expansionAccessibilityState = useMemo(() => ({ expanded }), [expanded]);
   const [hovered, setHovered] = useState(false);
   const [pressed, setPressed] = useState(false);
-  const handlePointerEnter = useCallback(() => setHovered(true), []);
-  const handlePointerLeave = useCallback(() => setHovered(false), []);
-  const handleFocus = useCallback(() => setHovered(true), []);
-  const handleBlur = useCallback(() => setHovered(false), []);
-  const handlePressIn = useCallback(() => setPressed(true), []);
-  const handlePressOut = useCallback(() => setPressed(false), []);
+  const [focused, setFocused] = useState(false);
+  const interaction = useLongPressDragInteraction({ drag, menuController: null });
+  const {
+    role: _dragRole,
+    tabIndex: _dragTabIndex,
+    "aria-roledescription": _dragRoleDescription,
+    ...dragAttributes
+  } = dragHandleProps?.attributes ?? {};
+  const handleMouseEnter = useCallback(() => setHovered(true), []);
+  const handleMouseLeave = useCallback(() => setHovered(false), []);
+  const handleFocus = useCallback(() => setFocused(true), []);
+  const handleBlur = useCallback(() => setFocused(false), []);
+  const handlePressIn = useCallback(
+    (event: GestureResponderEvent) => {
+      setPressed(true);
+      interaction.handlePressIn(event);
+    },
+    [interaction],
+  );
+  const handlePressOut = useCallback(() => {
+    setPressed(false);
+    interaction.handlePressOut();
+  }, [interaction]);
+  const handlePress = useCallback(() => {
+    if (interaction.didLongPressRef.current) {
+      interaction.didLongPressRef.current = false;
+      return;
+    }
+    onOpen();
+  }, [interaction.didLongPressRef, onOpen]);
   const handleTogglePress = useCallback(
     (event: GestureResponderEvent) => {
       event.stopPropagation();
@@ -256,77 +396,104 @@ function PlannerRow({
     },
     [onOpenTasks],
   );
-  const rowStyle = useCallback(
+  const selectionStyle = useCallback(
     ({ pressed: rowPressed }: PressableStateCallbackType) => [
-      styles.projectRow,
-      selected && styles.projectRowSelected,
-      hovered && styles.projectRowHovered,
-      (rowPressed || pressed) && styles.projectRowPressed,
+      styles.rowSelectionTarget,
+      rowPressed && styles.projectRowPressed,
     ],
-    [hovered, pressed, selected],
+    [],
   );
   return (
-    <View onPointerEnter={handlePointerEnter} onPointerLeave={handlePointerLeave}>
-      <PressHighlight
-        accessibilityRole="button"
-        accessibilityLabel={planner.name}
-        style={rowStyle}
-        highlightStyle={styles.projectRowPressed}
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
-        onFocus={handleFocus}
-        onBlur={handleBlur}
-        onPress={onOpen}
+    <View
+      {...(isWeb ? { onMouseEnter: handleMouseEnter, onMouseLeave: handleMouseLeave } : {})}
+      style={[
+        styles.projectRow,
+        (hovered || focused) && styles.projectRowHovered,
+        selected && styles.projectRowSelected,
+        (pressed || isDragging) && styles.projectRowPressed,
+      ]}
+    >
+      <View
+        {...dragAttributes}
+        {...dragHandleProps?.listeners}
+        ref={dragHandleProps?.setActivatorNodeRef as unknown as Ref<View>}
+        style={styles.rowSelectionTarget}
       >
-        <View style={styles.projectRowLeft}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t(expanded ? "swarm.sidebar.collapse" : "swarm.sidebar.expand", {
-              name: planner.name,
-            })}
-            onTouchStart={handleControlPressStart}
-            onPointerDown={handleControlPressStart}
-            onPress={handleTogglePress}
-            style={styles.chevronButton}
-          >
-            <ProjectLeadingVisual
-              displayName={planner.name}
-              iconDataUri={null}
-              statusBucket={null}
-              projectViewKey={`swarm:${planner.paseoAgentId}`}
-              backdrop={getSidebarRowBackdrop({ isHovered: hovered, isPressed: pressed, selected })}
-              chevron={expanded ? "collapse" : "expand"}
-              showChevron
-            />
-          </Pressable>
-          <Text style={styles.projectTitle} numberOfLines={1}>
-            {planner.name}
-          </Text>
-        </View>
-        <View style={styles.projectTrailingActions}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t("swarm.sidebar.addSupervisorUnder", { name: planner.name })}
-            onTouchStart={handleControlPressStart}
-            onPointerDown={handleControlPressStart}
-            onPress={handleAddSupervisor}
-            style={styles.projectIconActionButton}
-          >
-            <ThemedPlus size={14} uniProps={mutedColorMapping} />
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t("swarm.sidebar.openTasks", { name: planner.name })}
-            testID={`swarm-planner-tasks-${planner.paseoAgentId}`}
-            onTouchStart={handleControlPressStart}
-            onPointerDown={handleControlPressStart}
-            onPress={handleOpenTasks}
-            style={styles.projectIconActionButton}
-          >
-            <ThemedListTodo size={14} uniProps={mutedColorMapping} />
-          </Pressable>
-        </View>
-      </PressHighlight>
+        <PressHighlight
+          accessibilityRole="button"
+          accessibilityLabel={planner.name}
+          accessibilityState={selectionAccessibilityState}
+          aria-selected={selected}
+          testID={`swarm-planner-row-${planner.paseoAgentId}`}
+          style={selectionStyle}
+          highlightStyle={styles.projectRowPressed}
+          onPressIn={handlePressIn}
+          onTouchMove={interaction.handleTouchMove}
+          onPressOut={handlePressOut}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
+          onPress={handlePress}
+        />
+      </View>
+      <View style={styles.projectRowLeft} pointerEvents="none">
+        <ProjectLeadingVisual
+          displayName={planner.name}
+          iconDataUri={null}
+          statusBucket={null}
+          projectViewKey={`swarm:${planner.paseoAgentId}`}
+          backdrop={getSidebarRowBackdrop({
+            isHovered: hovered || focused,
+            isPressed: pressed,
+            isDragging,
+            selected,
+          })}
+        />
+        <Text style={styles.projectTitle} numberOfLines={1}>
+          {planner.name}
+        </Text>
+      </View>
+      <View style={styles.projectTrailingActions} pointerEvents="box-none">
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t(expanded ? "swarm.sidebar.collapse" : "swarm.sidebar.expand", {
+            name: planner.name,
+          })}
+          accessibilityState={expansionAccessibilityState}
+          aria-expanded={expanded}
+          testID={`swarm-planner-toggle-${planner.paseoAgentId}`}
+          onTouchStart={handleControlPressStart}
+          onPointerDown={handleControlPressStart}
+          onPress={handleTogglePress}
+          style={styles.projectIconActionButton}
+        >
+          {expanded ? (
+            <ThemedChevronDown size={14} uniProps={mutedColorMapping} />
+          ) : (
+            <ThemedChevronRight size={14} uniProps={mutedColorMapping} />
+          )}
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("swarm.sidebar.addSupervisorUnder", { name: planner.name })}
+          onTouchStart={handleControlPressStart}
+          onPointerDown={handleControlPressStart}
+          onPress={handleAddSupervisor}
+          style={styles.projectIconActionButton}
+        >
+          <ThemedPlus size={14} uniProps={mutedColorMapping} />
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("swarm.sidebar.openTasks", { name: planner.name })}
+          testID={`swarm-planner-tasks-${planner.paseoAgentId}`}
+          onTouchStart={handleControlPressStart}
+          onPointerDown={handleControlPressStart}
+          onPress={handleOpenTasks}
+          style={styles.projectIconActionButton}
+        >
+          <ThemedListTodo size={14} uniProps={mutedColorMapping} />
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -335,22 +502,44 @@ function AgentRow({
   agent,
   members,
   selected,
+  workspaceState,
   onOpen,
   onOpenTasks,
   onAddWorker,
-}: {
+  drag,
+  isDragging,
+  dragHandleProps,
+}: SwarmRowDragProps & {
   agent: Agent;
   members: Agent[];
   selected: boolean;
+  workspaceState?: WorkspaceState;
   onOpen: (agent: Agent) => void;
   onOpenTasks: (agent: Agent) => void;
   onAddWorker: (agent: Agent) => void;
 }) {
   const { t } = useTranslation();
+  const selectionAccessibilityState = useMemo(() => ({ selected }), [selected]);
   const [hovered, setHovered] = useState(false);
-  const handlePointerEnter = useCallback(() => setHovered(true), []);
-  const handlePointerLeave = useCallback(() => setHovered(false), []);
-  const handlePress = useCallback(() => onOpen(agent), [agent, onOpen]);
+  const [focused, setFocused] = useState(false);
+  const interaction = useLongPressDragInteraction({ drag, menuController: null });
+  const {
+    role: _dragRole,
+    tabIndex: _dragTabIndex,
+    "aria-roledescription": _dragRoleDescription,
+    ...dragAttributes
+  } = dragHandleProps?.attributes ?? {};
+  const handleMouseEnter = useCallback(() => setHovered(true), []);
+  const handleMouseLeave = useCallback(() => setHovered(false), []);
+  const handleFocus = useCallback(() => setFocused(true), []);
+  const handleBlur = useCallback(() => setFocused(false), []);
+  const handlePress = useCallback(() => {
+    if (interaction.didLongPressRef.current) {
+      interaction.didLongPressRef.current = false;
+      return;
+    }
+    onOpen(agent);
+  }, [agent, interaction.didLongPressRef, onOpen]);
   const handleTasks = useCallback(
     (event: GestureResponderEvent) => {
       event.stopPropagation();
@@ -359,31 +548,56 @@ function AgentRow({
     [agent, onOpenTasks],
   );
   const handleAddWorker = useCallback(() => onAddWorker(agent), [agent, onAddWorker]);
+  const selectionStyle = useCallback(
+    ({ pressed }: PressableStateCallbackType) => [
+      styles.rowSelectionTarget,
+      pressed && styles.workspaceRowPressed,
+    ],
+    [],
+  );
   return (
     <View
-      onPointerEnter={handlePointerEnter}
-      onPointerLeave={handlePointerLeave}
+      {...(isWeb ? { onMouseEnter: handleMouseEnter, onMouseLeave: handleMouseLeave } : {})}
       style={[
         styles.workspaceRow,
+        (hovered || focused) && styles.workspaceRowHovered,
         selected && styles.workspaceRowSelected,
-        hovered && styles.workspaceRowHovered,
+        isDragging && styles.workspaceRowPressed,
       ]}
     >
-      <PressHighlight
-        accessibilityRole="button"
-        accessibilityLabel={agent.name}
-        style={styles.workspaceRowMain}
-        highlightStyle={styles.workspaceRowPressed}
-        onPress={handlePress}
+      <View
+        {...dragAttributes}
+        {...dragHandleProps?.listeners}
+        ref={dragHandleProps?.setActivatorNodeRef as unknown as Ref<View>}
+        style={styles.rowSelectionTarget}
       >
-        <View style={styles.supervisorStatusSlot}>
-          <View style={styles.supervisorStatusDot} />
-        </View>
+        <PressHighlight
+          accessibilityRole="button"
+          accessibilityLabel={agent.name}
+          accessibilityState={selectionAccessibilityState}
+          aria-selected={selected}
+          testID={`swarm-agent-row-${agent.paseoAgentId}`}
+          style={selectionStyle}
+          highlightStyle={styles.workspaceRowPressed}
+          onPressIn={interaction.handlePressIn}
+          onTouchMove={interaction.handleTouchMove}
+          onPressOut={interaction.handlePressOut}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
+          onPress={handlePress}
+        />
+      </View>
+      <View style={styles.workspaceRowMain} pointerEvents="none">
+        <WorkspaceStatusIndicator
+          bucket={workspaceState?.statusBucket ?? "done"}
+          workspaceKind={workspaceState?.workspaceKind ?? "checkout"}
+          loading={Boolean(agent.workspaceId && !workspaceState)}
+        />
         <Text style={styles.workspaceTitle} numberOfLines={1}>
           {agent.name}
         </Text>
-      </PressHighlight>
-      <View style={styles.projectTrailingActions}>
+      </View>
+      <View style={styles.projectTrailingActions} pointerEvents="box-none">
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={t("swarm.sidebar.openTasks", { name: agent.name })}
@@ -540,10 +754,22 @@ function RosterMenuEntry({
   );
 }
 
-function HostRoster({ plugin }: { plugin: InstalledPlugin }) {
+function HostRoster({
+  plugin,
+  parentGestureRef,
+  dragGestureHostActive,
+}: SwarmSidebarGestureProps & { plugin: InstalledPlugin }) {
   const { t } = useTranslation();
   const selection = useActiveWorkspaceSelection();
   const isCompact = useIsCompactFormFactor();
+  // Subscribe once per host to the same workspace/activity indexes used by Classical.
+  // The roster identifies the workspace; it is not the source of its runtime status.
+  const sessions = useStoreWithEqualityFn(
+    useSessionStore,
+    (state) => selectSidebarWorkspaceSessions(state.sessions, [plugin.serverId]),
+    areSidebarWorkspaceSessionsEqual,
+  );
+  const pendingCreateAttempts = useCreateFlowStore((state) => state.pendingByDraftId);
   const query = useFetchQuery(
     {
       queryKey: ["swarm", "roster", plugin.serverId],
@@ -554,6 +780,30 @@ function HostRoster({ plugin }: { plugin: InstalledPlugin }) {
     },
     plugin.queryClient,
   );
+  const workspaceStates = useMemo(() => {
+    const states = new Map<string, WorkspaceState>();
+    const session = sessions[0];
+    if (!session) return states;
+    for (const agent of query.data?.agents ?? []) {
+      if (agent.roleClass !== "supervisor" || agent.retired) continue;
+      const key = resolveWorkspaceMapKeyByIdentity({
+        workspaces: session.workspaces,
+        workspaceId: agent.workspaceId,
+      });
+      const workspace = key ? session.workspaces.get(key) : undefined;
+      if (!workspace) continue;
+      states.set(agent.paseoAgentId, {
+        statusBucket: deriveEffectiveWorkspaceStatus({
+          serverId: plugin.serverId,
+          workspace,
+          workspaceAgentActivity: session.workspaceAgentActivity,
+          pendingCreateAttempts,
+        }).status,
+        workspaceKind: workspace.workspaceKind,
+      });
+    }
+    return states;
+  }, [pendingCreateAttempts, plugin.serverId, query.data, sessions]);
   const { refetch } = query;
   const retry = useCallback(() => void refetch(), [refetch]);
   const openSurface = useCallback(
@@ -587,6 +837,67 @@ function HostRoster({ plugin }: { plugin: InstalledPlugin }) {
     },
     [isCompact, plugin.serverId],
   );
+  const agents = useMemo(
+    () => query.data?.agents.filter((agent) => !agent.retired) ?? EMPTY_AGENTS,
+    [query.data],
+  );
+  const selectedAgent =
+    selection?.serverId === plugin.serverId
+      ? agents.find((agent) => agent.workspaceId === selection.workspaceId)
+      : undefined;
+  const planners = useMemo(() => agents.filter((agent) => agent.roleClass === "planner"), [agents]);
+  const { orderedAgents: orderedPlanners, onDragEnd } = useOrderedSwarmAgents(
+    planners,
+    `swarm:planners:${plugin.serverId}`,
+  );
+  const renderPlanner = useCallback(
+    ({ item: planner, drag, isActive, dragHandleProps }: DraggableRenderItemInfo<Agent>) => (
+      <PlannerGroup
+        planner={planner}
+        agents={agents}
+        serverId={plugin.serverId}
+        selectedAgent={selectedAgent}
+        workspaceStates={workspaceStates}
+        onOpenTasks={openTasks}
+        onOpenSurface={openSurface}
+        drag={drag}
+        isDragging={isActive}
+        dragHandleProps={dragHandleProps}
+        parentGestureRef={parentGestureRef}
+        dragGestureHostActive={dragGestureHostActive}
+      />
+    ),
+    [
+      agents,
+      plugin.serverId,
+      selectedAgent,
+      workspaceStates,
+      openTasks,
+      openSurface,
+      parentGestureRef,
+      dragGestureHostActive,
+    ],
+  );
+  const plannerExtraData = useMemo(
+    () => ({
+      agents,
+      selectedAgent,
+      workspaceStates,
+      openTasks,
+      openSurface,
+      parentGestureRef,
+      dragGestureHostActive,
+    }),
+    [
+      agents,
+      selectedAgent,
+      workspaceStates,
+      openTasks,
+      openSurface,
+      parentGestureRef,
+      dragGestureHostActive,
+    ],
+  );
   if (query.isPending) return <Text style={styles.hint}>{t("swarm.sidebar.loadingAgents")}</Text>;
   if (query.isError)
     return (
@@ -595,28 +906,25 @@ function HostRoster({ plugin }: { plugin: InstalledPlugin }) {
         <RetryButton onRetry={retry}>{t("common.actions.retry")}</RetryButton>
       </View>
     );
-  const agents = query.data.agents.filter((agent) => !agent.retired);
-  const selectedAgent =
-    selection?.serverId === plugin.serverId
-      ? agents.find((agent) => agent.workspaceId === selection.workspaceId)
-      : undefined;
-  const planners = agents.filter((agent) => agent.roleClass === "planner");
   return (
     <View>
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>{t("swarm.sidebar.planners")}</Text>
       </View>
-      {planners.map((planner) => (
-        <PlannerGroup
-          key={planner.paseoAgentId}
-          planner={planner}
-          agents={agents}
-          serverId={plugin.serverId}
-          selectedAgent={selectedAgent}
-          onOpenTasks={openTasks}
-          onOpenSurface={openSurface}
-        />
-      ))}
+      <DraggableList
+        testID={`swarm-planner-list-${plugin.serverId}`}
+        data={orderedPlanners}
+        keyExtractor={agentKeyExtractor}
+        renderItem={renderPlanner}
+        onDragEnd={onDragEnd}
+        extraData={plannerExtraData}
+        scrollEnabled={false}
+        useDragHandle
+        nestable={isNative}
+        simultaneousGestureRef={parentGestureRef}
+        gestureHostPresented={dragGestureHostActive}
+        containerStyle={styles.members}
+      />
       {planners.length === 0 ? (
         <Text style={styles.hint}>{t("swarm.sidebar.noPlanners")}</Text>
       ) : null}
@@ -633,10 +941,53 @@ function RetryButton({ onRetry, children }: { onRetry: () => void; children: Rea
   );
 }
 
-export function SwarmSidebar({ children }: { children: ReactNode }) {
+export function SwarmSidebar({
+  children,
+  parentGestureRef,
+  dragGestureHostActive,
+}: SwarmSidebarGestureProps & { children: ReactNode }) {
   const { t } = useTranslation();
   const { mode, setMode } = useSwarmSidebar();
   const installations = usePluginInstallations("paseo-swarm");
+  const nativeScrollGestureProps = useMemo(
+    () => (parentGestureRef ? ({ simultaneousHandlers: parentGestureRef } as object) : undefined),
+    [parentGestureRef],
+  );
+  const rosterContent = (
+    <>
+      {installations.map((plugin) => (
+        <HostRoster
+          key={plugin.serverId}
+          plugin={plugin}
+          parentGestureRef={parentGestureRef}
+          dragGestureHostActive={dragGestureHostActive}
+        />
+      ))}
+      {installations.length === 0 ? (
+        <Text style={styles.hint}>{t("swarm.sidebar.connectHost")}</Text>
+      ) : null}
+    </>
+  );
+  const swarmList = isNative ? (
+    <NestableScrollContainer
+      {...nativeScrollGestureProps}
+      style={styles.list}
+      contentContainerStyle={styles.listContent}
+      showsVerticalScrollIndicator={false}
+      testID="swarm-sidebar-list"
+    >
+      {rosterContent}
+    </NestableScrollContainer>
+  ) : (
+    <ScrollView
+      style={styles.list}
+      contentContainerStyle={styles.listContent}
+      showsVerticalScrollIndicator={false}
+      testID="swarm-sidebar-list"
+    >
+      {rosterContent}
+    </ScrollView>
+  );
   return (
     <View style={styles.container}>
       <View style={styles.picker}>
@@ -654,23 +1005,7 @@ export function SwarmSidebar({ children }: { children: ReactNode }) {
           testID="swarm-sidebar-mode"
         />
       </View>
-      {mode === "classical" ? (
-        children
-      ) : (
-        <ScrollView
-          style={styles.list}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-          testID="swarm-sidebar-list"
-        >
-          {installations.map((plugin) => (
-            <HostRoster key={plugin.serverId} plugin={plugin} />
-          ))}
-          {installations.length === 0 ? (
-            <Text style={styles.hint}>{t("swarm.sidebar.connectHost")}</Text>
-          ) : null}
-        </ScrollView>
-      )}
+      {mode === "classical" ? children : swarmList}
     </View>
   );
 }
@@ -693,7 +1028,7 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "center",
   },
   sectionTitle: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
-  members: {},
+  members: { width: "100%" },
   projectRow: {
     position: "relative",
     minHeight: 36,
@@ -709,21 +1044,16 @@ const styles = StyleSheet.create((theme) => ({
   },
   projectRowHovered: { backgroundColor: theme.colors.surfaceSidebarHover },
   projectRowSelected: { backgroundColor: theme.colors.surfaceSidebarSelected },
-  projectRowPressed: { backgroundColor: theme.colors.surface2 },
+  projectRowPressed: {
+    backgroundColor: theme.colors.surface2,
+    borderRadius: theme.borderRadius.lg,
+  },
   projectRowLeft: {
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
     flex: 1,
     minWidth: 0,
-  },
-  chevronButton: {
-    width: theme.iconSize.md,
-    height: theme.iconSize.md,
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-    padding: 0,
   },
   projectTitle: {
     color: theme.colors.foregroundMuted,
@@ -747,6 +1077,7 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 0,
   },
   workspaceRow: {
+    position: "relative",
     minHeight: 36,
     marginBottom: theme.spacing[0.5],
     paddingVertical: theme.spacing[2],
@@ -760,7 +1091,15 @@ const styles = StyleSheet.create((theme) => ({
   },
   workspaceRowSelected: { backgroundColor: theme.colors.surfaceSidebarSelected },
   workspaceRowHovered: { backgroundColor: theme.colors.surfaceSidebarHover },
-  workspaceRowPressed: { backgroundColor: theme.colors.surface2 },
+  workspaceRowPressed: {
+    backgroundColor: theme.colors.surface2,
+    borderRadius: theme.borderRadius.lg,
+  },
+  // Row selection is a sibling of its controls so menu/portal presses cannot activate it.
+  rowSelectionTarget: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: theme.borderRadius.lg,
+  },
   workspaceRowMain: {
     flexDirection: "row",
     alignItems: "center",
@@ -774,12 +1113,6 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
     flexShrink: 0,
-  },
-  supervisorStatusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.foregroundExtraMuted,
   },
   workspaceTitle: {
     color: theme.colors.foreground,

@@ -251,6 +251,55 @@ describe("PluginService", () => {
     },
   );
 
+  it("reloads built-in source without configuration and leaves failed reload stopped", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "paseo-builtin-reload-"));
+    roots.push(home);
+    const builtinRoot = path.join(home, "builtins");
+    const directory = path.join(builtinRoot, "reloadable");
+    const stopped = path.join(home, "stopped.txt");
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      path.join(directory, "paseo-plugin.json"),
+      JSON.stringify({ id: "reloadable" }),
+    );
+    const source = (label: string) => `import { appendFileSync } from "node:fs";
+export default function contribute(server) {
+  server.registerProvider({ id: "reload-agent", label: ${JSON.stringify(label)}, command: ["unused"], async connect() { throw new Error("not opened"); } });
+  return () => appendFileSync(${JSON.stringify(stopped)}, ${JSON.stringify(label + "\n")});
+}`;
+    await writeFile(path.join(directory, "index.server.ts"), source("first"));
+    const store = createStore(home);
+    await store.patch({ pluginsEnabled: false });
+    const service = bindTestSessionHost(
+      new PluginService(pino({ level: "silent" }), store, "0.4.0", {
+        builtinPlugins: new BuiltinPluginLoader(builtinRoot, ["reloadable"]),
+      }),
+    );
+    await service.start();
+    try {
+      expect(service.getProviderRegistrations()[0]?.label).toBe("first");
+      expect(await service.listPlugins()).toEqual([]);
+      await writeFile(path.join(directory, "index.server.ts"), source("second"));
+      expect(await service.reloadPlugin("reloadable")).toMatchObject({
+        path: directory,
+        status: "running",
+      });
+      expect(await readFile(stopped, "utf8")).toBe("first\n");
+      expect(service.getProviderRegistrations()[0]?.label).toBe("second");
+      expect(store.get().plugins).toEqual({});
+      await writeFile(
+        path.join(directory, "index.server.ts"),
+        "export default function contribute() { throw new Error('reload failed'); }",
+      );
+      await expect(service.reloadPlugin("reloadable")).rejects.toThrow("reload failed");
+      expect(await readFile(stopped, "utf8")).toBe("first\nsecond\n");
+      expect(service.catalog()).toEqual([]);
+      expect(service.getProviderRegistrations()).toEqual([]);
+    } finally {
+      await service.stopAllPlugins();
+    }
+  });
+
   it("resolves a provider icon path to sanitized inline SVG", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "paseo-plugin-home-"));
     roots.push(home);
