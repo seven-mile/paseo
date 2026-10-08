@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -82,6 +83,7 @@ export interface SwarmTaskSurfaceProps {
 }
 
 const FLEX_STYLE = { flex: 1 };
+const TaskMarkdown = memo(MarkdownRenderer);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const spinnerMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
@@ -656,7 +658,6 @@ function LoadedTasks({
                   task={task}
                   board={board}
                   compact={compact}
-                  showBack={!split}
                   onBack={back}
                   onOpenTask={openTask}
                   onOpenReference={onOpenReference}
@@ -840,7 +841,6 @@ function TaskDetail({
   task,
   board,
   compact,
-  showBack,
   onBack,
   onOpenTask,
   onOpenReference,
@@ -853,7 +853,6 @@ function TaskDetail({
   task: SwarmTask;
   board: SwarmTaskBoard;
   compact: boolean;
-  showBack: boolean;
   onBack: () => void;
   onOpenTask: (id: string) => void;
   onOpenReference?: (reference: SwarmTaskReference) => void;
@@ -1101,7 +1100,7 @@ function TaskDetail({
   );
   return (
     <View style={styles.detail} testID="swarm-task-detail">
-      {showBack ? <TaskBackHeader onBack={onBack} /> : null}
+      <TaskBackHeader onBack={onBack} />
       {referenceUnavailable ? (
         <Text style={styles.error} accessibilityRole="alert">
           {t("swarm.tasks.referenceUnavailable")}
@@ -1117,7 +1116,7 @@ function TaskDetail({
           <StatusBadge label={task.status} />
         </View>
         <Text style={styles.meta}>{task.id}</Text>
-        <MarkdownRenderer text={task.brief} compact onLinkPress={openLink} />
+        <TaskMarkdown text={task.brief} compact onLinkPress={openLink} />
         <View style={styles.participants}>
           <Text style={styles.meta}>{t("swarm.tasks.manager")}</Text>
           <PersonButton name={task.managerName} onOpen={openAgent} />
@@ -1265,7 +1264,7 @@ function ActivityRow({
         {new Date(activity.createdAt).toLocaleString()}
         {activity.replyTo ? ` · ${t("swarm.tasks.replyToActivity", { id: activity.replyTo })}` : ""}
       </Text>
-      <MarkdownRenderer text={activity.body} compact onLinkPress={onLinkPress} />
+      <TaskMarkdown text={activity.body} compact onLinkPress={onLinkPress} />
       {choice && canChoose ? (
         <View style={styles.choices}>
           <Text style={styles.primary}>{choice.prompt}</Text>
