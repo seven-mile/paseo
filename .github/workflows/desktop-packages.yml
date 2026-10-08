@@ -86,6 +86,7 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           name: desktop-packaged-smoke-linux-x64
-          path: ${{ runner.temp }}/desktop-smoke
+          path: |
+            ${{ runner.temp }}/desktop-smoke
           if-no-files-found: ignore
           retention-days: 7

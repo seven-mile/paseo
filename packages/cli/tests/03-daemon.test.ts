@@ -239,7 +239,6 @@ try {
       },
       stdio: "ignore",
     });
-
     try {
       const relayProbe = await retryWhileWorkerRuns(
         worker,

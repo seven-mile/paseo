@@ -1,4 +1,9 @@
 import { createServer, type Server } from "node:http";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import generate from "@babel/generator";
+import type { BabelTransformer } from "@expo/metro/metro-babel-transformer";
 import { afterEach, expect, test } from "vitest";
 
 import { waitForMetro, warmMetro } from "../e2e/support/global-setup";
@@ -83,4 +88,46 @@ test("Metro warmup compiles the document's same-origin scripts before tests star
   await warmMetro(endpoint.port);
 
   expect(endpoint.requests).toEqual(["/", "/index.bundle"]);
+});
+
+test("Metro keeps component memoization enabled while transforming the exempt validator filename", () => {
+  const appRoot = fileURLToPath(new URL("../", import.meta.url));
+  const { transform } = createRequire(import.meta.url)(
+    "@expo/metro-config/babel-transformer",
+  ) as BabelTransformer;
+  const options = {
+    projectRoot: appRoot,
+    dev: true,
+    minify: false,
+    platform: "web",
+    type: "module",
+    experimentalImportSupport: true,
+    unstable_transformProfile: "hermes-stable" as const,
+    enableBabelRCLookup: true,
+    hermesParser: false,
+    publicPath: "/assets/?unstable_path=.",
+    globalPrefix: "",
+    customTransformOptions: { engine: "hermes", routerRoot: "src/app", reactCompiler: "true" },
+  };
+  const src = `
+    export function CompilerProbe({ label }) { return <span>{label}</span>; }
+    export const meta = import.meta;
+  `;
+  const compile = (filename: string) => {
+    const { ast } = transform({ filename, src, options });
+    expect(ast?.type).toBe("File");
+    const code = generate(ast).code;
+    expect(code).toContain("globalThis.__ExpoImportMetaRegistry");
+    expect(code).not.toContain("import.meta");
+    expect(code).not.toMatch(/<span\b/);
+    return code;
+  };
+  const component = compile(path.join("src", "metro-compiler-probe.jsx"));
+  expect(component).toContain("react/compiler-runtime");
+  expect(component).toMatch(/\b_c\([1-9]\d*\)/);
+  const generated = compile(
+    path.join("..", "protocol", "dist", "generated", "validation", "ws-outbound.aot.js"),
+  );
+  expect(generated).not.toContain("react/compiler-runtime");
+  expect(generated).not.toMatch(/\b_c\([1-9]\d*\)/);
 });

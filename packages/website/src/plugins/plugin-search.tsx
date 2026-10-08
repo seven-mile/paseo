@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { Search, X } from "lucide-react";
-import { type ChangeEvent, type FormEvent, useCallback, useRef, useState } from "react";
+import { type ChangeEvent, type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { type BrowseQuery, browseHref, DEFAULT_WINDOW } from "./links";
 
 const ICON_CLASS = "h-3.5 w-3.5 text-extra-muted-foreground";
@@ -16,13 +16,20 @@ export function PluginSearch({ scope, className }: { scope: BrowseQuery; classNa
   const search = useCallback(
     (next: string) => {
       setTerm(next);
+      const href = browseHref({ ...scope, q: next.trim() ? next : undefined });
       void navigate({
-        href: browseHref({ ...scope, q: next.trim() ? next : undefined }),
+        href,
         replace: true,
       });
     },
     [navigate, scope],
   );
+  // A term typed before the page hydrated is in the box but not in state; adopt it. Once hydrated,
+  // the box always matches state, so this does nothing.
+  useEffect(() => {
+    const typed = input.current?.value ?? "";
+    if (typed !== term) search(typed);
+  }, [search, term]);
   const handleChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => search(event.target.value),
     [search],

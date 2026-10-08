@@ -48,7 +48,7 @@ function findEagerModuleStyleReads(filePath: string): string[] {
     filePath,
     source,
     ts.ScriptTarget.Latest,
-    true,
+    false,
     filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
 

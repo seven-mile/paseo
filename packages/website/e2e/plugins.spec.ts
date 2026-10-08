@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "playwright/test";
+import { expect, test, type Page, type Route } from "playwright/test";
 import { CATEGORIES } from "../src/plugins/categories";
 
 async function openPlugins(page: Page) {
@@ -127,6 +127,57 @@ test("replaces history while typing a search", async ({ page }) => {
   await expect(page).toHaveURL(/\/plugins\/all\?q=graphite$/);
   await page.goBack();
   await expect(page).toHaveURL(/\/$/);
+});
+
+test.describe("early search input", () => {
+  test("preserves search typed before hydration", async ({ page }, testInfo) => {
+    const origin = new URL("/", testInfo.project.use.baseURL).origin;
+    let releaseScripts!: () => void;
+    const scripts = new Promise<void>((resolve) => {
+      releaseScripts = resolve;
+    });
+    let heldScripts = 0;
+    let holdTargetScripts = false;
+    const assets = (url: URL) =>
+      url.origin === origin && url.pathname.startsWith("/assets/") && url.pathname.endsWith(".js");
+    await page.route(assets, async (route: Route) => {
+      if (holdTargetScripts) {
+        heldScripts++;
+        await scripts;
+      }
+      await route.continue();
+    });
+    try {
+      await page.goto("/");
+      holdTargetScripts = true;
+      await page.goto("/plugins/all", { waitUntil: "commit" });
+      const searchbox = page.getByRole("searchbox", { name: "Search plugins" });
+      const clear = page.getByRole("button", { name: "Clear search" });
+      await expect(clear).toHaveCount(0);
+      await searchPlugins(page, "graphite");
+      expect(heldScripts).toBeGreaterThan(0);
+      await expect(searchbox).toHaveValue("graphite");
+      releaseScripts();
+      // Initial pre-hydration query assertion.
+      await expect(page).toHaveURL(/\/plugins\/all\?q=graphite$/);
+      await expect(
+        page.getByRole("heading", { level: 1, name: /^Results for “graphite”/ }),
+      ).toBeVisible();
+      await expect(page.getByRole("main").getByRole("link", { name: /Graphite/ })).toBeVisible();
+      await expect(page.getByRole("link", { name: /Dracula/ })).toHaveCount(0);
+      await clear.click();
+      await expect(page).toHaveURL(/\/plugins\/all$/);
+      await expect(searchbox).toHaveValue("");
+      await expect(searchbox).toBeFocused();
+      await expect(clear).toHaveCount(0);
+      await expect(page.getByRole("heading", { level: 1, name: /^All plugins/ })).toBeVisible();
+      await page.goBack();
+      await expect(page).toHaveURL(/\/$/);
+    } finally {
+      releaseScripts();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
 });
 
 test("keeps old category links working", async ({ page }) => {

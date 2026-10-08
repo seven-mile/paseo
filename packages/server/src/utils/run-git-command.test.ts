@@ -213,6 +213,19 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// This suite's spawn returns fictional PIDs. Never taskkill them on a Windows host.
+// Real descendant ownership is verified in run-git-command.windows-shell.test.ts.
+vi.mock("@getpaseo/plugin/server", async () => {
+  const actual =
+    await vi.importActual<typeof import("@getpaseo/plugin/server")>("@getpaseo/plugin/server");
+  return {
+    ...actual,
+    terminateProcess: vi.fn(async (child: { kill(signal: NodeJS.Signals): boolean }) => {
+      child.kill("SIGKILL");
+    }),
+  };
+});
+
 function enqueueSpawnBehaviors(...behaviors: FakeSpawnBehavior[]): void {
   fakeSpawnController.queue.push(...behaviors);
 }

@@ -188,8 +188,9 @@ async function expectFingerSizedFooterTargets(page: Page): Promise<void> {
   await expect(buttons).toHaveCount(5);
   for (const button of await buttons.all()) {
     const bounds = await button.boundingBox();
-    expect(bounds?.width).toBeGreaterThanOrEqual(44);
-    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+    // DOM quads can represent a 44px target as 43.999996; keep subpixel precision.
+    expect(Number(bounds?.width.toFixed(3))).toBeGreaterThanOrEqual(44);
+    expect(Number(bounds?.height.toFixed(3))).toBeGreaterThanOrEqual(44);
     // Glyphs stay at the composer toolbar size (some optically smaller); only the target grows.
     const glyphWidth = await button.locator("svg").first().getAttribute("width");
     expect(Number(glyphWidth)).toBeLessThanOrEqual(20);

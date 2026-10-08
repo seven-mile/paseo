@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import type { Logger } from "pino";
+import { terminateProcess } from "@getpaseo/plugin/server";
 import type { ProcessEnvRecord } from "../server/paseo-env.js";
 import {
   GitCommandRuntimeMetricsWindow,
@@ -19,6 +20,8 @@ import {
   resolveGitProcessPolicy,
   type GitProcessPolicy,
 } from "./git-process-scheduler.js";
+
+export const GIT_TIMEOUT_CLEANUP_ERROR_NAME = "GitTimeoutCleanupError";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 20 * 1024 * 1024; // 20MB
@@ -421,9 +424,36 @@ function executeGitCommand<Output>(
       }
 
       timer = setTimeout(() => {
-        timeoutError = new Error(`Git command timed out after ${timeout}ms: ${command}`);
-        child.kill("SIGKILL");
-        settle(() => reject(timeoutError));
+        const error = new Error(`Git command timed out after ${timeout}ms: ${command}`);
+        timeoutError = error;
+        if (process.platform === "win32") {
+          // SDK taskkill /T /F has a 5s cleanup budget; settle guards close/data first.
+          settle(() => {
+            void terminateProcess(child).then(
+              () => reject(error),
+              (cleanupError: unknown) => {
+                // Preserve the timeout Error object while making failed cleanup explicit.
+                error.name = GIT_TIMEOUT_CLEANUP_ERROR_NAME;
+                error.cause = cleanupError;
+                error.message += `; Windows process-tree cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
+                // Preserve the old direct-child cleanup floor if taskkill itself fails.
+                try {
+                  child.kill("SIGKILL");
+                } catch (killError) {
+                  error.cause = new AggregateError(
+                    [cleanupError, killError],
+                    "Windows Git cleanup failed",
+                  );
+                  error.message += `; direct Git kill failed: ${killError instanceof Error ? killError.message : String(killError)}`;
+                }
+                reject(error);
+              },
+            );
+          });
+        } else {
+          child.kill("SIGKILL");
+          settle(() => reject(timeoutError));
+        }
         if (processExit) {
           settleTimeoutTrace(processExit.exitCode, processExit.signal);
         }

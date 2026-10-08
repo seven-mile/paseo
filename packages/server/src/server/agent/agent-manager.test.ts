@@ -2988,6 +2988,7 @@ test("createAgent injects paseo MCP server only into provider launch config", as
     paseo: {
       type: "http",
       url: `http://127.0.0.1:6767/mcp/agents?callerAgentId=${snapshot.id}`,
+      alwaysLoad: true,
     },
     custom: {
       type: "stdio",
@@ -3289,6 +3290,7 @@ test("createAgent allows best-effort internal MCP when the provider session repo
   expect(client.lastConfig?.mcpServers?.paseo).toEqual({
     type: "http",
     url: `http://127.0.0.1:6767/mcp/agents?callerAgentId=${snapshot.id}`,
+    alwaysLoad: true,
     headers: { Authorization: "Bearer cap-token" },
   });
 
@@ -3428,6 +3430,7 @@ test("keeps the global Paseo-tools gate outside provider policy and MCP injectio
   expect(enabledClient.lastConfig?.mcpServers?.paseo).toEqual({
     type: "http",
     url: `http://127.0.0.1:6767/mcp/agents?callerAgentId=${enabledAgent.id}`,
+    alwaysLoad: true,
   });
 
   const disabledClient = new McpClient();
@@ -3497,6 +3500,7 @@ test("resumeAgentFromPersistence replaces stored internal paseo MCP with current
     paseo: {
       type: "http",
       url: `http://127.0.0.1:6768/mcp/agents?callerAgentId=${snapshot.id}`,
+      alwaysLoad: true,
     },
     custom: {
       type: "stdio",

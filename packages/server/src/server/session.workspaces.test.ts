@@ -9178,7 +9178,7 @@ test("workspace auto-name replaces the unchanged prompt title", async () => {
 });
 
 test("workspace auto-name uses the backing root for a nested worktree", async () => {
-  vi.useFakeTimers();
+  vi.useRealTimers();
   const tempDir = realpathSync(mkdtempSync(path.join(tmpdir(), "workspace-auto-name-rejected-")));
   const repoDir = path.join(tempDir, "repo");
   mkdirSync(repoDir);
@@ -9217,6 +9217,7 @@ test("workspace auto-name uses the backing root for a nested worktree", async ()
   let generateCalls = 0;
   const gitMutations: string[] = [];
   const emittedCwds: string[] = [];
+  const completed = deferred<void>();
   const workspaceAutoName = new WorkspaceAutoName({
     agentManager: asAgentManager({}),
     workspaceRegistry: {
@@ -9238,6 +9239,7 @@ test("workspace auto-name uses the backing root for a nested worktree", async ()
     },
     emitWorkspaceUpdateForCwd: async (cwd) => {
       emittedCwds.push(cwd);
+      completed.resolve();
     },
     emitWorkspaceUpdateForWorkspaceId: async () => {},
     logger: asSessionLogger(createTestLogger()),
@@ -9252,7 +9254,8 @@ test("workspace auto-name uses the backing root for a nested worktree", async ()
       workspace,
       firstAgentContext: { prompt: "Fix checkout title" },
     });
-    await vi.runAllTimersAsync();
+    // The final emit follows awaited real Git and metadata work; fake-clock drain does not.
+    await completed.promise;
 
     expect(generateCalls).toBe(1);
     expect(stored.get(workspace.workspaceId)).toMatchObject({

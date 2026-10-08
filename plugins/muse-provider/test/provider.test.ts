@@ -1208,8 +1208,13 @@ test("silent active turns page after two minutes and stop polling on recovered t
   const h = await harness("text-reasoning", { MUSE_TEST_SILENT: "1" });
   await h.open();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  await h.prompt();
-  await h.wait((e) => e.type === "session.prompt_result");
+  const from = await h.prompt();
+  await h.wait((e) => e.type === "session.prompt_result", from);
+  await h.wait(
+    (e) =>
+      e.type === "session.usage" && e.usage.inputTokens === 38169 && e.usage.outputTokens === 663,
+    from,
+  );
   await vi.advanceTimersByTimeAsync(119999);
   expect((await h.recorded()).filter((f) => f.method === "view/page")).toEqual([]);
   await vi.advanceTimersByTimeAsync(1);
