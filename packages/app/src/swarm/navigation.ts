@@ -243,12 +243,22 @@ export function openSwarmTasks(
   });
   const tabId = ensureSwarmTasksTab(workspaceKey, host);
   if (!tabId) return;
-  setSwarmTaskSelection(workspaceKey, tabId, {
-    plannerName: input.plannerName,
-    agentName: input.agentName,
-    taskId: input.taskId,
-    defaultAgentId,
-  });
+  const existed =
+    layoutBeforeOpen && collectAllTabs(layoutBeforeOpen.root).some((tab) => tab.tabId === tabId);
+  const activatePlannerBoard =
+    existed &&
+    host === "main" &&
+    input.plannerName !== undefined &&
+    input.agentName === undefined &&
+    input.taskId === undefined;
+  if (!activatePlannerBoard) {
+    setSwarmTaskSelection(workspaceKey, tabId, {
+      plannerName: input.plannerName,
+      agentName: input.agentName,
+      taskId: input.taskId,
+      defaultAgentId,
+    });
+  }
   navigateToSwarmTasks({
     serverId,
     workspaceId,

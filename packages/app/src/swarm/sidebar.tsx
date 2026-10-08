@@ -25,6 +25,8 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { z } from "zod";
+import { AGENT_LIFECYCLE_STATUSES } from "@getpaseo/protocol/agent-lifecycle";
+import { AgentStatusDot } from "@/components/agent-status-dot";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import { Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/segmented-control";
@@ -50,7 +52,8 @@ import { ProjectLeadingVisual } from "@/components/sidebar/project-leading-visua
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
 import { builtinSidebarNavShortcutAction } from "@/sidebar-nav/model";
 import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
-import { useSessionStore } from "@/stores/session-store";
+import { useSessionStore, type Agent as SessionAgent } from "@/stores/session-store";
+import { deriveSidebarStateBucket } from "@/utils/sidebar-agent-state";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import {
   applyStoredOrdering,
@@ -253,6 +256,7 @@ function PlannerGroup({
       dragHandleProps: supervisorDragHandleProps,
     }: DraggableRenderItemInfo<Agent>) => (
       <AgentRow
+        serverId={serverId}
         agent={agent}
         selected={isSelected(agent)}
         workspaceState={workspaceStates.get(agent.paseoAgentId)}
@@ -267,7 +271,7 @@ function PlannerGroup({
         dragHandleProps={supervisorDragHandleProps}
       />
     ),
-    [agents, isSelected, openAgent, openAgentTasks, openCreateWorker, workspaceStates],
+    [serverId, agents, isSelected, openAgent, openAgentTasks, openCreateWorker, workspaceStates],
   );
   const supervisorExtraData = useMemo(
     () => ({ selectedAgent, workspaceStates, agents, openAgent, openAgentTasks, openCreateWorker }),
@@ -499,6 +503,7 @@ function PlannerRow({
 }
 
 function AgentRow({
+  serverId,
   agent,
   members,
   selected,
@@ -510,6 +515,7 @@ function AgentRow({
   isDragging,
   dragHandleProps,
 }: SwarmRowDragProps & {
+  serverId: string;
   agent: Agent;
   members: Agent[];
   selected: boolean;
@@ -608,6 +614,7 @@ function AgentRow({
           <ThemedListTodo size={14} uniProps={mutedColorMapping} />
         </Pressable>
         <RosterHoverCard
+          serverId={serverId}
           agent={agent}
           members={members}
           onOpen={onOpen}
@@ -620,12 +627,14 @@ function AgentRow({
 }
 
 function RosterHoverCard({
+  serverId,
   agent,
   members,
   onOpen,
   onOpenTasks,
   onAddWorker,
 }: {
+  serverId: string;
   agent: Agent;
   members: Agent[];
   onOpen: (agent: Agent) => void;
@@ -647,6 +656,7 @@ function RosterHoverCard({
           {[agent, ...members].map((member) => (
             <RosterMenuEntry
               key={member.paseoAgentId}
+              serverId={serverId}
               agent={member}
               onOpen={onOpen}
               onOpenTasks={onOpenTasks}
@@ -668,10 +678,17 @@ function RosterHoverCard({
       </HoverCardTrigger>
       <HoverCardContent placement="right" role="menu" style={styles.rosterCard}>
         <Text style={styles.rosterTitle}>{t("swarm.sidebar.agentTeam")}</Text>
-        <RosterEntry agent={agent} current onOpen={onOpen} onOpenTasks={onOpenTasks} />
+        <RosterEntry
+          serverId={serverId}
+          agent={agent}
+          current
+          onOpen={onOpen}
+          onOpenTasks={onOpenTasks}
+        />
         {members.map((member) => (
           <RosterEntry
             key={member.paseoAgentId}
+            serverId={serverId}
             agent={member}
             onOpen={onOpen}
             onOpenTasks={onOpenTasks}
@@ -694,29 +711,95 @@ function RosterHoverCard({
   );
 }
 
+function useRosterStatus(serverId: string, agentId: string) {
+  const { t } = useTranslation();
+  const runtimeAgent = useSessionStore((state) => {
+    const session = state.sessions[serverId];
+    return session?.agents.get(agentId) ?? session?.agentDetails.get(agentId) ?? null;
+  });
+  if (!runtimeAgent || !AGENT_LIFECYCLE_STATUSES.some((status) => status === runtimeAgent.status)) {
+    return { runtimeAgent: null, statusLabel: null };
+  }
+  const pendingPermissionCount = runtimeAgent.pendingPermissions.length;
+  const bucket = deriveSidebarStateBucket({
+    status: runtimeAgent.status,
+    requiresAttention: runtimeAgent.requiresAttention,
+    attentionReason: runtimeAgent.attentionReason,
+    pendingPermissionCount,
+  });
+  let statusLabel: string;
+  if (bucket === "needs_input") {
+    statusLabel =
+      pendingPermissionCount > 0
+        ? t("agentList.badges.pending", { count: pendingPermissionCount })
+        : t("subagents.pillLabelNeedsInputOne");
+  } else if (bucket === "failed") {
+    statusLabel = t("agentList.status.error");
+  } else if (bucket === "attention") {
+    statusLabel = t("agentList.badges.attention");
+  } else {
+    statusLabel = t(`agentList.status.${runtimeAgent.status}`);
+  }
+  return { runtimeAgent, statusLabel };
+}
+
+function RosterStatusMarker({ agent }: { agent: SessionAgent | null }) {
+  return (
+    <View
+      style={styles.rosterStatusSlot}
+      pointerEvents="none"
+      accessible={false}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      aria-hidden
+    >
+      {agent ? (
+        <AgentStatusDot
+          status={agent.status}
+          requiresAttention={agent.requiresAttention}
+          attentionReason={agent.attentionReason}
+          pendingPermissionCount={agent.pendingPermissions.length}
+          showInactive
+        />
+      ) : (
+        <ThemedUsers size={14} uniProps={mutedColorMapping} />
+      )}
+    </View>
+  );
+}
+
 function RosterEntry({
+  serverId,
   agent,
   current = false,
   onOpen,
   onOpenTasks,
 }: {
+  serverId: string;
   agent: Agent;
   current?: boolean;
   onOpen: (agent: Agent) => void;
   onOpenTasks: (agent: Agent) => void;
 }) {
   const { t } = useTranslation();
+  const { runtimeAgent, statusLabel } = useRosterStatus(serverId, agent.paseoAgentId);
+  const metadata = [t(`swarm.roles.${current ? "supervisor" : agent.roleClass}`), statusLabel]
+    .filter(Boolean)
+    .join(", ");
   const handlePress = useCallback(() => onOpen(agent), [agent, onOpen]);
   const handleTasks = useCallback(() => onOpenTasks(agent), [agent, onOpenTasks]);
   return (
     <View style={styles.rosterEntry}>
-      <Pressable style={styles.rosterEntryMain} onPress={handlePress} accessibilityRole="menuitem">
-        <ThemedUsers size={14} uniProps={mutedColorMapping} />
+      <Pressable
+        style={styles.rosterEntryMain}
+        onPress={handlePress}
+        accessibilityRole="menuitem"
+        accessibilityLabel={`${agent.name}, ${metadata}`}
+      >
+        <RosterStatusMarker agent={runtimeAgent} />
         <View style={styles.rosterEntryText}>
           <Text style={styles.rosterName}>{agent.name}</Text>
-          <Text style={styles.rosterMeta}>
-            {t(`swarm.roles.${current ? "supervisor" : agent.roleClass}`)}
-          </Text>
+          <Text style={styles.rosterMeta}>{metadata}</Text>
         </View>
       </Pressable>
       <Button
@@ -733,20 +816,27 @@ function RosterEntry({
 }
 
 function RosterMenuEntry({
+  serverId,
   agent,
   onOpen,
   onOpenTasks,
 }: {
+  serverId: string;
   agent: Agent;
   onOpen: (agent: Agent) => void;
   onOpenTasks: (agent: Agent) => void;
 }) {
   const { t } = useTranslation();
+  const { runtimeAgent, statusLabel } = useRosterStatus(serverId, agent.paseoAgentId);
+  const leading = useMemo(() => <RosterStatusMarker agent={runtimeAgent} />, [runtimeAgent]);
+  const description = [t(`swarm.roles.${agent.roleClass}`), statusLabel].filter(Boolean).join(", ");
   const open = useCallback(() => onOpen(agent), [agent, onOpen]);
   const tasks = useCallback(() => onOpenTasks(agent), [agent, onOpenTasks]);
   return (
     <>
-      <DropdownMenuItem onSelect={open}>{agent.name}</DropdownMenuItem>
+      <DropdownMenuItem onSelect={open} leading={leading} description={description}>
+        {agent.name}
+      </DropdownMenuItem>
       <DropdownMenuItem onSelect={tasks}>
         {t("swarm.sidebar.tasksFor", { name: agent.name })}
       </DropdownMenuItem>
@@ -1153,6 +1243,13 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.md,
   },
   rosterEntryText: { flex: 1, minWidth: 0 },
+  rosterStatusSlot: {
+    width: 14,
+    height: 14,
+    flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   rosterEntryMain: {
     flex: 1,
     minWidth: 0,
