@@ -27,6 +27,7 @@ import { useStoreWithEqualityFn } from "zustand/traditional";
 import { z } from "zod";
 import { AGENT_LIFECYCLE_STATUSES } from "@getpaseo/protocol/agent-lifecycle";
 import { AgentStatusDot } from "@/components/agent-status-dot";
+import { StatusRing } from "@/components/status-ring";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import { Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/segmented-control";
@@ -53,7 +54,7 @@ import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
 import { builtinSidebarNavShortcutAction } from "@/sidebar-nav/model";
 import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
 import { useSessionStore, type Agent as SessionAgent } from "@/stores/session-store";
-import { deriveSidebarStateBucket } from "@/utils/sidebar-agent-state";
+import { deriveSidebarStateBucket, type SidebarStateBucket } from "@/utils/sidebar-agent-state";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import {
   applyStoredOrdering,
@@ -718,7 +719,7 @@ function useRosterStatus(serverId: string, agentId: string) {
     return session?.agents.get(agentId) ?? session?.agentDetails.get(agentId) ?? null;
   });
   if (!runtimeAgent || !AGENT_LIFECYCLE_STATUSES.some((status) => status === runtimeAgent.status)) {
-    return { runtimeAgent: null, statusLabel: null };
+    return { runtimeAgent: null, statusLabel: null, bucket: null };
   }
   const pendingPermissionCount = runtimeAgent.pendingPermissions.length;
   const bucket = deriveSidebarStateBucket({
@@ -740,10 +741,32 @@ function useRosterStatus(serverId: string, agentId: string) {
   } else {
     statusLabel = t(`agentList.status.${runtimeAgent.status}`);
   }
-  return { runtimeAgent, statusLabel };
+  return { runtimeAgent, statusLabel, bucket };
 }
 
-function RosterStatusMarker({ agent }: { agent: SessionAgent | null }) {
+function RosterStatusMarker({
+  agent,
+  bucket,
+}: {
+  agent: SessionAgent | null;
+  bucket: SidebarStateBucket | null;
+}) {
+  let marker: ReactNode;
+  if (!agent) {
+    marker = <ThemedUsers size={14} uniProps={mutedColorMapping} />;
+  } else if (bucket === "running") {
+    marker = <StatusRing />;
+  } else {
+    marker = (
+      <AgentStatusDot
+        status={agent.status}
+        requiresAttention={agent.requiresAttention}
+        attentionReason={agent.attentionReason}
+        pendingPermissionCount={agent.pendingPermissions.length}
+        showInactive
+      />
+    );
+  }
   return (
     <View
       style={styles.rosterStatusSlot}
@@ -753,17 +776,7 @@ function RosterStatusMarker({ agent }: { agent: SessionAgent | null }) {
       importantForAccessibility="no-hide-descendants"
       aria-hidden
     >
-      {agent ? (
-        <AgentStatusDot
-          status={agent.status}
-          requiresAttention={agent.requiresAttention}
-          attentionReason={agent.attentionReason}
-          pendingPermissionCount={agent.pendingPermissions.length}
-          showInactive
-        />
-      ) : (
-        <ThemedUsers size={14} uniProps={mutedColorMapping} />
-      )}
+      {marker}
     </View>
   );
 }
@@ -782,7 +795,7 @@ function RosterEntry({
   onOpenTasks: (agent: Agent) => void;
 }) {
   const { t } = useTranslation();
-  const { runtimeAgent, statusLabel } = useRosterStatus(serverId, agent.paseoAgentId);
+  const { runtimeAgent, statusLabel, bucket } = useRosterStatus(serverId, agent.paseoAgentId);
   const metadata = [t(`swarm.roles.${current ? "supervisor" : agent.roleClass}`), statusLabel]
     .filter(Boolean)
     .join(", ");
@@ -796,7 +809,7 @@ function RosterEntry({
         accessibilityRole="menuitem"
         accessibilityLabel={`${agent.name}, ${metadata}`}
       >
-        <RosterStatusMarker agent={runtimeAgent} />
+        <RosterStatusMarker agent={runtimeAgent} bucket={bucket} />
         <View style={styles.rosterEntryText}>
           <Text style={styles.rosterName}>{agent.name}</Text>
           <Text style={styles.rosterMeta}>{metadata}</Text>
@@ -827,8 +840,11 @@ function RosterMenuEntry({
   onOpenTasks: (agent: Agent) => void;
 }) {
   const { t } = useTranslation();
-  const { runtimeAgent, statusLabel } = useRosterStatus(serverId, agent.paseoAgentId);
-  const leading = useMemo(() => <RosterStatusMarker agent={runtimeAgent} />, [runtimeAgent]);
+  const { runtimeAgent, statusLabel, bucket } = useRosterStatus(serverId, agent.paseoAgentId);
+  const leading = useMemo(
+    () => <RosterStatusMarker agent={runtimeAgent} bucket={bucket} />,
+    [runtimeAgent, bucket],
+  );
   const description = [t(`swarm.roles.${agent.roleClass}`), statusLabel].filter(Boolean).join(", ");
   const open = useCallback(() => onOpen(agent), [agent, onOpen]);
   const tasks = useCallback(() => onOpenTasks(agent), [agent, onOpenTasks]);
