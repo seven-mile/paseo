@@ -621,10 +621,6 @@ Do NOT use browser history (back/forward). Always navigate by clicking UI elemen
 `packages/app` exports a single-page Expo web app and deploys the `dist/`
 directory to Cloudflare Pages with `npm run deploy:web --workspace=@getpaseo/app`.
 
-That command targets the upstream project. For an independently hosted fork,
-use the [manual WebUI deployment setup](webui-deployment.md), which keeps the
-Cloudflare account/project explicit and disables automatic local-daemon probes.
-
 PWA install metadata lives in `packages/app/public/manifest.json` and is linked
 from `packages/app/public/index.html`. Keep the install icons in `public/` so
 Cloudflare serves them from stable root URLs after `expo export`.
