@@ -1,0 +1,185 @@
+name: Deploy Fork Web UI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-fork-webui.yml"
+      - "packages/app/src/runtime/host-runtime.ts"
+      - "packages/app/src/runtime/host-runtime.test.ts"
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Source branch, tag or commit to resolve once and build."
+        required: false
+        default: "main"
+        type: string
+      deploy:
+        description: "Deploy the archived build to your Cloudflare Pages production project."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-webui-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  webui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      REQUESTED_SOURCE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.source_ref || 'main' }}
+      DEPLOY_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+      APP_VARIANT: production
+      EXPO_NO_DOTENV: "1"
+      PASEO_WEB_PLATFORM: ""
+      EXPO_PUBLIC_PASEO_AUTO_CONNECT: "false"
+
+    steps:
+      - name: Require deployment configuration
+        if: github.event_name == 'workflow_dispatch' && inputs.deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "Missing repository variable CLOUDFLARE_ACCOUNT_ID"; exit 1; }
+          test -n "$PAGES_PROJECT" || { echo "Missing repository variable CLOUDFLARE_PAGES_PROJECT"; exit 1; }
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing repository secret CLOUDFLARE_API_TOKEN"; exit 1; }
+
+      - name: Checkout workflow revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve and pin product source
+        id: source
+        run: |
+          set -euo pipefail
+          source_ref="$REQUESTED_SOURCE_REF"
+          source_branch="${source_ref#refs/heads/}"
+          if git show-ref --verify --quiet "refs/remotes/origin/$source_branch"; then
+            source_ref="refs/remotes/origin/$source_branch"
+          fi
+          source_sha="$(git rev-parse --verify --end-of-options "$source_ref^{commit}")"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Source must resolve to a 40-character commit SHA"; exit 1; }
+          git checkout --detach "$source_sha"
+          printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+          printf 'Product source: %s\nWorkflow revision: %s\n' "$source_sha" "$GITHUB_SHA"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Require source support for manual connection
+        id: support
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const { execFileSync } = require('node:child_process');
+          const source = fs.readFileSync('packages/app/src/runtime/host-runtime.ts', 'utf8');
+          if (!/\bEXPO_PUBLIC_PASEO_AUTO_CONNECT\b/.test(source)) {
+            throw new Error('Source lacks EXPO_PUBLIC_PASEO_AUTO_CONNECT support. Review and integrate the patch into main, or select the prepared source_ref; setting the environment alone is insufficient.');
+          }
+          const workflowPackage = JSON.parse(execFileSync('git', ['show', `${process.env.GITHUB_SHA}:package.json`], { encoding: 'utf8' }));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `workflow_version=${workflowPackage.version}\n`);
+          console.log('Source flag identifier present; this static check is not browser QA.');
+          NODE
+
+      - name: Install dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Build browser Web UI once
+        run: |
+          set -euo pipefail
+          unset PASEO_WEB_PLATFORM EXPO_PUBLIC_LOCAL_DAEMON EXPO_PUBLIC_PASEO_DEV_BUILD_LABEL
+          npm run build:web --workspace=@getpaseo/app
+
+      - name: Archive assets and build identity
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          WORKFLOW_VERSION: ${{ steps.support.outputs.workflow_version }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const crypto = require('node:crypto');
+          const { createRequire } = require('node:module');
+          const { execFileSync } = require('node:child_process');
+          const root = path.resolve('packages/app/dist');
+          const limit = 25 * 1024 * 1024;
+          const hash = data => crypto.createHash('sha256').update(data).digest('hex');
+          const assets = [];
+          function visit(directory) {
+            for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+              const filename = path.join(directory, entry.name);
+              if (entry.isDirectory()) visit(filename);
+              else if (entry.isFile()) {
+                const bytes = fs.statSync(filename).size;
+                if (bytes > limit) throw new Error(`Pages asset exceeds 25 MiB: ${path.relative(root, filename)} (${bytes} bytes)`);
+                assets.push({ path: path.relative(root, filename), bytes, sha256: hash(fs.readFileSync(filename)) });
+              } else throw new Error(`Unsupported asset file type: ${filename}`);
+            }
+          }
+          if (!fs.statSync(path.join(root, 'index.html')).isFile()) throw new Error('Missing exported index.html');
+          if (execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() !== process.env.SOURCE_SHA) throw new Error('Product checkout changed during build');
+          visit(root);
+          fs.mkdirSync('webui-artifact', { recursive: true });
+          const archive = 'webui-artifact/webui.tar.gz';
+          execFileSync('tar', ['-czf', archive, '-C', 'packages/app', 'dist'], { stdio: 'inherit' });
+          const app = JSON.parse(fs.readFileSync('packages/app/package.json', 'utf8'));
+          const product = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const appRequire = createRequire(path.resolve('packages/app/package.json'));
+          const manifest = {
+            repository: process.env.GITHUB_REPOSITORY,
+            source: { requestedRef: process.env.REQUESTED_SOURCE_REF, commit: process.env.SOURCE_SHA, version: product.version, appVersion: app.version },
+            workflow: { commit: process.env.GITHUB_SHA, version: process.env.WORKFLOW_VERSION, runUrl: `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}` },
+            build: { platform: 'browser', autoConnectEnvironment: process.env.EXPO_PUBLIC_PASEO_AUTO_CONNECT, sourceFlagSupportCheck: 'identifier-present', node: process.version, npm: execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim(), wrangler: appRequire('wrangler/package.json').version },
+            pagesAssets: { limitBytes: limit, largestAssetBytes: Math.max(...assets.map(asset => asset.bytes)), files: assets },
+            archive: { filename: 'webui.tar.gz', bytes: fs.statSync(archive).size, sha256: hash(fs.readFileSync(archive)) },
+            deployment: { requested: process.env.DEPLOY_REQUESTED === 'true', accountId: process.env.CLOUDFLARE_ACCOUNT_ID || null, project: process.env.PAGES_PROJECT || null, branch: 'main' },
+          };
+          const json = JSON.stringify(manifest, null, 2) + '\n';
+          fs.writeFileSync('webui-artifact/manifest.json', json);
+          fs.writeFileSync('webui-artifact/SHA256SUMS', `${manifest.archive.sha256}  webui.tar.gz\n${hash(json)}  manifest.json\n`);
+          console.log(JSON.stringify({ source: manifest.source, workflow: manifest.workflow, archive: manifest.archive, fileCount: assets.length, largestAssetBytes: manifest.pagesAssets.largestAssetBytes }, null, 2));
+          NODE
+
+      - name: Upload Web UI before deployment
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webui-${{ steps.source.outputs.sha }}
+          path: webui-artifact/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Record archived build
+        env:
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const manifest = JSON.parse(fs.readFileSync('webui-artifact/manifest.json', 'utf8'));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Web UI artifact\n\nProduct: \`${manifest.source.commit}\` (${manifest.source.appVersion})\n\nWorkflow: \`${manifest.workflow.commit}\` (${manifest.workflow.version})\n\n[Download artifact](${process.env.ARTIFACT_URL})\n\nActions ZIP digest: \`${process.env.ARTIFACT_DIGEST}\`\n\nInner tar SHA256: \`${manifest.archive.sha256}\`\n\nDeploy requested: ${manifest.deployment.requested}; Pages branch: main.\n`);
+          NODE
+
+      - name: Deploy archived browser assets to your production project
+        if: github.event_name == 'workflow_dispatch' && inputs.deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          npm exec --workspace=@getpaseo/app --no -- wrangler pages deploy "$GITHUB_WORKSPACE/packages/app/dist" \
+            --project-name "$PAGES_PROJECT" --branch main --commit-hash "$SOURCE_SHA"

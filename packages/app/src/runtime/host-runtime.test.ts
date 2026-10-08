@@ -4020,6 +4020,38 @@ describe("readInitialDaemonConnectionHint", () => {
 });
 
 describe("HostRuntimeStore initial connection hint bootstrap", () => {
+  it.each([
+    { hint: null, override: undefined },
+    { hint: null, override: "localhost:6767" },
+    { hint: { listen: "localhost:6767", useTls: false }, override: undefined },
+  ])("skips automatic web connections when disabled: %j", async ({ hint, override }) => {
+    vi.stubEnv("EXPO_PUBLIC_PASEO_AUTO_CONNECT", "false");
+    vi.stubEnv("EXPO_PUBLIC_LOCAL_DAEMON", override);
+    const connectToDaemon = vi.fn(async () => {
+      throw new Error("automatic connection must not run");
+    });
+    const readInitialConnectionHint = vi.fn(() => hint);
+    const store = new HostRuntimeStore({
+      storage: createMemoryHostRuntimeStorage(),
+      deps: {
+        createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
+        connectToDaemon,
+        readInitialConnectionHint,
+        getClientId: async () => "cid_independent_web",
+      },
+    });
+    try {
+      await store.boot();
+      expect(store.isHostRegistryLoaded()).toBe(true);
+      expect(store.getHosts()).toHaveLength(0);
+      expect(readInitialConnectionHint).not.toHaveBeenCalled();
+      expect(connectToDaemon).not.toHaveBeenCalled();
+    } finally {
+      store.syncHosts([]);
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("starts saved remote-host probes while desktop daemon startup is still pending", async () => {
     const host = makeHost({
       serverId: "srv_remote_saved",
