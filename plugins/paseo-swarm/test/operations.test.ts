@@ -21,7 +21,7 @@ import {
   bindPreparedAgentRpc,
 } from "../shared/swarm";
 
-test("children default to the caller workspace, isolated placement preserves roster, and foreign occupants are rejected", async () => {
+test("supervisors require independent placement, workers keep caller defaults, and foreign occupants are rejected", async () => {
   const home = mkdtempSync(join(tmpdir(), "swarm-operations-"));
   const previousHome = process.env.PASEO_HOME;
   const previousPwa = process.env.PASEO_SWARM_PWA_ROOT;
@@ -137,6 +137,7 @@ test("children default to the caller workspace, isolated placement preserves ros
             name: "missing-role",
             roleClass: "supervisor",
             role: "missing",
+            workspaceId: "supervisor-workspace",
             actorPaseoAgentId: planner.paseoAgentId,
             reportsTo: "planner",
             brief: "Survey",
@@ -162,6 +163,27 @@ test("children default to the caller workspace, isolated placement preserves ros
     );
     assert.equal(state.agents.length, 1);
     assert.equal(workspaceCreations.length, 0);
+    const placementError =
+      /Prepare a separate workspace for the supervisor and pass its workspaceId/;
+    for (const workspaceId of [undefined, null, "planner-workspace"]) {
+      await assert.rejects(
+        async () =>
+          invoke(
+            createAgentRpc.name,
+            createAgentRpc.input.parse({
+              name: "invalid-placement",
+              roleClass: "supervisor",
+              role: "supervisor",
+              actorPaseoAgentId: planner.paseoAgentId,
+              reportsTo: "planner",
+              workspaceId,
+            }),
+          ),
+        placementError,
+      );
+      assert.equal(state.agents.length, 1);
+      assert.equal(agentCreations.length, 0);
+    }
     const supervisor = (await invoke(
       createAgentRpc.name,
       createAgentRpc.input.parse({
@@ -210,8 +232,12 @@ test("children default to the caller workspace, isolated placement preserves ros
           workspaceId,
         }),
       ) as Promise<AgentRecord>;
-    const defaultSupervisor = await createChild(planner, "default-supervisor");
-    assert.equal(defaultSupervisor.workspaceId, planner.workspaceId);
+    const peerSupervisor = await createChild(
+      planner,
+      "peer-supervisor",
+      "peer-supervisor-workspace",
+    );
+    assert.equal(peerSupervisor.workspaceId, "peer-supervisor-workspace");
     const parallel = await createChild(supervisor, "parallel", "parallel-workspace");
     assert.equal(parallel.workspaceId, "parallel-workspace");
     assert.equal(parallel.reportsTo, supervisor.qualifiedName);
@@ -224,8 +250,8 @@ test("children default to the caller workspace, isolated placement preserves ros
       /outside planner's direct roster/,
     );
     await assert.rejects(
-      async () => createChild(defaultSupervisor, "sibling-conflict", "parallel-workspace"),
-      /outside planner.default-supervisor's direct roster/,
+      async () => createChild(peerSupervisor, "sibling-conflict", "parallel-workspace"),
+      /outside planner.peer-supervisor's direct roster/,
     );
     await assert.rejects(
       async () => createChild(supervisor, "parent-conflict", "planner-workspace"),
