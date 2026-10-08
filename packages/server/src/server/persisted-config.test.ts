@@ -1,4 +1,12 @@
-import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
@@ -667,6 +675,24 @@ describe("PersistedConfigSchema voice mode config", () => {
 });
 
 describe("loadPersistedConfig", () => {
+  test("uses the fork listen default without rewriting an existing listen", () => {
+    const home = createTempHome();
+    const configPath = path.join(home, "config.json");
+    try {
+      expect(readPersistedConfig(home, { defaultsIfMissing: true }).daemon?.listen).toBe(
+        "127.0.0.1:6769",
+      );
+      expect(existsSync(configPath)).toBe(false);
+      expect(loadPersistedConfig(home).daemon?.listen).toBe("127.0.0.1:6769");
+      const existing = '{"version":1,"daemon":{"listen":"127.0.0.1:6767"}}\n';
+      writeFileSync(configPath, existing);
+      expect(loadPersistedConfig(home).daemon?.listen).toBe("127.0.0.1:6767");
+      expect(readFileSync(configPath, "utf8")).toBe(existing);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("materializes relay disabled for a new Paseo home", () => {
     const home = createTempHome();
     try {

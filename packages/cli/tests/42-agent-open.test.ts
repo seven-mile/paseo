@@ -25,7 +25,7 @@ await chmod(fakeDesktop, 0o755);
 
 try {
   {
-    console.log("Test 1: an unknown agent ID fails without opening Desktop");
+    console.log("Test 1: agent open is unsupported without opening Desktop");
     const result = await runPaseoCli(daemon, [
       "agent",
       "open",
@@ -35,15 +35,15 @@ try {
       "--json",
     ]);
 
-    assert.notStrictEqual(result.exitCode, 0, "open should fail for an unknown agent");
-    assert.match(JSON.parse(result.stderr).error.message, /Agent not found: does-not-exist/);
+    assert.notStrictEqual(result.exitCode, 0, "Desktop launch should be unsupported");
+    assert.match(JSON.parse(result.stderr).error.message, /paseo-swarm does not launch Desktop/);
     // Give a wrongly spawned detached app time to write its record.
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.ok(
       !existsSync(launchRecord),
       `Desktop should not open, but was launched with: ${existsSync(launchRecord) ? await readFile(launchRecord, "utf8") : ""}`,
     );
-    console.log("✓ unknown agent ID fails without opening Desktop\n");
+    console.log("✓ agent open is unsupported without opening Desktop\n");
   }
 } finally {
   await daemon.stop();

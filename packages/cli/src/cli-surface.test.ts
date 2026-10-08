@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { createCli } from "./cli.js";
 
 describe("canonical CLI surface", () => {
+  it("shows the fork command and defaults while retaining onboard", () => {
+    const cli = createCli();
+    expect(cli.name()).toBe("paseo-swarm");
+    expect(cli.helpInformation()).toContain("~/.paseo-swarm");
+    const onboard = cli.commands.find((command) => command.name() === "onboard");
+    expect(onboard?.helpInformation()).toContain("default: 6769");
+  });
   it("offers daemon host selection as a global option", () => {
     expect(createCli().helpInformation()).toContain("--host <host>");
   });
@@ -65,12 +72,13 @@ describe("canonical CLI surface", () => {
     expect(scheduleCreate?.helpInformation()).toContain("--thinking <id>");
   });
 
-  it("offers opening an existing agent in the desktop app", () => {
+  it("keeps agent open discoverable with an unsupported Desktop description", () => {
     const agent = createCli().commands.find((command) => command.name() === "agent");
     const open = agent?.commands.find((command) => command.name() === "open");
 
     expect(open?.helpInformation()).toContain("<agent-id>");
     expect(open?.helpInformation()).toContain("--server <server-id>");
+    expect(open?.helpInformation()).toContain("Desktop launch is unsupported");
   });
 
   it("offers the complete local plugin lifecycle", () => {

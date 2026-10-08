@@ -118,15 +118,15 @@ function printNextSteps(pairingUrl: string | null, paseoHome: string, richUi: bo
       ? "1. Open Paseo and scan the QR code above, or paste the pairing link."
       : "1. Open Paseo and connect to your daemon.",
     "2. Web app: https://app.paseo.sh",
-    "3. Desktop app: https://github.com/getpaseo/paseo/releases/latest",
+    "3. Desktop launch is unsupported by paseo-swarm; connect using the Web UI.",
     "4. Docs: https://paseo.sh/docs",
-    `5. Example: paseo run --home ${JSON.stringify(paseoHome)} --output-schema schema.json "extract fields"`,
+    `5. Example: paseo-swarm run --home ${JSON.stringify(paseoHome)} --output-schema schema.json "extract fields"`,
   ];
   const quickReferenceLines = [
-    "1. paseo --help",
-    `2. paseo ls --home ${JSON.stringify(paseoHome)}`,
-    `3. paseo run --home ${JSON.stringify(paseoHome)} "your prompt"`,
-    `4. paseo status --home ${JSON.stringify(paseoHome)}`,
+    "1. paseo-swarm --help",
+    `2. paseo-swarm ls --home ${JSON.stringify(paseoHome)}`,
+    `3. paseo-swarm run --home ${JSON.stringify(paseoHome)} "your prompt"`,
+    `4. paseo-swarm status --home ${JSON.stringify(paseoHome)}`,
     `5. Daemon logs: ${daemonLogPath}`,
   ];
 
@@ -152,7 +152,7 @@ export function onboardCommand(): Command {
   return addLocalDaemonOptions(new Command("onboard"))
     .description("Run first-time setup, start daemon, and print pairing instructions")
     .option("--listen <listen>", "Listen target (host:port, port, or unix socket path)")
-    .option("--port <port>", "Port to listen on (default: 6767)")
+    .option("--port <port>", "Port to listen on (default: 6769)")
     .option("--relay", "Enable relay connection without prompting")
     .option("--no-relay", "Disable relay connection")
     .option("--no-mcp", "Disable the Agent MCP HTTP endpoint")

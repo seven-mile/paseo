@@ -4,17 +4,19 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { startDaemonInstance, resolvePaseoHome } from "@getpaseo/server/daemon-control";
 const require = createRequire(import.meta.url);
-function resolveServerRunnerFromDir(currentDir: string): string | null {
+export function resolveServerRunnerFromDir(currentDir: string): string | null {
   const packageJsonPath = path.join(currentDir, "package.json");
   if (!existsSync(packageJsonPath)) return null;
   try {
     const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as { name?: string };
-    if (packageJson.name !== "@getpaseo/server") return null;
+    if (packageJson.name !== "@getpaseo/server" && packageJson.name !== "@paseo-swarm/server")
+      return null;
     const distRunner = path.join(currentDir, "dist", "scripts", "supervisor-entrypoint.js");
     if (existsSync(distRunner)) {
       return distRunner;
     }
-    return path.join(currentDir, "scripts", "supervisor-entrypoint.ts");
+    const sourceRunner = path.join(currentDir, "scripts", "supervisor-entrypoint.ts");
+    return existsSync(sourceRunner) ? sourceRunner : null;
   } catch {
     return null;
   }
@@ -103,7 +105,7 @@ export function rejectRemovedLaunchFlags(command: Command): Command {
       if (command.getOptionValueSource(name) !== "cli") continue;
       throw {
         code: "REMOVED_LAUNCH_OPTION",
-        message: `${flag.split(" ")[0]} was removed. ${configPath ? `Use paseo daemon config set ${configPath} <value> --home <path>, then start or restart.` : "Use paseo daemon run --home <path> for foreground deployment."} Deployment environment overrides belong to paseo daemon run.`,
+        message: `${flag.split(" ")[0]} was removed. ${configPath ? `Use paseo-swarm daemon config set ${configPath} <value> --home <path>, then start or restart.` : "Use paseo-swarm daemon run --home <path> for foreground deployment."} Deployment environment overrides belong to paseo-swarm daemon run.`,
       };
     }
   });

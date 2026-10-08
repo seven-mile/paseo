@@ -46,7 +46,7 @@ export function createCli(): Command {
   const program = new Command();
 
   program
-    .name("paseo")
+    .name("paseo-swarm")
     .description("Paseo CLI - control your AI coding agents from the command line")
     .version(VERSION, "-v, --version", "output the version number")
     // Global output options

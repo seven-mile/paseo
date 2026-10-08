@@ -45,7 +45,7 @@ assert.equal(
 process.chdir(originalCwd);
 console.log("  ✅ existing directories open as projects, but known commands still win");
 
-console.log("  Testing desktop CLI passthrough guard...");
+console.log("  Testing fork Desktop launch guard...");
 const originalWrite = process.stderr.write.bind(process.stderr);
 const stderrChunks: string[] = [];
 process.stderr.write = ((chunk: string | Uint8Array) => {
@@ -62,9 +62,9 @@ await openDesktopWithProject(existingProject);
 
 process.stderr.write = originalWrite;
 assert.equal(process.exitCode, 1);
-assert.match(stderrChunks.join(""), /desktop CLI passthrough mode/);
+assert.match(stderrChunks.join(""), /paseo-swarm does not launch Desktop/);
 process.exitCode = previousExitCode;
 process.env.PASEO_DESKTOP_CLI = previousDesktopCli;
-console.log("  ✅ desktop CLI passthrough mode is rejected");
+console.log("  ✅ fork Desktop launch is rejected");
 
 console.log("\n✅ Phase 32: Open Project CLI Tests PASSED");
