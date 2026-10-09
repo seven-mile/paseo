@@ -41,9 +41,11 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { isNative, isWeb } from "@/constants/platform";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { openSwarmTasks } from "./navigation";
+import { useMenuContext } from "@/components/ui/menu/menu-context";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuHint,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -120,6 +122,7 @@ const ThemedPlus = withUnistyles(Plus);
 const ThemedChevronDown = withUnistyles(ChevronDown);
 const ThemedChevronRight = withUnistyles(ChevronRight);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+const rosterMenuItemData = { menuItem: "true", menuDisabled: "false" } as const;
 
 function useOrderedSwarmAgents(agents: Agent[], scope: string) {
   const order = useSidebarOrderStore(
@@ -663,6 +666,9 @@ function RosterHoverCard({
               onOpenTasks={onOpenTasks}
             />
           ))}
+          {members.length === 0 ? (
+            <DropdownMenuHint>{t("swarm.sidebar.noWorkers")}</DropdownMenuHint>
+          ) : null}
           <DropdownMenuItem onSelect={onAddWorker}>{t("swarm.sidebar.addWorker")}</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -678,35 +684,36 @@ function RosterHoverCard({
         </View>
       </HoverCardTrigger>
       <HoverCardContent placement="right" role="menu" style={styles.rosterCard}>
-        <Text style={styles.rosterTitle}>{t("swarm.sidebar.agentTeam")}</Text>
-        <RosterEntry
-          serverId={serverId}
-          agent={agent}
-          current
-          onOpen={onOpen}
-          onOpenTasks={onOpenTasks}
-        />
-        {members.map((member) => (
+        <ScrollView style={styles.rosterScroll}>
+          <Text style={styles.rosterTitle}>{t("swarm.sidebar.agentTeam")}</Text>
           <RosterEntry
-            key={member.paseoAgentId}
             serverId={serverId}
-            agent={member}
+            agent={agent}
             onOpen={onOpen}
             onOpenTasks={onOpenTasks}
           />
-        ))}
-        {members.length === 0 ? (
-          <Text style={styles.hint}>{t("swarm.sidebar.noWorkers")}</Text>
-        ) : null}
-        <Pressable
-          accessibilityRole="menuitem"
-          accessibilityLabel={t("swarm.sidebar.addWorkerUnder", { name: agent.name })}
-          onPress={onAddWorker}
-          style={styles.rosterAction}
-        >
-          <ThemedPlus size={14} uniProps={mutedColorMapping} />
-          <Text style={styles.rosterActionText}>{t("swarm.sidebar.addWorker")}</Text>
-        </Pressable>
+          {members.map((member) => (
+            <RosterEntry
+              key={member.paseoAgentId}
+              serverId={serverId}
+              agent={member}
+              onOpen={onOpen}
+              onOpenTasks={onOpenTasks}
+            />
+          ))}
+          {members.length === 0 ? (
+            <Text style={styles.hint}>{t("swarm.sidebar.noWorkers")}</Text>
+          ) : null}
+          <Pressable
+            accessibilityRole="menuitem"
+            accessibilityLabel={t("swarm.sidebar.addWorkerUnder", { name: agent.name })}
+            onPress={onAddWorker}
+            style={styles.rosterAction}
+          >
+            <ThemedPlus size={14} uniProps={mutedColorMapping} />
+            <Text style={styles.rosterActionText}>{t("swarm.sidebar.addWorker")}</Text>
+          </Pressable>
+        </ScrollView>
       </HoverCardContent>
     </HoverCard>
   );
@@ -784,21 +791,18 @@ function RosterStatusMarker({
 function RosterEntry({
   serverId,
   agent,
-  current = false,
   onOpen,
   onOpenTasks,
 }: {
   serverId: string;
   agent: Agent;
-  current?: boolean;
   onOpen: (agent: Agent) => void;
   onOpenTasks: (agent: Agent) => void;
 }) {
   const { t } = useTranslation();
+  const isCompact = useIsCompactFormFactor();
   const { runtimeAgent, statusLabel, bucket } = useRosterStatus(serverId, agent.paseoAgentId);
-  const metadata = [t(`swarm.roles.${current ? "supervisor" : agent.roleClass}`), statusLabel]
-    .filter(Boolean)
-    .join(", ");
+  const metadata = [t(`swarm.roles.${agent.roleClass}`), statusLabel].filter(Boolean).join(", ");
   const handlePress = useCallback(() => onOpen(agent), [agent, onOpen]);
   const handleTasks = useCallback(() => onOpenTasks(agent), [agent, onOpenTasks]);
   return (
@@ -808,19 +812,26 @@ function RosterEntry({
         onPress={handlePress}
         accessibilityRole="menuitem"
         accessibilityLabel={`${agent.name}, ${metadata}`}
+        testID={`swarm-roster-agent-${agent.paseoAgentId}`}
+        dataSet={rosterMenuItemData}
       >
         <RosterStatusMarker agent={runtimeAgent} bucket={bucket} />
         <View style={styles.rosterEntryText}>
-          <Text style={styles.rosterName}>{agent.name}</Text>
+          <Text style={styles.rosterName} numberOfLines={2}>
+            {agent.name}
+          </Text>
           <Text style={styles.rosterMeta}>{metadata}</Text>
         </View>
       </Pressable>
       <Button
         variant="ghost"
-        size="xs"
+        size={isCompact ? "md" : "xs"}
+        style={styles.rosterTasks}
         onPress={handleTasks}
+        accessibilityRole="menuitem"
         accessibilityLabel={t("swarm.sidebar.openTasks", { name: agent.name })}
         testID={`swarm-roster-tasks-${agent.paseoAgentId}`}
+        dataSet={rosterMenuItemData}
       >
         {t("swarm.tasks.title")}
       </Button>
@@ -839,25 +850,16 @@ function RosterMenuEntry({
   onOpen: (agent: Agent) => void;
   onOpenTasks: (agent: Agent) => void;
 }) {
-  const { t } = useTranslation();
-  const { runtimeAgent, statusLabel, bucket } = useRosterStatus(serverId, agent.paseoAgentId);
-  const leading = useMemo(
-    () => <RosterStatusMarker agent={runtimeAgent} bucket={bucket} />,
-    [runtimeAgent, bucket],
+  const { selectItem } = useMenuContext("RosterMenuEntry");
+  const open = useCallback(
+    (member: Agent) => selectItem(() => onOpen(member), true),
+    [onOpen, selectItem],
   );
-  const description = [t(`swarm.roles.${agent.roleClass}`), statusLabel].filter(Boolean).join(", ");
-  const open = useCallback(() => onOpen(agent), [agent, onOpen]);
-  const tasks = useCallback(() => onOpenTasks(agent), [agent, onOpenTasks]);
-  return (
-    <>
-      <DropdownMenuItem onSelect={open} leading={leading} description={description}>
-        {agent.name}
-      </DropdownMenuItem>
-      <DropdownMenuItem onSelect={tasks}>
-        {t("swarm.sidebar.tasksFor", { name: agent.name })}
-      </DropdownMenuItem>
-    </>
+  const tasks = useCallback(
+    (member: Agent) => selectItem(() => onOpenTasks(member), true),
+    [onOpenTasks, selectItem],
   );
+  return <RosterEntry serverId={serverId} agent={agent} onOpen={open} onOpenTasks={tasks} />;
 }
 
 function HostRoster({
@@ -1116,7 +1118,7 @@ export function SwarmSidebar({
   );
 }
 
-const styles = StyleSheet.create((theme) => ({
+const styles = StyleSheet.create((theme, runtime) => ({
   container: { flex: 1 },
   list: { flex: 1 },
   // Keep the Swarm list in the same outer rail as Classical. The rows below intentionally
@@ -1229,8 +1231,9 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
   },
   teamTrigger: {
-    width: 24,
-    height: 24,
+    width: { xs: 44, md: 24 },
+    height: { xs: 44, md: 24 },
+    flexShrink: 0,
     alignItems: "center",
     justifyContent: "center",
     borderRadius: theme.borderRadius.md,
@@ -1244,7 +1247,13 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.md,
   },
   rosterActionText: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
-  rosterCard: { width: 220, padding: theme.spacing[2] },
+  rosterCard: {
+    width: 320,
+    maxWidth: Math.max(0, runtime.screen.width - 16),
+    maxHeight: Math.max(0, runtime.screen.height - 16),
+    padding: theme.spacing[2],
+  },
+  rosterScroll: { flexShrink: 1, minHeight: 0 },
   rosterTitle: {
     color: theme.colors.foreground,
     fontSize: theme.fontSize.sm,
@@ -1269,11 +1278,13 @@ const styles = StyleSheet.create((theme) => ({
   rosterEntryMain: {
     flex: 1,
     minWidth: 0,
+    minHeight: { xs: 44, md: 28 },
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
   },
-  rosterName: { color: theme.colors.foreground, fontSize: theme.fontSize.sm },
+  rosterTasks: { flexShrink: 0 },
+  rosterName: { color: theme.colors.foreground, fontSize: theme.fontSize.base },
   rosterMeta: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
   hint: {
     color: theme.colors.foregroundMuted,
