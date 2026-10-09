@@ -14,6 +14,7 @@ import { RenderProfile } from "@/utils/render-profiler";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
 import type { OpenInSidePaneSource } from "@/workspace-tabs/open-beside";
 import type { PaneHost } from "@/panels/panel-manifest";
+import { SwarmCanonicalLinkProvider } from "@/swarm/canonical-links";
 
 export interface WorkspacePaneContentModel {
   key: string;
@@ -156,7 +157,9 @@ export function WorkspacePaneContent({
     >
       <PaneProvider value={stablePaneContextValue}>
         <PaneFocusProvider value={paneFocusValue}>
-          <Component key={key} />
+          <SwarmCanonicalLinkProvider>
+            <Component key={key} />
+          </SwarmCanonicalLinkProvider>
         </PaneFocusProvider>
       </PaneProvider>
     </RenderProfile>

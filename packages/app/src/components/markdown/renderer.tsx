@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import {
   Image,
+  Platform,
   Pressable,
   Text,
   View,
@@ -46,6 +47,12 @@ import {
 import { groupMarkdownParts, type MarkdownPartGroup } from "./part-groups";
 import { colorMarkdownLinkChildren } from "./link-children";
 import { MarkdownLinkText } from "./link-text";
+import {
+  AssistantLinkPressProvider,
+  useAssistantLinkPress,
+  type AssistantLinkPress,
+} from "@/assistant-file-links/link-press-context";
+import { useMarkdownLinkPress } from "@/swarm/canonical-links";
 
 export type MarkdownStyles = Record<string, TextStyle & ViewStyle & { [key: string]: unknown }>;
 
@@ -96,6 +103,7 @@ export function MarkdownRenderer({
   topLevelMaxExceededItem,
   enableHtmlish = true,
 }: MarkdownRendererProps) {
+  const handleLinkPress = useMarkdownLinkPress(onLinkPress);
   const markdownRules = useMemo(() => rules ?? createSharedMarkdownRules(), [rules]);
   const parts = useMemo(
     () => (enableHtmlish ? splitHtmlishMarkdown(text) : [{ kind: "markdown" as const, text }]),
@@ -106,7 +114,7 @@ export function MarkdownRenderer({
       compact,
       rules: markdownRules,
       markdownit,
-      onLinkPress,
+      onLinkPress: handleLinkPress,
       allowedImageHandlers,
       topLevelMaxExceededItem,
     }),
@@ -115,7 +123,7 @@ export function MarkdownRenderer({
       compact,
       markdownRules,
       markdownit,
-      onLinkPress,
+      handleLinkPress,
       topLevelMaxExceededItem,
     ],
   );
@@ -418,6 +426,7 @@ export function MarkdownInheritedText({
   accessibilityRole,
   children,
 }: MarkdownInheritedTextProps) {
+  const linkPress = useAssistantLinkPress();
   const style = useMemo(
     () => [inheritedStyles, textStyle, overrideStyle],
     [inheritedStyles, textStyle, overrideStyle],
@@ -425,8 +434,8 @@ export function MarkdownInheritedText({
   return (
     <MarkdownTextSpan
       monoSurface={monoSurface}
-      onPress={onPress}
-      accessibilityRole={accessibilityRole}
+      onPress={onPress ?? linkPress?.onPress}
+      accessibilityRole={accessibilityRole ?? linkPress?.accessibilityRole}
       style={style}
     >
       {children}
@@ -476,6 +485,10 @@ function SharedMarkdownLink({
     void openExternalUrl(href);
   }, [href, onLinkPress]);
   const style = useMemo(() => [inheritedStyles, linkStyle], [inheritedStyles, linkStyle]);
+  const linkPress = useMemo<AssistantLinkPress>(
+    () => ({ onPress: handlePress, accessibilityRole: "link" }),
+    [handlePress],
+  );
 
   if (!isNative) {
     return (
@@ -485,7 +498,7 @@ function SharedMarkdownLink({
     );
   }
 
-  return (
+  const span = (
     <MarkdownInheritedText
       inheritedStyles={inheritedStyles}
       textStyle={linkStyle}
@@ -494,6 +507,11 @@ function SharedMarkdownLink({
     >
       {children}
     </MarkdownInheritedText>
+  );
+  return Platform.OS === "ios" ? (
+    <AssistantLinkPressProvider value={linkPress}>{span}</AssistantLinkPressProvider>
+  ) : (
+    span
   );
 }
 
