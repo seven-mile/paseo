@@ -133,6 +133,120 @@ test("scroll detector accounts for delayed wheel input and growth below the new 
   ).toHaveLength(1);
 });
 
+test("scroll detector separates entered image resizing from compensated scroll offsets", () => {
+  const before: ScrollFrame = {
+    at: 74816,
+    scrollTop: 2187,
+    scrollHeight: 103671,
+    viewportHeight: 800,
+    virtualized: true,
+    loading: false,
+    rows: [
+      { id: "image", top: -683, height: 560 },
+      { id: "below-image", top: -123, height: 100 },
+      { id: "reading", top: -23, height: 106 },
+    ],
+    anchor: "reading",
+    wheelTotal: 69120,
+    lastWheelAt: 74739.2,
+    inputFinishedAt: null,
+    imageLoads: 0,
+    mounted: 3,
+    unmounted: 0,
+  };
+  const recent = { ...before, at: 74700, wheelTotal: 68960 };
+  const after: ScrollFrame = {
+    ...before,
+    at: 74868.2,
+    scrollTop: 1896,
+    scrollHeight: 104612,
+    wheelTotal: 69280,
+    lastWheelAt: 74838.7,
+    imageLoads: 1,
+    anchor: "image",
+    rows: [
+      { id: "image", top: -523, height: 1632 },
+      { id: "below-image", top: 1109, height: 100 },
+      { id: "reading", top: 1209, height: 106 },
+    ],
+  };
+  // The image moves 160 px; scrollTop also includes 131 px of compensation.
+  expect(findScrollJumps([recent, before, after])).toEqual([]);
+
+  const shrinkBefore = {
+    ...before,
+    rows: [
+      { id: "image", top: -692, height: 560 },
+      { id: "below-image", top: -132, height: 130 },
+      { id: "reading", top: -2, height: 81 },
+    ],
+  };
+  const shrinkAfter = {
+    ...after,
+    scrollTop: before.scrollTop - 184,
+    // The wheel arrived before this frame; its scroll update arrives now.
+    wheelTotal: before.wheelTotal,
+    rows: [
+      { id: "image", top: -532, height: 225 },
+      { id: "below-image", top: -307, height: 130 },
+      { id: "reading", top: -177, height: 81 },
+    ],
+  };
+  expect(findScrollJumps([recent, shrinkBefore, shrinkAfter])).toEqual([]);
+  expect(
+    findScrollJumps([
+      recent,
+      shrinkBefore,
+      {
+        ...shrinkAfter,
+        rows: shrinkAfter.rows.map((row) => ({
+          id: row.id,
+          height: row.height,
+          top: row.top - 200,
+        })),
+      },
+    ]),
+  ).toHaveLength(1);
+  expect(
+    findScrollJumps([
+      recent,
+      before,
+      { ...after, rows: after.rows.map((row) => ({ ...row, top: row.top + 400 })) },
+    ]),
+  ).toHaveLength(1);
+  expect(
+    findScrollJumps([
+      recent,
+      before,
+      {
+        ...after,
+        rows: after.rows.map((row) =>
+          row.id === "reading" ? { ...row, top: row.top + 100 } : row,
+        ),
+      },
+    ]),
+  ).toHaveLength(1);
+  expect(
+    findScrollJumps([
+      { ...before, inputFinishedAt: before.at - 300 },
+      { ...after, inputFinishedAt: before.at - 300 },
+    ]),
+  ).toHaveLength(1);
+  expect(
+    findScrollJumps([
+      recent,
+      before,
+      {
+        ...after,
+        rows: after.rows.filter((row) => row.id !== "below-image"),
+      },
+    ]),
+  ).toHaveLength(1);
+  expect(() => findScrollJumps([before, { ...after, rows: [] }])).toThrow(
+    "No shared reading geometry",
+  );
+});
+
 for (const cadence of scrollCadences) {
   test(`varied timeline preserves reading position during ${cadence.name} upward scrolling`, async ({
     page,

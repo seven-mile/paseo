@@ -1,8 +1,9 @@
 import { strict as assert } from "node:assert";
-import { chmodSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, it } from "vitest";
+import os from "node:os";
+import { afterEach, describe, it, vi } from "vitest";
 import { DEFAULT_HUB_ORIGIN, resolveHubCredential, resolveHubOrigin } from "./authority.js";
 import { PrivateHubCredentialStore, type HubCredentialStore } from "./credentials.js";
 
@@ -16,6 +17,20 @@ afterEach(async () => {
 });
 
 describe("Hub CLI credentials", () => {
+  it("uses the fork default home for Hub credentials without touching the official home", () => {
+    const root = temporaryHome();
+    const homedir = vi.spyOn(os, "homedir").mockReturnValue(root);
+    try {
+      const store = new PrivateHubCredentialStore({});
+      store.save({ origin: "https://fork.example.com", credential: "test-fork-credential" });
+      assert.ok(existsSync(path.join(root, ".paseo-swarm", "hub-credentials.json")));
+      assert.equal(existsSync(path.join(root, ".paseo")), false);
+      assert.equal(store.active()?.origin, "https://fork.example.com");
+    } finally {
+      homedir.mockRestore();
+    }
+  });
+
   it("stores multiple normalized origins privately and selects the latest login", () => {
     const home = temporaryHome();
     const store = new PrivateHubCredentialStore({ PASEO_HOME: home });

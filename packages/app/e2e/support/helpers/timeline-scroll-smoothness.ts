@@ -289,11 +289,49 @@ export async function recordUpwardTraversal(
   });
 }
 
+function normalizeEnteredRowMovement(
+  previous: ScrollFrame,
+  currentRows: Map<string, RowFrame>,
+  intendedRow: RowFrame | undefined,
+  before: RowFrame,
+  movement: number,
+  wheelBudget: number,
+  idle: boolean,
+): number {
+  // scrollTop also includes layout compensation. Confirm entered-row input
+  // against shared DOM geometry, then remove signed size changes below that
+  // reader. A shrinking placeholder can leave the reading line altogether;
+  // preserve its top, rather than following text that was below it.
+  const intendedAfter = intendedRow && currentRows.get(intendedRow.id);
+  const readerMovement = intendedAfter && intendedRow ? intendedAfter.top - intendedRow.top : 0;
+  const enteredRows = intendedRow
+    ? previous.rows.filter((row) => row.top >= intendedRow.top && row.top < before.top)
+    : [];
+  const readerFollowsInput =
+    !idle &&
+    intendedRow &&
+    intendedAfter &&
+    readerMovement > 0 &&
+    readerMovement <= wheelBudget + 32 &&
+    intendedRow.top + intendedRow.height <= 8 &&
+    intendedRow.top + intendedRow.height + readerMovement > 8 &&
+    enteredRows.every((row) => currentRows.has(row.id));
+  const enteredRowChange = readerFollowsInput
+    ? enteredRows.reduce((change, row) => {
+        return change + currentRows.get(row.id)!.height - row.height;
+      }, 0)
+    : 0;
+  // Do not let an unrelated anchor jump hide behind a simultaneous resize.
+  return readerFollowsInput && Math.abs(movement - enteredRowChange - readerMovement) <= 8
+    ? movement - enteredRowChange
+    : movement;
+}
+
 export function findScrollJumps(frames: ScrollFrame[]) {
   return frames.flatMap((current, index) => {
     const previous = frames[index - 1];
     if (!previous?.anchor) return [];
-    // Wheel input can move the reading line onto an image before it expands.
+    // Wheel input can move the reading line onto an image before it resizes.
     // Follow that intended row, not text now below the image.
     const recent = frames.findLast((frame) => frame.at <= previous.at - 100);
     const wheelBudget = current.wheelTotal - (recent?.wheelTotal ?? 0);
@@ -316,25 +354,18 @@ export function findScrollJumps(frames: ScrollFrame[]) {
     // A busy main thread can deliver wheel movement hundreds of milliseconds
     // after its event. Only assert idle stability after the driver stops input.
     const idle = current.inputFinishedAt !== null && previous.at - current.inputFinishedAt > 250;
-    // Wheel events can precede their scroll update, or include input already
-    // applied in earlier frames. Locate the reader with this frame's scroll,
-    // bounded by recent input. Growth below it can move the old anchor without
-    // moving the reading line.
-    const readerFollowsInput =
-      intendedRow &&
-      currentRows.has(intendedRow.id) &&
-      Math.abs(currentRows.get(intendedRow.id)!.top - intendedRow.top - availableScroll) <= 32;
-    const enteredRowGrowth = readerFollowsInput
-      ? previous.rows.reduce((growth, row) => {
-          if (row.top < intendedRow.top || row.top >= before.top) return growth;
-          const height = currentRows.get(row.id)?.height ?? row.height;
-          return growth + Math.max(0, height - row.height);
-        }, 0)
-      : 0;
-    const excessForward = movement > wheelBudget + enteredRowGrowth + 32;
-    // Upward wheel input moves the same text DOWN the viewport. A negative move
-    // is a reversal, independent of legitimate scrollTop compensation on prepend.
-    if (movement >= -8 && (!idle || Math.abs(movement) <= 8) && !excessForward) return [];
+    const readingMovement = normalizeEnteredRowMovement(
+      previous,
+      currentRows,
+      intendedRow,
+      before,
+      movement,
+      wheelBudget,
+      idle,
+    );
+    const excessForward = readingMovement > wheelBudget + 32;
+    if (readingMovement >= -8 && (!idle || Math.abs(readingMovement) <= 8) && !excessForward)
+      return [];
     return [
       {
         frame: index,

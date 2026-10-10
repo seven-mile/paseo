@@ -45,13 +45,19 @@ try {
     onboard.stdout.includes("CLI quick reference"),
     "onboard output should include CLI quick reference",
   );
-  assert(onboard.stdout.includes("paseo --help"), "onboard output should include --help shortcut");
-  assert(onboard.stdout.includes("paseo ls"), "onboard output should include ls shortcut");
   assert(
-    onboard.stdout.includes(`paseo run --home ${JSON.stringify(paseoHome)} "your prompt"`),
+    onboard.stdout.includes("paseo-swarm --help"),
+    "onboard output should include --help shortcut",
+  );
+  assert(onboard.stdout.includes("paseo-swarm ls"), "onboard output should include ls shortcut");
+  assert(
+    onboard.stdout.includes(`paseo-swarm run --home ${JSON.stringify(paseoHome)} "your prompt"`),
     "onboard output should include a run shortcut for the selected home",
   );
-  assert(onboard.stdout.includes("paseo status"), "onboard output should include status shortcut");
+  assert(
+    onboard.stdout.includes("paseo-swarm status"),
+    "onboard output should include status shortcut",
+  );
   assert(
     onboard.stdout.includes(join(paseoHome, "daemon.log")),
     "onboard output should include daemon log path",

@@ -22,7 +22,7 @@ interface ControllerHarness {
 }
 
 function createController(input: {
-  updater: TestUpdater;
+  updater?: TestUpdater;
   daemonVersion?: string | null;
   desktopManaged?: boolean;
 }): ControllerHarness {
@@ -51,6 +51,25 @@ const updateRequest: SessionInboundMessage = {
 };
 
 describe("DaemonSelfUpdateSessionController", () => {
+  test("default fork updater emits only an unsupported response and never restarts", async () => {
+    const { controller, emitted, restartIntents } = createController({});
+    await controller.dispatch(updateRequest);
+    expect(emitted).toEqual([
+      {
+        type: "daemon.update.response",
+        payload: {
+          requestId: "update-1",
+          success: false,
+          error:
+            "Automatic updates are unavailable. Install a specific @paseo-swarm/cli version with npm.",
+          previousVersion: "0.1.15",
+          newVersion: null,
+        },
+      },
+    ]);
+    expect(restartIntents).toEqual([]);
+  });
+
   test("returns undefined synchronously for messages owned by another subsystem", () => {
     const updater: TestUpdater = {
       async update() {
