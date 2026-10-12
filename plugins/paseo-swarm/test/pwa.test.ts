@@ -142,14 +142,8 @@ test("prompts keep role context scoped and orient agents without inventing work"
   assert.match(supervisorPrompt, /stage changes, decisions, and blockers as Activities/);
   assert.match(supervisorPrompt, /provider or harness subagents are not Swarm roster members/);
   assert.match(supervisorPrompt, /You receive automatic framework notifications/);
-  assert.match(
-    supervisorPrompt,
-    /Use Swarm team messages for coordination instead of native harness permission requests/,
-  );
-  assert.match(
-    supervisorPrompt,
-    /ask for elaboration through a Swarm team message instead of guessing/,
-  );
+  assert.match(supervisorPrompt, /Use Swarm team messages for agent-to-agent coordination/);
+  assert.match(supervisorPrompt, /appropriate path and record a resulting blocker or decision/);
   assert.match(supervisorPrompt, /Task update replaces supplied fields/);
   assert.match(supervisorPrompt, /preserve the complete existing brief/);
   assert.match(supervisorPrompt, /use Activities for incremental evidence/);
@@ -157,11 +151,8 @@ test("prompts keep role context scoped and orient agents without inventing work"
   assert.doesNotMatch(supervisorPrompt, /Execution/);
   assert.match(prompt, /or append Activities/);
   assert.match(prompt, /registered roster member/);
-  assert.match(
-    prompt,
-    /Use Swarm team messages for coordination instead of native harness permission requests/,
-  );
-  assert.match(prompt, /ask for elaboration through a Swarm team message instead of guessing/);
+  assert.match(prompt, /Use Swarm team messages for agent-to-agent coordination/);
+  assert.match(prompt, /report that blocker to your manager/);
   assert.match(prompt, /wait for an actionable instruction/);
 });
 
