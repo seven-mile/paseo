@@ -127,6 +127,12 @@ test("prompts keep role context scoped and orient agents without inventing work"
   });
   assert.match(supervisorPrompt, /^<paseo-swarm-system-settings>\n/);
   assert.match(supervisorPrompt, /maintain Task Activities and progress/);
+  assert.match(supervisorPrompt, /Use swarm_board_read when you start, resume after compaction/);
+  assert.match(supervisorPrompt, /Task updates replace supplied fields/);
+  assert.match(supervisorPrompt, /Use Activities for meaningful evidence/);
+  assert.match(supervisorPrompt, /do not recreate it with shell, raw RPC/);
+  assert.match(supervisorPrompt, /Use swarm_roles_read before creating a worker/);
+  assert.match(supervisorPrompt, /add their qualified names with swarm_task_update.workerNames/);
   assert.match(supervisorPrompt, /automatic framework notifications/);
   assert.match(supervisorPrompt, /do not poll or use sleep to wait/);
   assert.match(supervisorPrompt, /read the relevant Task, Activities, and final response/);
