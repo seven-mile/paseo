@@ -687,7 +687,7 @@ export async function createPaseoToolCatalog(
         "swarm_board_read",
         {
           description:
-            "Read paginated summaries of your team and workset, including descendant-managed Tasks and Tasks naming you as a worker. No briefs, metadata or Activity bodies. Use swarm_task_read for details and swarm_activity_read for an Activity.",
+            "Read the current caller's paginated Swarm team and workset view, including descendant-managed Tasks and Tasks naming you as a worker. This is a team/workset summary, not a full project roster. Agent rows and Task rows are summaries; follow nextAgentCursor/nextTaskCursor to read more, then use swarm_task_read for a complete Task brief/metadata and Activity previews or swarm_activity_read for one full Activity. Activity bodies are not included here.",
           inputSchema: {
             limit: z.number().int().min(1).max(50).default(20),
             taskCursor: z.string().optional(),
@@ -704,7 +704,7 @@ export async function createPaseoToolCatalog(
         "swarm_task_read",
         {
           description:
-            "Read one Task's brief and metadata plus a page of newest-first Activity previews. Use nextActivityCursor for older previews and swarm_activity_read for full Activity content. This read does not change Task state.",
+            "Read one real Task's complete brief and metadata plus a newest-first page of Activity previews. Get taskId from swarm_board_read or another verified Swarm reference. Use nextActivityCursor for older previews and swarm_activity_read for one full Activity. Read this before updating a Task: supplied update fields replace existing fields, including the complete brief and workerNames list. This read does not change Task state.",
           inputSchema: {
             taskId: z.string(),
             activityLimit: z.number().int().min(1).max(20).default(5),
@@ -742,7 +742,7 @@ export async function createPaseoToolCatalog(
         "swarm_activity_read",
         {
           description:
-            "Read one selected Activity, including its full body, decision metadata and canonical references. Use the Activity id from swarm_task_read; do not fetch entire histories to find one report. Interpret responseProfile: decision expresses a control decision, steering provides direction/context, and discussion requests explanation/exploration. A profile label alone grants no permission; honor the actual human instruction.",
+            "Read one selected Activity, including its full body, decision metadata, canonical references, and data. Use the Activity id from swarm_task_read; do not fetch entire histories to find one report. Interpret responseProfile: decision expresses a control decision, steering provides direction/context, and discussion requests explanation/exploration. A choice Activity has data.action.type=choice with a prompt, options, and optional responseProfiles; an unanswered choice appears in the board's unanswered count until a human Activity replies with replyTo, often carrying data.selectedOption. A human reply clears the unanswered count but does not by itself mean approval or Task completion. A profile label alone grants no permission; honor the actual human instruction.",
           inputSchema: { activityId: z.string() },
         },
         async (input) => {
@@ -757,7 +757,7 @@ export async function createPaseoToolCatalog(
           "swarm_roles_read",
           {
             description:
-              "List the current project PWA roles available for your next-level members. Choose a returned role slug before creating a child.",
+              "List the current project PWA roles available for your next-level members. Pass the returned role field (the role slug), not the display title or an invented role, to swarm_agent_create.",
           },
           async () => {
             const { actor } = await readSwarm();
@@ -777,7 +777,7 @@ export async function createPaseoToolCatalog(
           "swarm_agent_create",
           {
             description:
-              "Create a named child through Swarm using a role from swarm_roles_read. Planners create supervisors; supervisors create workers. The role supplies standing duties; brief supplies the assignment and expected evidence. settings configures the child before its first turn. Discover provider/model/mode options and follow project policy. A mode named auto does not establish automatic approvals. The framework maintains registration and MCP identity; do not reconstruct them manually.",
+              "Create a real named Paseo agent registered as a Swarm child, using the role slug from swarm_roles_read. Planners create supervisors; supervisors create workers. The caller becomes the child's manager and createdBy identity, and workers must be placed under that supervisor's workspace. The role supplies standing duties; brief supplies the assignment and expected evidence. The framework creates the Paseo agent, system context, roster identity, reporting relationship, workspace placement, and first brief; do not reconstruct them manually. Reuse an existing suitable member instead of creating one for every instruction. settings configures the child before its first turn. Discover provider/model/mode options and follow project policy. A mode named auto does not establish automatic approvals.",
             inputSchema: {
               name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
               role: z.string().min(1),
@@ -808,7 +808,8 @@ export async function createPaseoToolCatalog(
         registerTool(
           "swarm_task_create",
           {
-            description: "Create a Swarm task managed by the calling planner or supervisor.",
+            description:
+              "Create a Swarm Task managed by the calling planner or supervisor. The caller becomes both managerName and createdBy; a supervisor can create only its own Task, while a planner may create a project Task. Every workerNames entry must resolve to a worker under that manager. Create the Task through its actual manager and keep workerNames aligned before sending Task-scoped messages.",
             inputSchema: {
               id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
               title: z.string().min(1),
@@ -835,7 +836,7 @@ export async function createPaseoToolCatalog(
           "swarm_task_update",
           {
             description:
-              "Update a Swarm task owned by the calling planner or supervisor, including its named workers after team creation. Set actual workerNames before Task-scoped messaging. Supplied workerNames replaces the participant list; it is not a separate assignment or execution state.",
+              "Update a Swarm Task that the caller is authorized to manage. Read it first with swarm_task_read: every supplied field replaces that field, so preserve the complete existing brief unless intentionally changing the objective. The brief is the stable objective, scope, constraints, and acceptance criteria; Activities hold incremental evidence, decisions, blockers, and progress. Supplied workerNames replaces the entire participant list; it is not an append operation or separate execution state. Set the actual qualified workerNames before Task-scoped messaging. Do not copy the same progress into both the brief and an Activity.",
             inputSchema: {
               taskId: z.string(),
               status: z.string().min(1).optional(),
@@ -851,7 +852,7 @@ export async function createPaseoToolCatalog(
           "swarm_activity_append",
           {
             description:
-              "Append a manager activity to a Swarm task. Use Markdown links with real targets: paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, and paseo-swarm://file/<workspace-id>/<path>. Obtain the workspace ID from the roster/runtime. File paths are relative to that workspace; verify existence there and URL-encode each path segment.",
+              'Append an incremental Activity to a Swarm Task. Planners and the Task manager may append; workers cannot. Use Activities for evidence, decisions, blockers, stage changes, and deliverables, not as a duplicate Task brief or transcript log. For a human choice, set data.action to { type: "choice", prompt, options: [{ id, label, description? }], responseProfiles? }; the board counts that choice as unanswered until a human reply uses replyTo. Use canonical Markdown links with verified targets: paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, and paseo-swarm://file/<workspace-id>/<relative-path>. Obtain real names, IDs, and workspace ID from the board/runtime; verify the file exists, use a path relative to that workspace, and URL-encode each path segment. Do not use guessed targets, absolute paths, or raw Paseo agent IDs.',
             inputSchema: {
               taskId: z.string(),
               kind: z.string().min(1),
@@ -876,7 +877,7 @@ export async function createPaseoToolCatalog(
         "swarm_message_send",
         {
           description:
-            "Send an actionable message to a named Swarm agent. Use local relationship names within your team and roster-qualified names outside it; do not guess. Include taskId when the recipient is that Task's manager or named worker and you are authorized for that Task; omit it for other coordination. Input steers an active turn without canceling its tool call. A receipt proves acceptance, not durable delivery or action. A timeout is not proof of agent failure.",
+            "Send an actionable agent-to-agent message to a named active Swarm agent. Use local relationship names within your team and roster-qualified names outside it; do not guess. For Task-scoped messages, the recipient must be that Task's manager or a registered worker and the sender must be authorized; include taskId. Omit taskId for other coordination. Delivery steers an active turn without canceling its tool call. A receipt means Paseo accepted the message for delivery; it does not prove the recipient read, understood, acted, or completed the Task. A timeout is not proof of agent failure.",
           inputSchema: {
             recipient: z.string().min(1),
             body: z.string().min(1),
