@@ -131,7 +131,19 @@ test("prompts keep role context scoped and orient agents without inventing work"
   assert.match(supervisorPrompt, /Task updates replace supplied fields/);
   assert.match(supervisorPrompt, /Use Activities for meaningful evidence/);
   assert.match(supervisorPrompt, /do not recreate it with shell, raw RPC/);
-  assert.match(supervisorPrompt, /Use swarm_roles_read before creating a worker/);
+  assert.match(
+    supervisorPrompt,
+    /Swarm delegation and provider or harness subagents are two separate paths/,
+  );
+  assert.match(supervisorPrompt, /never a Swarm worker/);
+  assert.match(
+    supervisorPrompt,
+    /follow the available Swarm tool descriptions for those operations/,
+  );
+  assert.match(
+    supervisorPrompt,
+    /never use a provider's native subagent, collaboration, or delegation path/,
+  );
   assert.match(supervisorPrompt, /add their qualified names with swarm_task_update.workerNames/);
   assert.match(supervisorPrompt, /actual supervisor creates the Task/);
   assert.match(supervisorPrompt, /You receive framework notifications when a child turn ends/);
