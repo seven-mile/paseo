@@ -650,17 +650,28 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
           `Message sender ${input.senderName} does not match actor ${input.actorName}`,
         );
       }
+      const recipient = findAgentByPaseoId(input.recipientPaseoAgentId);
+      if (!recipient) {
+        throw new Error(`Unknown active Swarm recipient: ${input.recipientPaseoAgentId}`);
+      }
+      const recipientReference = agentQualifiedName(recipient);
+      if (recipientReference !== input.recipientName) {
+        throw new Error(
+          `Message recipient ${input.recipientName} does not match agent ${input.recipientPaseoAgentId}`,
+        );
+      }
       if (input.taskId) {
         const task = findTask(input.taskId);
         const actor = input.actorName ? findAgent(input.actorName) : null;
         if (!actor) throw new Error("Task-scoped messages require an authenticated agent");
         const actorReference = agentQualifiedName(actor);
-        const recipientIsWorker = task.workerNames.includes(input.recipientName);
+        const recipientIsMember =
+          task.managerName === recipientReference || task.workerNames.includes(recipientReference);
         const actorCanSend =
           actor.roleClass === "planner" ||
           task.managerName === actorReference ||
           task.workerNames.includes(actorReference);
-        if (!actorCanSend || (!recipientIsWorker && input.recipientName !== task.managerName)) {
+        if (!actorCanSend || !recipientIsMember) {
           throw new Error(`Agent ${actorReference} cannot send a message for Task ${task.id}`);
         }
       }

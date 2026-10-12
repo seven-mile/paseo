@@ -372,6 +372,32 @@ test("children default to the caller workspace, isolated placement preserves ros
         body: "Survey findings",
       }),
     );
+    await assert.rejects(
+      async () =>
+        invoke(
+          sendMessageRpc.name,
+          sendMessageRpc.input.parse({
+            senderName: "planner.supervisor.scout",
+            recipientName: "planner.supervisor",
+            recipientPaseoAgentId: worker.paseoAgentId,
+            body: "Mismatched recipient",
+          }),
+        ),
+      /does not match agent/,
+    );
+    await assert.rejects(
+      async () =>
+        invoke(
+          sendMessageRpc.name,
+          sendMessageRpc.input.parse({
+            senderName: "planner.supervisor.scout",
+            recipientName: "missing",
+            recipientPaseoAgentId: "missing-agent",
+            body: "Unknown recipient",
+          }),
+        ),
+      /Unknown active Swarm recipient/,
+    );
     state.tasks.push({
       id: "survey",
       title: "Survey",
@@ -384,6 +410,21 @@ test("children default to the caller workspace, isolated placement preserves ros
       createdAt: planner.createdAt,
       updatedAt: planner.updatedAt,
     });
+    await assert.rejects(
+      async () =>
+        invoke(
+          sendMessageRpc.name,
+          sendMessageRpc.input.parse({
+            senderName: "planner.supervisor.scout",
+            actorName: "planner.supervisor.scout",
+            recipientName: "planner.supervisor.scout",
+            recipientPaseoAgentId: worker.paseoAgentId,
+            taskId: "survey",
+            body: "Not a task member",
+          }),
+        ),
+      /cannot send a message for Task survey/,
+    );
     await invoke(
       appendHumanActivityRpc.name,
       appendHumanActivityRpc.input.parse({

@@ -118,6 +118,7 @@ test("prompts keep role context scoped and orient agents without inventing work"
   assert.match(prompt, /Developer guidance/);
   assert.match(prompt, /Do not create agents or Tasks/);
   assert.match(prompt, /Do not acknowledge receipts/);
+  assert.match(prompt, /Do not poll or use sleep to wait for a reply/);
 
   const supervisorPrompt = initialPrompt({
     pwa,
@@ -126,8 +127,36 @@ test("prompts keep role context scoped and orient agents without inventing work"
   });
   assert.match(supervisorPrompt, /^<paseo-swarm-system-settings>\n/);
   assert.match(supervisorPrompt, /maintain Task Activities and progress/);
+  assert.match(supervisorPrompt, /automatic framework notifications/);
+  assert.match(supervisorPrompt, /do not poll or use sleep to wait/);
+  assert.match(supervisorPrompt, /read the relevant Task, Activities, and final response/);
+  assert.match(supervisorPrompt, /An idle worker will not resume by itself/);
+  assert.match(supervisorPrompt, /send the next actionable Swarm team message/);
+  assert.match(supervisorPrompt, /actual supervisor creates the Task/);
+  assert.match(supervisorPrompt, /stage changes, decisions, and blockers as Activities/);
+  assert.match(supervisorPrompt, /provider or harness subagents are not Swarm roster members/);
+  assert.match(supervisorPrompt, /You receive automatic framework notifications/);
+  assert.match(
+    supervisorPrompt,
+    /Use Swarm team messages for coordination instead of native harness permission requests/,
+  );
+  assert.match(
+    supervisorPrompt,
+    /ask for elaboration through a Swarm team message instead of guessing/,
+  );
+  assert.match(supervisorPrompt, /Task update replaces supplied fields/);
+  assert.match(supervisorPrompt, /preserve the complete existing brief/);
+  assert.match(supervisorPrompt, /use Activities for incremental evidence/);
+  assert.match(supervisorPrompt, /Do not copy the same content into both/);
   assert.doesNotMatch(supervisorPrompt, /Execution/);
   assert.match(prompt, /or append Activities/);
+  assert.match(prompt, /registered roster member/);
+  assert.match(
+    prompt,
+    /Use Swarm team messages for coordination instead of native harness permission requests/,
+  );
+  assert.match(prompt, /ask for elaboration through a Swarm team message instead of guessing/);
+  assert.match(prompt, /wait for an actionable instruction/);
 });
 
 test("message and runtime prompts distinguish delivery from work", () => {

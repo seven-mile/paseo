@@ -171,11 +171,11 @@ export const appendHumanActivityRpc = defineRpc({
 export const sendMessageRpc = defineRpc({
   name: "swarm.message.send",
   input: z.object({
-    recipientPaseoAgentId: z.string(),
+    recipientPaseoAgentId: z.string().min(1),
     taskId: slugNameSchema.nullable().default(null),
     actorName: z.string().nullable().default(null),
-    senderName: z.string(),
-    recipientName: z.string(),
+    senderName: z.string().min(1),
+    recipientName: z.string().min(1),
     body: z.string().min(1),
   }),
   output: z.object({ delivered: z.literal(true), receipt: z.string() }),
