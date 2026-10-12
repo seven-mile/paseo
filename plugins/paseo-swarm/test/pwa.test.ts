@@ -133,10 +133,15 @@ test("prompts keep role context scoped and orient agents without inventing work"
   assert.match(supervisorPrompt, /do not recreate it with shell, raw RPC/);
   assert.match(supervisorPrompt, /Use swarm_roles_read before creating a worker/);
   assert.match(supervisorPrompt, /add their qualified names with swarm_task_update.workerNames/);
+  assert.match(supervisorPrompt, /actual supervisor creates the Task/);
+  assert.match(supervisorPrompt, /You receive framework notifications when a child turn ends/);
+  assert.match(
+    supervisorPrompt,
+    /After a child result or notification, first read the relevant Task/,
+  );
   assert.match(supervisorPrompt, /An idle worker will not resume by itself/);
   assert.match(supervisorPrompt, /send the next actionable Swarm team message/);
   assert.match(supervisorPrompt, /provider or harness subagents are not Swarm roster members/);
-  assert.match(supervisorPrompt, /After a child result or notification, choose the next action/);
   assert.match(supervisorPrompt, /Do not copy the same content into both/);
   assert.doesNotMatch(supervisorPrompt, /Execution/);
   assert.match(prompt, /or append Activities/);
