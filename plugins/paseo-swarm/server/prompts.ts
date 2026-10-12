@@ -99,6 +99,7 @@ export function messagePrompt({
     ? `Team message ${id} from ${sender}:`
     : `Team message from ${sender} to ${recipient}:`;
   return [
+    "<paseo-swarm-team-message>",
     "This is an agent-to-agent team message delivered through Paseo.",
     taskId ? `Task: ${taskId}.` : "Task: none specified.",
     label,
@@ -106,6 +107,7 @@ export function messagePrompt({
     `Recipient: ${recipient}.`,
     "Delivery does not prove that the recipient read, understood, or completed the message.",
     communicationRules,
+    "</paseo-swarm-team-message>",
   ].join("\n");
 }
 
@@ -122,11 +124,14 @@ export function runtimeNotification({
 }: RuntimeNotificationInput): string {
   if (status === "idle" || status === "inactive") {
     return [
+      "<paseo-swarm-runtime-notification>",
+      "Framework roster notification; this is not an agent-authored team message.",
       `Agent ${agent} is ${status}.`,
       `${status} means no turn is executing; it does not describe task completion, success, failure, or waiting for other agents.`,
       "The agent will do no further work unless it receives a next instruction.",
       `Manager ${manager} must evaluate the next step and continue until genuinely blocked or completed.`,
       "This is a runtime notification, not a business activity.",
+      "</paseo-swarm-runtime-notification>",
     ].join(" ");
   }
 

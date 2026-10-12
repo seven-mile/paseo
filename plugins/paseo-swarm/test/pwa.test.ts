@@ -168,7 +168,7 @@ test("message and runtime prompts distinguish delivery from work", () => {
       taskId: "survey-auth",
       message: "Finding",
     }),
-    /agent-to-agent team message[\s\S]*Task: survey-auth\.[\s\S]*Team message msg-1 from dev-one:\nFinding/m,
+    /<paseo-swarm-team-message>[\s\S]*agent-to-agent team message[\s\S]*Task: survey-auth\.[\s\S]*Team message msg-1 from dev-one:\nFinding[\s\S]*<\/paseo-swarm-team-message>/m,
   );
   assert.match(
     messageReceipt({ recipient: "lead", delivery: "accepted" }),
@@ -177,6 +177,8 @@ test("message and runtime prompts distinguish delivery from work", () => {
   assert.match(messageReceipt({ recipient: "lead", delivery: "accepted" }), /not a durable queue/);
 
   const idle = runtimeNotification({ agent: "dev-one", manager: "lead", status: "inactive" });
+  assert.match(idle, /^<paseo-swarm-runtime-notification>/);
+  assert.match(idle, /<\/paseo-swarm-runtime-notification>$/);
   assert.match(idle, /does not describe task completion/);
   assert.match(idle, /will do no further work unless it receives a next instruction/);
   assert.match(idle, /not a business activity/);
