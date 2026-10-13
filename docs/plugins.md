@@ -107,6 +107,11 @@ the checkout source, while packaged reloads recompile the shipped entry. Changes
 raw Swarm server modules require rebuilding that packaged entry before reload. The embedded
 PWA directory is content only and does not configure a runtime source.
 
+Swarm planners must prepare a separate workspace and pass its `workspaceId` when creating
+a supervisor. This keeps supervisor execution out of the planner's workspace; omitting placement
+does not bypass the separation. Supervisor-created workers still default to the supervisor's
+workspace. Explicit placement keeps the reporting relationship unchanged.
+
 Built-ins run in process and remain active independently of `pluginsEnabled`. They are
 absent from the installed plugin list and source configuration; their client bundles
 appear in the plugin catalog. After editing one, use `paseo plugin reload <id>` to

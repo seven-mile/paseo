@@ -1,0 +1,188 @@
+name: Preview Fork Web UI
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Source branch, tag or SHA; leave empty when selecting a PR. Defaults to main."
+        type: string
+        default: ""
+      preview_pr:
+        description: "Optional PR number; preview its exact head, not its merge commit."
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: fork-webui-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      source_sha: ${{ steps.identity.outputs.sha }}
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+    steps:
+      - name: Resolve requested PR head
+        id: request
+        uses: actions/github-script@v7
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          PREVIEW_PR: ${{ inputs.preview_pr }}
+        with:
+          script: |
+            const ref = process.env.SOURCE_REF.trim();
+            const pr = process.env.PREVIEW_PR.trim();
+            if (ref && pr) throw new Error('Select source_ref or preview_pr, not both.');
+            if (pr && !/^[1-9][0-9]*$/.test(pr)) throw new Error('preview_pr must be a positive integer.');
+            const source = pr
+              ? (await github.rest.pulls.get({ ...context.repo, pull_number: Number(pr) })).data.head.sha
+              : ref || 'main';
+            core.setOutput('ref', source);
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.request.outputs.ref }}
+          persist-credentials: false
+      - name: Pin source and require manual connection support
+        id: identity
+        run: |
+          set -euo pipefail
+          printf 'sha=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          node -e "if (!require('node:fs').readFileSync('packages/app/src/runtime/host-runtime.ts','utf8').includes('EXPO_PUBLIC_PASEO_AUTO_CONNECT')) throw Error('Source lacks manual connection support')"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Build browser assets without deployment credentials
+        env:
+          APP_VARIANT: production
+          EXPO_NO_DOTENV: "1"
+          EXPO_PUBLIC_PASEO_AUTO_CONNECT: "false"
+        run: |
+          set -euo pipefail
+          unset PASEO_WEB_PLATFORM EXPO_PUBLIC_LOCAL_DAEMON EXPO_PUBLIC_PASEO_DEV_BUILD_LABEL
+          node scripts/npm-retry.mjs ci
+          npm run build:web --workspace=@getpaseo/app
+      - name: Record static asset hashes
+        env:
+          SOURCE_SHA: ${{ steps.identity.outputs.sha }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
+          const root = 'packages/app/dist', files = [];
+          function visit(dir) {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const file = path.join(dir, entry.name), relative = path.relative(root, file);
+              if (entry.name === '_worker.js' || (dir === root && entry.name === 'functions')) throw Error('Preview supports static browser assets only');
+              if (entry.isDirectory()) visit(file);
+              else if (entry.isFile()) {
+                const bytes = fs.readFileSync(file);
+                if (bytes.length > 25 * 1024 * 1024) throw Error('Asset exceeds Pages 25 MiB limit');
+                files.push({ path: relative, bytes: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') });
+              } else throw Error('Unsupported asset type');
+            }
+          }
+          visit(root);
+          if (!files.some(file => file.path === 'index.html')) throw Error('Missing index.html');
+          fs.mkdirSync('preview-artifact', { recursive: true });
+          fs.cpSync(root, 'preview-artifact/site', { recursive: true });
+          fs.writeFileSync('preview-artifact/manifest.json', JSON.stringify({ sourceSha: process.env.SOURCE_SHA, workflowSha: process.env.GITHUB_SHA, files }, null, 2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        id: artifact
+        with:
+          name: webui-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: preview-artifact/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  preview:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          merge-multiple: true
+          path: preview-artifact
+      - name: Install trusted deployment tool outside product checkout
+        run: npm install --prefix "$RUNNER_TEMP/preview-tools" --ignore-scripts --no-audit --no-fund wrangler@4.105.0
+      - name: Deploy only to a verified non-production branch
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
+          const { execFileSync } = require('node:child_process');
+          const project = process.env.PAGES_PROJECT, account = process.env.CLOUDFLARE_ACCOUNT_ID;
+          if (!/^[a-z0-9-]+$/.test(project || '') || !/^[a-f0-9]{32}$/.test(account || '') || !process.env.CLOUDFLARE_API_TOKEN) throw Error('Missing or invalid Pages configuration');
+          const branch = `preview-run-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
+          const endpoint = `https://api.cloudflare.com/client/v4/accounts/${account}/pages/projects/${project}`;
+          async function get(suffix = '') {
+            const response = await fetch(endpoint + suffix, { headers: { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` }, signal: AbortSignal.timeout(30000) });
+            const data = await response.json();
+            if (!response.ok || !data.success) throw Error(`Pages API request failed (${response.status})`);
+            return data.result;
+          }
+          async function main() {
+          const manifest = JSON.parse(fs.readFileSync('preview-artifact/manifest.json', 'utf8'));
+          if (manifest.sourceSha !== process.env.SOURCE_SHA || manifest.workflowSha !== process.env.GITHUB_SHA) throw Error('Artifact identity mismatch');
+          const expected = new Map(manifest.files.map(file => [file.path, file])), seen = new Set();
+          function verify(dir) {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const file = path.join(dir, entry.name), relative = path.relative('preview-artifact/site', file);
+              if (entry.name === '_worker.js' || (dir === 'preview-artifact/site' && entry.name === 'functions')) throw Error('Executable Pages assets are not allowed');
+              if (entry.isDirectory()) verify(file);
+              else if (entry.isFile()) {
+                const record = expected.get(relative), bytes = fs.readFileSync(file);
+                if (!record || bytes.length !== record.bytes || crypto.createHash('sha256').update(bytes).digest('hex') !== record.sha256) throw Error('Asset hash mismatch');
+                seen.add(relative);
+              } else throw Error('Unsupported downloaded asset type');
+            }
+          }
+          verify('preview-artifact/site');
+          if (seen.size !== expected.size || !seen.has('index.html')) throw Error('Incomplete asset set');
+          const before = await get();
+          if (!before.production_branch || branch === before.production_branch || branch === 'main') throw Error('Preview branch is not safely distinct from production');
+          const tool = path.join(process.env.RUNNER_TEMP, 'preview-tools/node_modules/wrangler/bin/wrangler.js');
+          const output = execFileSync(process.execPath, [tool, 'pages', 'deploy', path.resolve('preview-artifact/site'), '--project-name', project, '--branch', branch, '--commit-hash', manifest.sourceSha, '--no-bundle'], { encoding: 'utf8', timeout: 300000, maxBuffer: 8 * 1024 * 1024, cwd: process.env.RUNNER_TEMP });
+          process.stdout.write(output);
+          const urls = [...new Set(output.match(new RegExp(`https://[a-z0-9]+\\.${project}\\.pages\\.dev`, 'g')) || [])];
+          if (urls.length !== 1) throw Error('Could not identify unique hash deployment URL');
+          const deployments = await get('/deployments?env=preview');
+          const matches = deployments.filter(deployment => deployment.url === urls[0]);
+          if (matches.length !== 1) throw Error('Deployment receipt not uniquely found');
+          const deployment = await get(`/deployments/${matches[0].id}`);
+          const metadata = deployment.deployment_trigger?.metadata;
+          if (deployment.environment !== 'preview' || metadata?.branch !== branch || metadata?.commit_hash !== manifest.sourceSha || deployment.latest_stage?.status !== 'success') throw Error('Deployment environment or source verification failed');
+          const after = await get();
+          const unchanged = before.canonical_deployment?.id === after.canonical_deployment?.id && before.production_branch === after.production_branch;
+          const receipt = { id: deployment.id, url: deployment.url, environment: deployment.environment, branch, sourceSha: manifest.sourceSha, workflowSha: manifest.workflowSha, productionUnchanged: unchanged, productionBefore: before.canonical_deployment?.id, productionAfter: after.canonical_deployment?.id };
+          fs.writeFileSync('preview-deployment.json', JSON.stringify(receipt, null, 2));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Pages preview\n\n[Open preview](${receipt.url})\n\nSource: ${receipt.sourceSha}\n\nBranch: ${branch}\n\nEnvironment: preview; production unchanged: ${unchanged}\n`);
+          if (!unchanged) throw Error('Production identity changed during preview; inspect concurrent deployments, do not roll back automatically');
+          }
+          main().catch(error => { console.error(error.message); process.exitCode = 1; });
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: preview-deployment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: preview-deployment.json
+          if-no-files-found: ignore

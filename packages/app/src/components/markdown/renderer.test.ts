@@ -3,16 +3,19 @@
  */
 import * as React from "react";
 import { createElement, type ReactNode } from "react";
-import { fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, renderHook } from "@testing-library/react";
 import { Text, type StyleProp, type TextStyle } from "react-native";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveInlineImageSize } from "./inline-image-size";
 import { colorMarkdownLinkChildren } from "./link-children";
 import { MarkdownLinkText } from "./link-text";
+import { useMarkdownLinkPress } from "@/swarm/canonical-links";
 
 vi.stubGlobal("React", React);
+afterEach(cleanup);
 
-vi.mock("react-native", () => ({
+vi.mock("react-native", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("react-native")>()),
   Pressable: ({
     accessibilityRole,
     children,
@@ -44,6 +47,10 @@ function flattenStyle(style: StyleProp<TextStyle>): TextStyle {
   return Object.assign({}, ...(Array.isArray(style) ? style.filter(Boolean) : [style]));
 }
 
+function useLatestCaller({ consume }: { consume: boolean }) {
+  return useMarkdownLinkPress(() => !consume);
+}
+
 describe("resolveInlineImageSize", () => {
   it("respects a one-sided explicit width using natural aspect ratio", () => {
     expect(
@@ -72,6 +79,35 @@ describe("resolveInlineImageSize", () => {
 });
 
 describe("shared Markdown links", () => {
+  it("lets an existing Task callback consume the actual link press first", () => {
+    const uri = "paseo-swarm://task/task-ID";
+    const caller = vi.fn(() => false);
+    const { result } = renderHook(() => useMarkdownLinkPress(caller));
+    const handled = vi.fn();
+    const onPress = () => handled(result.current(uri));
+    const view = render(createElement(MarkdownLinkText, { style: {}, onPress }, "Task"));
+    fireEvent.click(view.getByRole("link"));
+    expect(caller).toHaveBeenCalledExactlyOnceWith(uri);
+    expect(handled).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("leaves hostless canonical links and HTTP links to the existing default", () => {
+    const { result } = renderHook(() => useMarkdownLinkPress());
+    expect(result.current("paseo-swarm://agent/planner.worker")).toBe(true);
+    expect(result.current("https://paseo.sh")).toBe(true);
+  });
+
+  it("uses the latest caller without replacing the retained handler", () => {
+    const { result, rerender } = renderHook(useLatestCaller, {
+      initialProps: { consume: true },
+    });
+    const first = result.current;
+    expect(first("paseo-swarm://task/task-ID")).toBe(false);
+    rerender({ consume: false });
+    expect(result.current).toBe(first);
+    expect(first("paseo-swarm://task/task-ID")).toBe(true);
+  });
+
   it("renders accent text and underlines it while hovered", () => {
     const onPress = vi.fn();
     const children = colorMarkdownLinkChildren(

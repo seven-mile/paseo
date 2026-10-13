@@ -11,6 +11,10 @@ import {
 } from "@/screens/workspace/workspace-pane-content";
 import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-types";
 import { usePaneContext, usePaneFocus, type PaneContextValue } from "@/panels/pane-context";
+import type { ToastApi } from "@/components/toast-host";
+import { ToastApiProvider } from "@/contexts/toast-api-context";
+
+vi.stubGlobal("React", React);
 
 vi.mock("@/panels/register-panels", () => ({
   ensurePanelsRegistered: vi.fn(),
@@ -32,6 +36,14 @@ interface ProbeSnapshot {
 const snapshots: ProbeSnapshot[] = [];
 const mountCount = vi.fn();
 const unmountCount = vi.fn();
+
+function createToast(): ToastApi {
+  return {
+    show: vi.fn<ToastApi["show"]>(),
+    copied: vi.fn<ToastApi["copied"]>(),
+    error: vi.fn<ToastApi["error"]>(),
+  };
+}
 
 function ProbePanel() {
   const paneContextValue = usePaneContext();
@@ -95,15 +107,20 @@ describe("WorkspacePaneContent", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     const content = buildContent();
+    const toast = createToast();
 
     act(() => {
       root?.render(
-        <WorkspacePaneContent content={content} isPaneFocused={false} isWorkspaceFocused={true} />,
+        <ToastApiProvider api={toast}>
+          <WorkspacePaneContent content={content} isPaneFocused={false} isWorkspaceFocused={true} />
+        </ToastApiProvider>,
       );
     });
     act(() => {
       root?.render(
-        <WorkspacePaneContent content={content} isPaneFocused isWorkspaceFocused={true} />,
+        <ToastApiProvider api={toast}>
+          <WorkspacePaneContent content={content} isPaneFocused isWorkspaceFocused={true} />
+        </ToastApiProvider>,
       );
     });
 
@@ -129,14 +146,17 @@ describe("WorkspacePaneContent", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
+    const toast = createToast();
 
     act(() => {
       root?.render(
-        <WorkspacePaneContent
-          content={buildContent(agentTab, "explorer")}
-          isPaneFocused
-          isWorkspaceFocused
-        />,
+        <ToastApiProvider api={toast}>
+          <WorkspacePaneContent
+            content={buildContent(agentTab, "explorer")}
+            isPaneFocused
+            isWorkspaceFocused
+          />
+        </ToastApiProvider>,
       );
     });
 
@@ -160,15 +180,20 @@ describe("WorkspacePaneContent", () => {
       kind: "agent",
       target: { kind: "agent", agentId: "agent-a" },
     });
+    const toast = createToast();
 
     act(() => {
       root?.render(
-        <WorkspacePaneContent content={draftContent} isPaneFocused isWorkspaceFocused={true} />,
+        <ToastApiProvider api={toast}>
+          <WorkspacePaneContent content={draftContent} isPaneFocused isWorkspaceFocused={true} />
+        </ToastApiProvider>,
       );
     });
     act(() => {
       root?.render(
-        <WorkspacePaneContent content={agentContent} isPaneFocused isWorkspaceFocused={true} />,
+        <ToastApiProvider api={toast}>
+          <WorkspacePaneContent content={agentContent} isPaneFocused isWorkspaceFocused={true} />
+        </ToastApiProvider>,
       );
     });
 

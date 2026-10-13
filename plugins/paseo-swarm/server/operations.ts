@@ -268,9 +268,16 @@ async function creationPlacement(
   projectId: string | undefined,
   context: PluginHandlerContext,
 ) {
-  const workspaceAgentId = actor?.paseoAgentId ?? parent?.paseoAgentId ?? null;
+  const workspaceAgentId = (actor ?? parent)?.paseoAgentId ?? null;
   const workspaceAgent = workspaceAgentId ? context.paseo.agents.ref(workspaceAgentId) : null;
   const parentSnapshot = workspaceAgent ? (await workspaceAgent.refresh())?.agent : null;
+  if (
+    input.roleClass === "supervisor" &&
+    (actor ?? parent)?.roleClass === "planner" &&
+    (!input.workspaceId || input.workspaceId === parentSnapshot?.workspaceId)
+  ) {
+    throw new Error("Prepare a separate workspace for the supervisor and pass its workspaceId.");
+  }
   const workspaceId = input.workspaceId ?? parentSnapshot?.workspaceId ?? null;
   await assertCreationWorkspace(actor, workspaceId, context);
   const cwd =

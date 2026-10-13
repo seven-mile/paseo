@@ -136,11 +136,6 @@ const ADD_TO_CHAT_MENU_ICON = (
 const COPY_MENU_ICON = <ThemedCopy size={14} uniProps={foregroundMutedColorMapping} />;
 const OPEN_MENU_ICON = <ThemedExternalLink size={14} uniProps={foregroundMutedColorMapping} />;
 
-function handleMarkdownLinkPress(url: string): boolean {
-  void openExternalUrl(url);
-  return false;
-}
-
 function entryHeaderPressableStyle({ hovered }: { hovered?: boolean }) {
   return [styles.entryHeaderPressable, Boolean(hovered) && styles.hoverable];
 }
@@ -874,7 +869,7 @@ function SingleActivityCard({
       {collapsed ? null : (
         <>
           <View style={styles.cardBody}>
-            <MarkdownRenderer text={activity.body} compact onLinkPress={handleMarkdownLinkPress} />
+            <MarkdownRenderer text={activity.body} compact />
           </View>
           {attachEnabled && canAddPullRequestActivityToChat(activity) ? (
             <View style={styles.cardFooter}>
@@ -984,7 +979,7 @@ function ReviewCard({
         <>
           {hasBody ? (
             <View style={styles.cardBody}>
-              <MarkdownRenderer text={review.body} compact onLinkPress={handleMarkdownLinkPress} />
+              <MarkdownRenderer text={review.body} compact />
             </View>
           ) : null}
           {attachEnabled && canAddPullRequestActivityToChat(review) ? (
@@ -1177,7 +1172,7 @@ function ThreadComment({
       </View>
       {comment.body.trim() !== "" ? (
         <View style={styles.threadCommentBody}>
-          <MarkdownRenderer text={comment.body} compact onLinkPress={handleMarkdownLinkPress} />
+          <MarkdownRenderer text={comment.body} compact />
         </View>
       ) : null}
     </View>

@@ -986,6 +986,23 @@ describe("Swarm MCP coordination", () => {
             actorPaseoAgentId: actor.paseoAgentId,
             reportsTo: "parent",
             roleClass: roleClass === "planner" ? "supervisor" : "worker",
+            workspaceId: null,
+          }),
+        );
+        await invokeToolWithParsedInput(registeredTool(server, "swarm_agent_create"), {
+          name: "isolated-child",
+          role: "researcher",
+          provider: "codex/gpt-6.1-sol",
+          brief: "Work in the prepared worktree",
+          workspaceId: "isolated-worktree",
+        });
+        expect(invokePlugin).toHaveBeenLastCalledWith(
+          "paseo-swarm",
+          "swarm.agent.create",
+          expect.objectContaining({
+            actorPaseoAgentId: actor.paseoAgentId,
+            reportsTo: "parent",
+            workspaceId: "isolated-worktree",
           }),
         );
       } finally {

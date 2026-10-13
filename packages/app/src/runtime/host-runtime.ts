@@ -1574,6 +1574,11 @@ export class HostRuntimeStore {
       return;
     }
 
+    // Independently hosted web clients connect only to hosts the user adds.
+    if (isWeb && process.env.EXPO_PUBLIC_PASEO_AUTO_CONNECT === "false") {
+      return;
+    }
+
     const initialHint = this.deps.readInitialConnectionHint
       ? this.deps.readInitialConnectionHint()
       : readInitialDaemonConnectionHint();

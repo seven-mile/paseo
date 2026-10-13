@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useStableEvent } from "@/hooks/use-stable-event";
 import type { OpenFileDisposition } from "@/workspace/file-open";
 import { openExternalUrl } from "@/utils/open-external-url";
+import { useSwarmCanonicalLinkPress } from "@/swarm/canonical-links";
 import type { InlinePathTarget } from "./parse";
 import {
   useAssistantFileLinkResolverContext,
@@ -41,6 +42,7 @@ const DISABLED_QUERY_KEY = ["assistantFileLink", null, null, ""] as const;
 export function useFileLink(source: AssistantFileLinkSource): UseFileLinkResult {
   const { t } = useTranslation();
   const context = useAssistantFileLinkResolverContext();
+  const canonicalLinkPress = useSwarmCanonicalLinkPress();
   const queryClient = useQueryClient();
   const stableSource = useStableSource(source);
   const activeConfig = context.configRef.current;
@@ -86,6 +88,7 @@ export function useFileLink(source: AssistantFileLinkSource): UseFileLinkResult 
 
   const open = useStableEvent(
     (nextSource: AssistantFileLinkSource, disposition: OpenFileDisposition) => {
+      if (canonicalLinkPress?.(nextSource.href) === false) return;
       openAssistantFileLink({
         source: nextSource,
         disposition,
