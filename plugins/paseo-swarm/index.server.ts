@@ -9,16 +9,17 @@ export default function contribute(server: PluginServerContext) {
     else if (event.outcome.kind === "canceled") detail = `canceled: ${event.outcome.reason}`;
     else detail = `failed: ${event.outcome.error.message}`;
     let report: string | undefined;
-    for (let index = event.timeline.length - 1; index >= 0; index -= 1) {
-      const item = event.timeline[index];
+    const timeline = event.turnTimeline ?? [];
+    for (let index = timeline.length - 1; index >= 0; index -= 1) {
+      const item = timeline[index];
       if (item?.type !== "assistant_message") continue;
       const parts: string[] = [];
       for (
         let cursor = index;
-        cursor >= 0 && event.timeline[cursor]?.type === "assistant_message";
+        cursor >= 0 && timeline[cursor]?.type === "assistant_message";
         cursor -= 1
       ) {
-        const message = event.timeline[cursor];
+        const message = timeline[cursor];
         if (message?.type === "assistant_message") parts.unshift(message.text);
       }
       report = parts.join("").trim() || undefined;

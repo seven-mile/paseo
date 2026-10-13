@@ -126,25 +126,16 @@ test("prompts keep role context scoped and orient agents without inventing work"
     brief: "Coordinate the work.",
   });
   assert.match(supervisorPrompt, /^<paseo-swarm-system-settings>\n/);
-  assert.match(supervisorPrompt, /maintain Task Activities and progress/);
+  assert.match(supervisorPrompt, /Own the Tasks in your scope and direct named Swarm workers/);
   assert.match(supervisorPrompt, /Use swarm_board_read when you start, resume after compaction/);
   assert.match(supervisorPrompt, /Task updates replace supplied fields/);
   assert.match(supervisorPrompt, /Use Activities for meaningful evidence/);
   assert.match(supervisorPrompt, /do not recreate it with shell, raw RPC/);
-  assert.match(
-    supervisorPrompt,
-    /Swarm delegation and provider or harness subagents are two separate paths/,
-  );
-  assert.match(supervisorPrompt, /never a Swarm worker/);
-  assert.match(
-    supervisorPrompt,
-    /follow the available Swarm tool descriptions for those operations/,
-  );
-  assert.match(
-    supervisorPrompt,
-    /never use a provider's native subagent, collaboration, or delegation path/,
-  );
-  assert.match(supervisorPrompt, /add their qualified names with swarm_task_update.workerNames/);
+  assert.match(supervisorPrompt, /Swarm delegation and harness subagents are separate paths/);
+  assert.match(supervisorPrompt, /Harness subagents are not Swarm roster members/);
+  assert.match(supervisorPrompt, /even when their tools or instructions are present/);
+  assert.match(supervisorPrompt, /Keep Tasks and Activities useful to two readers/);
+  assert.match(supervisorPrompt, /A missing Swarm capability is different/);
   assert.match(supervisorPrompt, /actual supervisor creates the Task/);
   assert.match(supervisorPrompt, /You receive framework notifications when a child turn ends/);
   assert.match(
@@ -153,11 +144,9 @@ test("prompts keep role context scoped and orient agents without inventing work"
   );
   assert.match(supervisorPrompt, /An idle worker will not resume by itself/);
   assert.match(supervisorPrompt, /send the next actionable Swarm team message/);
-  assert.match(supervisorPrompt, /provider or harness subagents are not Swarm roster members/);
-  assert.match(supervisorPrompt, /Do not copy the same content into both/);
+  assert.match(supervisorPrompt, /Do not copy the same progress text into both/);
   assert.doesNotMatch(supervisorPrompt, /Execution/);
   assert.match(prompt, /or append Activities/);
-  assert.match(prompt, /registered roster member/);
   assert.match(prompt, /report that blocker to your manager/);
   assert.match(prompt, /wait for an actionable instruction/);
 });
@@ -185,6 +174,34 @@ test("message and runtime prompts distinguish delivery from work", () => {
   assert.match(idle, /does not describe task completion/);
   assert.match(idle, /will do no further work unless it receives a next instruction/);
   assert.match(idle, /not a business activity/);
+  assert.doesNotMatch(
+    runtimeNotification({
+      agent: "dev-one",
+      manager: "lead",
+      status: "idle",
+      report: "Old report",
+    }),
+    /Old report|assistant text/,
+  );
+  for (const status of ["completed", "canceled", "failed"]) {
+    assert.match(
+      runtimeNotification({ agent: "dev-one", manager: "lead", status }),
+      /No new assistant text is available for this turn/,
+    );
+  }
+  for (const status of ["canceled", "failed"]) {
+    assert.match(
+      runtimeNotification({ agent: "dev-one", manager: "lead", status, report: "Progress" }),
+      /Peek at assistant text from the interrupted turn \(possibly incomplete\)[\s\S]*not sent as a team message[\s\S]*Progress/,
+    );
+  }
+
+  for (const status of ["idle", "inactive", "completed", "canceled", "failed"]) {
+    const notification = runtimeNotification({ agent: "dev-one", manager: "lead", status });
+    assert.match(notification, /will do no further work unless it receives a next instruction/);
+    assert.match(notification, /send a next instruction when the agent should continue/);
+    assert.match(notification, /continue coordinating until genuinely blocked or completed/);
+  }
   assert.match(
     runtimeNotification({
       agent: "dev-one",
@@ -193,7 +210,7 @@ test("message and runtime prompts distinguish delivery from work", () => {
       outcome: "turn completed",
       report: "Survey finished.",
     }),
-    /<paseo-swarm-runtime-notification>[\s\S]*Framework roster notification[\s\S]*dev-one[\s\S]*Final agent response:\nSurvey finished\./,
+    /<paseo-swarm-runtime-notification>[\s\S]*Framework roster notification[\s\S]*dev-one[\s\S]*Observed assistant text from this turn[\s\S]*Survey finished\./,
   );
   assert.match(
     runtimeNotification({

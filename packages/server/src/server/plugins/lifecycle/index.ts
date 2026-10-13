@@ -95,6 +95,7 @@ export function publishAgentStream(
   agent: PluginHookAgent,
   event: AgentStreamEvent,
   timeline: readonly AgentTimelineItem[],
+  turnTimeline?: readonly AgentTimelineItem[],
 ): void {
   if (event.type === "turn_started") {
     lifecycle.emit("agent.turn_started", { agent, turnId: event.turnId ?? null });
@@ -103,6 +104,7 @@ export function publishAgentStream(
       agent,
       turnId: event.turnId ?? null,
       timeline,
+      turnTimeline,
       outcome: { kind: "completed" },
     });
   } else if (event.type === "turn_failed") {
@@ -110,6 +112,7 @@ export function publishAgentStream(
       agent,
       turnId: event.turnId ?? null,
       timeline,
+      turnTimeline,
       outcome: { kind: "failed", error: { message: event.error, code: event.code } },
     });
   } else if (event.type === "turn_canceled") {
@@ -117,6 +120,7 @@ export function publishAgentStream(
       agent,
       turnId: event.turnId ?? null,
       timeline,
+      turnTimeline,
       outcome: { kind: "canceled", reason: event.reason },
     });
   } else if (event.type === "permission_requested") {

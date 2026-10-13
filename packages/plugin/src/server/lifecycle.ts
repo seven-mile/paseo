@@ -51,6 +51,8 @@ export interface PluginLifecycleEvents {
     turnId: string | null;
     outcome: PluginTurnOutcome;
     timeline: readonly AgentTimelineItem[];
+    /** Items attributed to this turn; undefined when turn attribution is unavailable. */
+    turnTimeline?: readonly AgentTimelineItem[];
   };
   "agent.permission_requested": { agent: PluginHookAgent; request: AgentPermissionRequest };
   "agent.permission_resolved": {
