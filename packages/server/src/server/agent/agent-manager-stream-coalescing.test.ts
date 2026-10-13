@@ -2,8 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import type { PluginLifecycleEvents } from "@getpaseo/plugin/server";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
+import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { AgentManager, type AgentManagerEvent } from "./agent-manager.js";
 import { AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS } from "./agent-stream-coalescer.js";
 import type { AgentTimelineRow } from "./agent-timeline-store-types.js";
@@ -239,6 +241,7 @@ interface Harness {
   manager: AgentManager;
   client: TestAgentClient;
   events: AgentManagerEvent[];
+  endedTurns: PluginLifecycleEvents["agent.turn_ended"][];
   workdir: string;
   cleanup: () => void;
 }
@@ -246,10 +249,22 @@ interface Harness {
 function createHarness(options?: { provider?: AgentProvider }): Harness {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-stream-coalescing-"));
   const client = new TestAgentClient(options?.provider ?? "codex");
+  const endedTurns: PluginLifecycleEvents["agent.turn_ended"][] = [];
+  const pluginLifecycle: PluginLifecycle = {
+    emit(name, event) {
+      if (name === "agent.turn_ended") {
+        endedTurns.push(event as PluginLifecycleEvents["agent.turn_ended"]);
+      }
+    },
+    async before(_name, request) {
+      return request;
+    },
+  };
   const manager = new AgentManager({
     clients: { [client.provider]: client },
     idFactory: createIdFactory(),
     logger: createTestLogger(),
+    pluginLifecycle,
   });
   const events: AgentManagerEvent[] = [];
   manager.subscribe((event) => events.push(event), { replayState: false });
@@ -258,6 +273,7 @@ function createHarness(options?: { provider?: AgentProvider }): Harness {
     manager,
     client,
     events,
+    endedTurns,
     workdir,
     cleanup: () => rmSync(workdir, { recursive: true, force: true }),
   };
@@ -330,7 +346,7 @@ function timelineEvent(
 
 function terminalEvent(
   type: "turn_completed" | "turn_failed" | "turn_canceled",
-  turnId: string,
+  turnId?: string,
 ): AgentStreamEvent {
   if (type === "turn_completed") {
     return { type, provider: "codex", turnId };
@@ -1049,6 +1065,51 @@ describe("target coalesced behavior", () => {
       }
     }
   });
+
+  test.each(["turn_completed", "turn_failed", "turn_canceled"] as const)(
+    "scopes %s hook text to the ending turn",
+    async (terminalType) => {
+      vi.useFakeTimers();
+      const harness = createHarness();
+      try {
+        const { session } = await createManagedSession(harness);
+
+        session.pushEvent(assistant("OLD", "codex", "turn-old"));
+        session.pushEvent(terminalEvent(terminalType, "turn-old"));
+        await waitForSessionEventQueue();
+        expect(harness.endedTurns[0]?.turnTimeline).toEqual([
+          { type: "assistant_message", text: "OLD" },
+        ]);
+
+        session.pushEvent(terminalEvent(terminalType, "turn-empty"));
+        await waitForSessionEventQueue();
+        expect(harness.endedTurns[1]?.timeline).toContainEqual({
+          type: "assistant_message",
+          text: "OLD",
+        });
+        expect(harness.endedTurns[1]?.turnTimeline).toEqual([]);
+
+        session.pushEvent(assistant("PART", "codex", "turn-partial"));
+        session.pushEvent(assistant("IAL", "codex", "turn-partial"));
+        session.pushEvent(terminalEvent(terminalType, "turn-partial"));
+        await waitForSessionEventQueue();
+        expect(harness.endedTurns[2]?.turnTimeline).toEqual([
+          { type: "assistant_message", text: "PARTIAL" },
+        ]);
+
+        session.pushEvent(terminalEvent(terminalType, undefined));
+        await waitForSessionEventQueue();
+        expect(harness.endedTurns[3]?.turnId).toBeNull();
+        expect(harness.endedTurns[3]?.turnTimeline).toBeUndefined();
+        expect(harness.endedTurns[3]?.timeline).toContainEqual({
+          type: "assistant_message",
+          text: "PARTIAL",
+        });
+      } finally {
+        harness.cleanup();
+      }
+    },
+  );
 
   test("lifecycle paths are timer-safe", async () => {
     vi.useFakeTimers();

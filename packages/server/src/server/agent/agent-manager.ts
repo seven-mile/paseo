@@ -5026,7 +5026,12 @@ export class AgentManager {
     );
     this.dispatch({ type: "agent_stream", agentId, event, ...metadata });
     if (this.pluginLifecycle && agent && !agent.internal && event.type !== "timeline") {
-      const turnId = getAgentStreamEventTurnId(event);
+      const turnId =
+        event.type === "turn_completed" ||
+        event.type === "turn_failed" ||
+        event.type === "turn_canceled"
+          ? getAgentStreamEventTurnId(event)
+          : undefined;
       publishAgentStream(
         this.pluginLifecycle,
         describeHookAgent({ ...agent, title: agent.config.title }),
