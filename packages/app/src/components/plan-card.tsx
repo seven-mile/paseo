@@ -7,7 +7,7 @@ import {
   type TextStyle,
   type ViewStyle,
 } from "react-native";
-import { type ASTNode } from "react-native-markdown-display";
+import { type ASTNode, type RenderRules } from "react-native-markdown-display";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
@@ -206,8 +206,20 @@ const ThemedChevron = withUnistyles(ChevronRight);
 const chevronColor = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 const markdownRules = createPlanMarkdownRules();
 
-export function PlanMarkdownBody({ text }: { text: string }) {
-  return <MarkdownRenderer text={text} rules={markdownRules} markdownit={planMarkdownParser} />;
+export function PlanMarkdownBody({
+  text,
+  markdownit = planMarkdownParser,
+  linkRule,
+}: {
+  text: string;
+  markdownit?: ReturnType<typeof createMarkdownParser>;
+  linkRule?: RenderRules["link"];
+}) {
+  const rules = useMemo(
+    () => (linkRule ? { ...markdownRules, link: linkRule } : markdownRules),
+    [linkRule],
+  );
+  return <MarkdownRenderer text={text} rules={rules} markdownit={markdownit} />;
 }
 
 export function PlanCard(props: PlanCardProps) {

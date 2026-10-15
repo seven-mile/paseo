@@ -3,12 +3,16 @@ import { Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { ChevronRight } from "lucide-react-native";
+import type { RenderRules } from "react-native-markdown-display";
 import { mutedIconColorMapping } from "@/components/ui/icon-color";
 import { ICON_SIZE } from "@/styles/theme";
 import { PlanMarkdownBody } from "@/components/plan-card";
 import { Button } from "@/components/ui/button";
 import { isWeb } from "@/constants/platform";
 import type { SwarmEnvelope } from "@/swarm/system-envelope";
+import { createSwarmEnvelopeMarkdownParser } from "@/swarm/envelope-markdown";
+import { createSharedMarkdownRules } from "@/components/markdown/renderer";
+import { useSwarmCanonicalLinkPress } from "@/swarm/canonical-links";
 
 export interface SwarmEnvelopeCardProps {
   envelope: SwarmEnvelope;
@@ -23,6 +27,8 @@ interface SwarmEnvelopeOriginalProps {
 
 const ThemedChevron = withUnistyles(ChevronRight);
 const messageTextDataSet = { messageText: "true" };
+const sharedLinkRule = createSharedMarkdownRules().link;
+const consumeUnhostedReference = () => false;
 
 export const swarmEnvelopeTitleKeys = {
   settings: "message.envelope.titles.settings",
@@ -31,10 +37,28 @@ export const swarmEnvelopeTitleKeys = {
 } as const;
 
 export function SwarmEnvelopeBody({ envelope }: Pick<SwarmEnvelopeCardProps, "envelope">) {
+  const canonicalLinkPress = useSwarmCanonicalLinkPress();
+  const linkRule = useMemo<RenderRules["link"]>(
+    () => (node, children, parent, ruleStyles, onLinkPress) =>
+      sharedLinkRule?.(
+        node,
+        children,
+        parent,
+        ruleStyles,
+        node.attributes["data-swarm-envelope-reference"] === "true" && !canonicalLinkPress
+          ? consumeUnhostedReference
+          : onLinkPress,
+      ),
+    [canonicalLinkPress],
+  );
+  const markdownit = useMemo(
+    () => createSwarmEnvelopeMarkdownParser(envelope.kind),
+    [envelope.kind],
+  );
   return (
     <View style={styles.container} testID="swarm-envelope-body">
       <View dataSet={messageTextDataSet}>
-        <PlanMarkdownBody text={envelope.body} />
+        <PlanMarkdownBody text={envelope.body} markdownit={markdownit} linkRule={linkRule} />
       </View>
     </View>
   );

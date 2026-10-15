@@ -11,6 +11,13 @@ import { ToastApiProvider } from "../../src/contexts/toast-api-context";
 import { i18n } from "../../src/i18n/i18next";
 import { lightTheme, darkTheme } from "../../src/styles/theme";
 import { isWeb } from "../../src/constants/platform";
+import { findRenderedMatches } from "../../src/agent-stream/chat-find/ranges.web";
+
+declare global {
+  interface Window {
+    __paseoEnvelopeGalleryRanges?: (kind: "team" | "runtime", query: string) => string[];
+  }
+}
 
 const params = isWeb ? new URLSearchParams(window.location.search) : new URLSearchParams();
 const themeName = params.get("theme") === "dark" ? "dark" : "light";
@@ -31,7 +38,7 @@ const examples = [
   {
     kind: "runtime",
     original:
-      "<paseo-swarm-runtime-notification>\nFramework roster notification; this is not an agent-authored team message.\nAgent planner.ui-evolution.sidebar-dev turn ended with runtime outcome: completed.\nRuntime detail: The source review ended.\nObserved assistant text from this turn; captured by the framework, not sent as a team message:\nWorker turn ended. The manager still decides the next business step.\n\n> Review evidence is separate from a Task decision.\n\nThis runtime outcome does not establish Task completion, success, failure, or cancellation.\nThe agent will do no further work unless it receives a next instruction.\nManager planner.ui-evolution must evaluate the next business step from the available evidence and PWA, send a next instruction when the agent should continue, and continue coordinating until genuinely blocked or completed.\nThis is a runtime notification, not a business activity.\n</paseo-swarm-runtime-notification>",
+      "<paseo-swarm-runtime-notification>\nFramework roster notification; this is not an agent-authored team message.\nAgent planner.ui-evolution.sidebar-dev turn ended with runtime outcome: completed.\nRuntime detail: The source review ended.\nObserved assistant text from this turn; captured by the framework, not sent as a team message:\nWorker turn ended. The manager still decides the next business step.\n\nRead the [the envelope Task](paseo-swarm://task/ui-swarm-system-envelopes) before deciding the next step.\n\n> Review evidence is separate from a Task decision.\n\nThis runtime outcome does not establish Task completion, success, failure, or cancellation.\nThe agent will do no further work unless it receives a next instruction.\nManager planner.ui-evolution must evaluate the next business step from the available evidence and PWA, send a next instruction when the agent should continue, and continue coordinating until genuinely blocked or completed.\nThis is a runtime notification, not a business activity.\n</paseo-swarm-runtime-notification>",
   },
 ] as const;
 const rows = examples.map((example) => ({ example, dataSet: { example: example.kind } }));
@@ -79,6 +86,14 @@ function Gallery() {
   );
 }
 if (isWeb) {
+  window.__paseoEnvelopeGalleryRanges = (kind, query) => {
+    const row = document.querySelector<HTMLElement>(`[data-example="${kind}"]`);
+    if (!row) throw new Error("The real envelope gallery row must be mounted");
+    return findRenderedMatches(row, query).map((range) => range.toString());
+  };
+  window.addEventListener("pagehide", () => delete window.__paseoEnvelopeGalleryRanges, {
+    once: true,
+  });
   UnistylesRuntime.setAdaptiveThemes(false);
   UnistylesRuntime.setTheme(themeName);
   void i18n
