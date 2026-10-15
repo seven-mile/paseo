@@ -426,6 +426,14 @@ export const ar: TranslationResources = {
     },
   },
   message: {
+    envelope: {
+      titles: {
+        settings: "الإعدادات",
+        team: "رسالة الفريق",
+        runtime: "إشعار وقت التشغيل",
+      },
+      originalMessage: "الرسالة الأصلية",
+    },
     diagram: {
       diagram: "مخطط",
       zoomIn: "تكبير",

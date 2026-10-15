@@ -428,6 +428,14 @@ export const ko: TranslationResources = {
     },
   },
   message: {
+    envelope: {
+      titles: {
+        settings: "설정",
+        team: "팀 메시지",
+        runtime: "런타임 알림",
+      },
+      originalMessage: "원본 메시지",
+    },
     diagram: {
       diagram: "다이어그램",
       zoomIn: "확대",

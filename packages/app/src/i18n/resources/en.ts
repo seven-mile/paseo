@@ -425,6 +425,14 @@ export const en = {
     },
   },
   message: {
+    envelope: {
+      titles: {
+        settings: "Settings",
+        team: "Team message",
+        runtime: "Runtime notification",
+      },
+      originalMessage: "Original message",
+    },
     diagram: {
       diagram: "Diagram",
       zoomIn: "Zoom in",

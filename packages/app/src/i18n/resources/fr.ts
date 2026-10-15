@@ -435,6 +435,14 @@ export const fr: TranslationResources = {
     },
   },
   message: {
+    envelope: {
+      titles: {
+        settings: "Paramètres",
+        team: "Message d’équipe",
+        runtime: "Notification d’exécution",
+      },
+      originalMessage: "Message d’origine",
+    },
     diagram: {
       diagram: "Diagramme",
       zoomIn: "Zoomer",

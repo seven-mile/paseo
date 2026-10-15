@@ -426,6 +426,14 @@ export const zhCN: TranslationResources = {
     },
   },
   message: {
+    envelope: {
+      titles: {
+        settings: "设置",
+        team: "团队消息",
+        runtime: "运行时通知",
+      },
+      originalMessage: "原始消息",
+    },
     diagram: {
       diagram: "图表",
       zoomIn: "放大",

@@ -65,3 +65,33 @@ it("matches whitespace across text nodes without inspecting hidden link destinat
     "world\nline",
   ]);
 });
+
+it("finds an envelope body inside one marker without counting its controls or original disclosure", () => {
+  const root = document.createElement("div");
+  const row = document.createElement("div");
+  row.dataset.messageId = "envelope-message";
+  row.innerHTML =
+    '<div data-message-text="true"><div><button>find body</button><div data-card-body="true">İ😀find <strong>body</strong></div></div></div><button>Original message</button>';
+  root.append(row);
+  document.body.append(root);
+
+  const matches = () => findMessageMatches(root, "envelope-message", "find body");
+  expect(row.querySelectorAll('[data-message-text="true"]')).toHaveLength(1);
+  expect(matches().map((range) => range.toString())).toEqual(["find body"]);
+  expect(matches()[0]!.startOffset).toBe(3);
+  expect(matches()[0]!.startContainer.parentElement?.dataset.cardBody).toBe("true");
+  expect(findRenderedMatches(row, "Original message")).toEqual([]);
+
+  const original = document.createElement("div");
+  original.textContent =
+    "<paseo-swarm-team-message>\nİ😀find **body**\n</paseo-swarm-team-message>";
+  row.append(original);
+  expect(findMessageMatches(root, "envelope-message", "paseo-swarm-team-message")).toEqual([]);
+  expect(findRenderedMatches(row, "paseo-swarm-team-message")).toEqual([]);
+  expect(matches().map((range) => range.toString())).toEqual(["find body"]);
+  expect(findMessageMatches(root, "envelope-message", "İ😀find")).toHaveLength(1);
+
+  row.querySelector('[data-card-body="true"]')!.remove();
+  expect(matches()).toEqual([]);
+  expect(findMessageMatches(root, "envelope-message", "İ😀find")).toEqual([]);
+});

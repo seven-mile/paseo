@@ -91,6 +91,8 @@ export type UserMessageImageAttachment = AttachmentMetadata;
 
 export interface UserMessageItem {
   kind: "user_message";
+  // Only the display projection of spoken input retains its pre-transform text.
+  sourceText?: string;
   id: string;
   clientMessageId?: string;
   messageId?: string;

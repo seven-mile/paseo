@@ -432,6 +432,14 @@ export const ptBR: TranslationResources = {
     },
   },
   message: {
+    envelope: {
+      titles: {
+        settings: "Configurações",
+        team: "Mensagem da equipe",
+        runtime: "Notificação de execução",
+      },
+      originalMessage: "Mensagem original",
+    },
     diagram: {
       diagram: "Diagrama",
       zoomIn: "Aproximar",

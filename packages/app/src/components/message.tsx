@@ -80,6 +80,13 @@ import { setAssistantMarkdownBlockHeight } from "@/utils/assistant-message-heigh
 import { isRenderProfileEnabled } from "@/utils/render-profiler";
 import { getAgentAttachmentPillContent } from "@/attachments/attachment-pill-content";
 import { PlanCard } from "./plan-card";
+import {
+  SwarmEnvelopeBody,
+  SwarmEnvelopeOriginal,
+  swarmEnvelopeTitleKeys,
+  type SwarmEnvelopeCardProps,
+} from "./swarm-envelope-card";
+import { parseSwarmEnvelope } from "@/swarm/system-envelope";
 import { useToolCallSheet } from "./tool-call-sheet";
 import { ToolCallDetailsContent } from "./tool-call-details";
 import {
@@ -121,6 +128,7 @@ interface UserMessageProps {
   agentId?: string;
   messageId?: string;
   message: string;
+  sourceMessage?: string;
   images?: UserMessageImageAttachment[];
   attachments?: AgentAttachment[];
   timestamp: number;
@@ -337,6 +345,20 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
     maxWidth: "100%",
     cursor: "auto",
   },
+  envelopeContent: {
+    width: "100%",
+    minWidth: 0,
+    alignItems: "stretch",
+  },
+  envelopeBody: {
+    alignSelf: "stretch",
+    minWidth: 0,
+  },
+  envelopeBadge: {
+    alignSelf: "stretch",
+    minWidth: 0,
+    marginHorizontal: 0,
+  },
   containerSpacing: {
     marginBottom: theme.spacing[1],
   },
@@ -424,11 +446,48 @@ function UserMessageImagePill({ image, onOpen, accessibilityLabel }: UserMessage
 
 const MESSAGE_TEXT_DATASET = { messageText: "true" };
 
+function SwarmEnvelopeMessage({ envelope, original }: SwarmEnvelopeCardProps) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(true);
+  const [originalExpanded, setOriginalExpanded] = useState(false);
+  const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
+  const toggleOriginal = useCallback(() => setOriginalExpanded((value) => !value), []);
+  const renderDetails = useCallback(
+    () => (
+      <>
+        <SwarmEnvelopeBody envelope={envelope} />
+        <SwarmEnvelopeOriginal
+          original={original}
+          expanded={originalExpanded}
+          onToggle={toggleOriginal}
+        />
+      </>
+    ),
+    [envelope, original, originalExpanded, toggleOriginal],
+  );
+
+  return (
+    <View style={userMessageStylesheet.envelopeBody} testID="swarm-envelope-card">
+      <ExpandableBadge
+        label={t(swarmEnvelopeTitleKeys[envelope.kind])}
+        icon={Info}
+        isExpanded={expanded}
+        onToggle={toggleExpanded}
+        renderDetails={renderDetails}
+        disableOuterSpacing
+        style={userMessageStylesheet.envelopeBadge}
+        testID="swarm-envelope-badge"
+      />
+    </View>
+  );
+}
+
 export const UserMessage = memo(function UserMessage({
   serverId,
   agentId,
   messageId,
   message,
+  sourceMessage = message,
   images = [],
   attachments = [],
   timestamp,
@@ -449,6 +508,7 @@ export const UserMessage = memo(function UserMessage({
     [lightboxMetadata],
   );
   const resolvedDisableOuterSpacing = useDisableOuterSpacing(disableOuterSpacing);
+  const envelope = useMemo(() => parseSwarmEnvelope(sourceMessage), [sourceMessage]);
   const hasText = message.trim().length > 0;
   const hasImages = images.length > 0;
   const hasAttachments = attachments.length > 0;
@@ -461,7 +521,10 @@ export const UserMessage = memo(function UserMessage({
 
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
-  const getMessageContent = useCallback(() => message, [message]);
+  const getMessageContent = useCallback(
+    () => (envelope ? sourceMessage : message),
+    [envelope, sourceMessage, message],
+  );
   const handleRewind = useCallback(
     (input: { mode: RewindMode; rewoundText: string }) => {
       return rewindMutation.rewindAgent(input);
@@ -479,6 +542,14 @@ export const UserMessage = memo(function UserMessage({
       ],
     ],
     [resolvedDisableOuterSpacing, isFirstInGroup, isLastInGroup],
+  );
+  const contentStyle = useMemo(
+    () => [userMessageStylesheet.content, envelope && userMessageStylesheet.envelopeContent],
+    [envelope],
+  );
+  const bubbleStyle = useMemo(
+    () => (envelope ? userMessageStylesheet.envelopeBody : userMessageStylesheet.bubble),
+    [envelope],
   );
   const imagePreviewContainerStyle = useMemo(
     () => [
@@ -507,11 +578,11 @@ export const UserMessage = memo(function UserMessage({
   return (
     <View style={containerStyle} testID="user-message" aria-busy={isPending}>
       <View
-        style={userMessageStylesheet.content}
+        style={contentStyle}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
       >
-        <View style={userMessageStylesheet.bubble}>
+        <View style={bubbleStyle}>
           {hasImages ? (
             <View style={imagePreviewContainerStyle}>
               {images.map((image) => (
@@ -542,7 +613,14 @@ export const UserMessage = memo(function UserMessage({
               })}
             </View>
           ) : null}
-          {hasText ? (
+          {envelope ? (
+            <SwarmEnvelopeMessage
+              key={sourceMessage}
+              envelope={envelope}
+              original={sourceMessage}
+            />
+          ) : null}
+          {hasText && !envelope ? (
             <Text selectable style={userMessageStylesheet.text} dataSet={MESSAGE_TEXT_DATASET}>
               {message}
             </Text>
@@ -2955,6 +3033,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
         {...pressHandlers}
         disabled={!isInteractive}
         accessibilityState={accessibilityState}
+        aria-expanded={isInteractive ? isExpanded : undefined}
         style={pressableStyle}
       >
         <View style={expandableBadgeStylesheet.headerRow}>

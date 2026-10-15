@@ -12,6 +12,12 @@ import {
 } from "@/types/stream";
 import { transformTimelineItem, type TimelineItemTransform } from "@/plugins/timeline/model";
 import { createStreamPresentation } from "./presentation";
+import { parseSwarmEnvelope } from "@/swarm/system-envelope";
+import {
+  initialPrompt,
+  messagePrompt,
+  runtimeNotification,
+} from "../../../../plugins/paseo-swarm/server/prompts";
 import { buildAgentStreamRenderModel } from "./model";
 
 const runtime = {
@@ -509,7 +515,9 @@ describe("timeline presentation", () => {
           transform: undefined,
         });
       const projected = rows(presentMessage());
-      expect(projected).toEqual([{ ...item, text: "Please fix the voice chat." }]);
+      expect(projected).toEqual([
+        { ...item, text: "Please fix the voice chat.", sourceText: envelope },
+      ]);
       const model = buildAgentStreamRenderModel({
         tail: source === "history" ? projected : [],
         head: source === "live" ? projected : [],
@@ -519,7 +527,11 @@ describe("timeline presentation", () => {
         isMobileBreakpoint: true,
       });
       const rendered = [...model.history, ...model.segments.liveHead];
-      expect(rendered).toContainEqual({ ...item, text: "Please fix the voice chat." });
+      expect(rendered).toContainEqual({
+        ...item,
+        text: "Please fix the voice chat.",
+        sourceText: envelope,
+      });
       expect(item.text).toBe(envelope);
       expect(rows(presentMessage())[0]).toBe(projected[0]);
     },
@@ -531,7 +543,11 @@ describe("timeline presentation", () => {
       text: "<spoken-input>\nFirst line.\nSecond line with <example>XML</example>.\n</spoken-input>",
     };
     expect(projectTimelineItems([item])).toEqual([
-      { ...item, text: "First line.\nSecond line with <example>XML</example>." },
+      {
+        ...item,
+        text: "First line.\nSecond line with <example>XML</example>.",
+        sourceText: item.text,
+      },
     ]);
   });
 
@@ -575,8 +591,304 @@ describe("timeline presentation", () => {
     expect(inputs).toEqual([envelope]);
     expect(transformed).toMatchObject([{ kind: "plugin", data: { text: "Custom voice row" } }]);
     expect(projectTimelineItems([source], () => undefined)).toEqual([
-      { ...source, text: "Please fix the voice chat." },
+      { ...source, text: "Please fix the voice chat.", sourceText: envelope },
     ]);
     expect(projectTimelineItems([source], () => [])).toEqual([]);
+  });
+});
+
+describe("display-only Swarm message presentation", () => {
+  const literal = "<paseo-swarm-team-message>\nA\nB\n</paseo-swarm-team-message>";
+  const cases = [
+    { kind: "settings", tag: "paseo-swarm-system-settings" },
+    { kind: "team", tag: "paseo-swarm-team-message" },
+    { kind: "runtime", tag: "paseo-swarm-runtime-notification" },
+  ] as const;
+
+  it("recognizes an existing literal without deriving identity or metadata", () => {
+    expect(parseSwarmEnvelope(literal)).toEqual({ kind: "team", body: "A\nB" });
+  });
+
+  it.each(cases)(
+    "retains opaque Unicode, nested tags and empty bodies for $kind",
+    ({ kind, tag }) => {
+      const body = `  İ中文😀\r\n</${tag}>\n${literal}\n  `;
+      // A settings block ends at its first closing line; arbitrary tail text stays in the body.
+      const settingsBody = "  İ中文😀\r\nOpaque settings  ";
+      const expectedBody = kind === "settings" ? settingsBody : body;
+      expect(parseSwarmEnvelope(`<${tag}>\n${expectedBody}\n</${tag}>`)).toEqual({
+        kind,
+        body: expectedBody,
+      });
+      expect(parseSwarmEnvelope(`<${tag}>\r\n${expectedBody}\r\n</${tag}>`)).toEqual({
+        kind,
+        body: expectedBody,
+      });
+      expect(parseSwarmEnvelope(`<${tag}>\n\n</${tag}>`)).toEqual({ kind, body: "" });
+      expect(parseSwarmEnvelope(`<${tag}>\r\n</${tag}>`)).toEqual({ kind, body: "" });
+    },
+  );
+
+  it("removes only the settings block delimiters and preserves the complete nested tail", () => {
+    const tail = `\r\nYou are worker.\r\nProject working agreement:\r\n${literal}\r\n</paseo-swarm-system-settings>\r\nYour role guidance:\r\n中文😀\r\nOrientation: continue.  `;
+    const input = `<paseo-swarm-system-settings>\r\nSettings\r\n</paseo-swarm-system-settings>${tail}`;
+    expect(parseSwarmEnvelope(input)).toEqual({ kind: "settings", body: `Settings${tail}` });
+  });
+
+  it.each(cases)(
+    "preserves a body's independent final CR in an LF $kind wrapper",
+    ({ kind, tag }) => {
+      const body = "中文😀\r";
+      expect(parseSwarmEnvelope(`<${tag}>\n${body}\n</${tag}>`)).toEqual({ kind, body });
+    },
+  );
+
+  it.each(cases)(
+    "preserves a body's independent final CR in a CRLF $kind wrapper",
+    ({ kind, tag }) => {
+      const body = "中文😀\r";
+      expect(parseSwarmEnvelope(`<${tag}>\r\n${body}\r\n</${tag}>`)).toEqual({ kind, body });
+    },
+  );
+
+  it.each(cases)("rejects a CRLF $kind opening with an LF-only closing delimiter", ({ tag }) => {
+    expect(parseSwarmEnvelope(`<${tag}>\r\nBody\n</${tag}>`)).toBeNull();
+  });
+
+  it.each(cases)(
+    "interprets CR before an LF $kind closing as body text, not mixed framing",
+    ({ kind, tag }) => {
+      expect(parseSwarmEnvelope(`<${tag}>\nBody\r\n</${tag}>`)).toEqual({
+        kind,
+        body: "Body\r",
+      });
+    },
+  );
+
+  it("preserves independent CR and the complete settings tail without normalizing its line endings", () => {
+    const tail = "\r\nProject agreement\nRole\r\nOrientation  ";
+    expect(
+      parseSwarmEnvelope(
+        `<paseo-swarm-system-settings>\nSettings\r\n</paseo-swarm-system-settings>${tail}`,
+      ),
+    ).toEqual({
+      kind: "settings",
+      body: `Settings\r${tail}`,
+    });
+    expect(
+      parseSwarmEnvelope(
+        `<paseo-swarm-system-settings>\r\nSettings\r\r\n</paseo-swarm-system-settings>${tail}`,
+      ),
+    ).toEqual({
+      kind: "settings",
+      body: `Settings\r${tail}`,
+    });
+  });
+
+  it("does not truncate settings containing further closing or nested markers", () => {
+    const input =
+      "<paseo-swarm-system-settings>\nFirst\n</paseo-swarm-system-settings>\nStill body\n<paseo-swarm-system-settings>\nNested\n</paseo-swarm-system-settings>\nFull orientation";
+    expect(parseSwarmEnvelope(input)).toEqual({
+      kind: "settings",
+      body: "First\nStill body\n<paseo-swarm-system-settings>\nNested\n</paseo-swarm-system-settings>\nFull orientation",
+    });
+  });
+
+  it.each(cases)("accepts same-kind concatenation as one $kind display card", ({ kind, tag }) => {
+    const first = `<${tag}>\nFirst\n</${tag}>`;
+    const second = `<${tag}>\nSecond\n</${tag}>`;
+    const input = `${first}\n${second}`;
+    const body = kind === "settings" ? `First\n${second}` : `First\n</${tag}>\n<${tag}>\nSecond`;
+    expect(parseSwarmEnvelope(input)).toEqual({ kind, body });
+  });
+
+  it.each([
+    "ordinary text",
+    `quoted: ${literal}`,
+    `\uFEFF${literal}`,
+    `${literal}\n`,
+    `\`\`\`text\n${literal}\n\`\`\``,
+    literal.replace("<paseo-swarm-team-message>", "<paseo-swarm-team-message extra>"),
+    literal.replace("</paseo-swarm-team-message>", "</wrong>"),
+    literal.slice(0, -1),
+    "<paseo-swarm-team-message>missing opening newline\n</paseo-swarm-team-message>",
+    "<paseo-swarm-team-message>\nBody without closing newline</paseo-swarm-team-message>",
+    "<paseo-swarm-runtime-notification>\nMissing close",
+    "<paseo-swarm-system-settings>\nMissing close and complete working agreement",
+    "<paseo-swarm-system-settings>\nBody\n</paseo-swarm-system-settings>unseparated tail",
+    "<paseo-swarm-context>\nUnknown\n</paseo-swarm-context>",
+    "<paseo-swarm-escalation>\nUnknown\n</paseo-swarm-escalation>",
+    '<paseo-swarm-envelope>\n{"version":1,"kind":"team","bodyLength":0}\n\n\n</paseo-swarm-envelope>',
+    "<paseo-system>\nExisting unrelated daemon message\n</paseo-system>",
+  ])("leaves unknown, quoted and broken source text intact: %s", (input) => {
+    const source = Object.freeze({ ...userMessage("raw", 1), text: input });
+    const present = createStreamPresentation();
+    const projected = rows(
+      present({ ...presentationOptions, transform: undefined, tail: [source], head: [] }),
+    );
+    expect(parseSwarmEnvelope(input)).toBeNull();
+    expect(projected).toEqual([source]);
+    expect(projected[0]).toBe(source);
+  });
+
+  it.each(["live", "history", "import"])(
+    "preserves user-written roles, identity and the complete Copy source through %s presentation",
+    (path) => {
+      const source = Object.freeze({
+        ...userMessage("user-frame", 1),
+        text: literal,
+        messageId: "provider-id",
+        clientMessageId: "client-id",
+        turnId: "turn-id",
+        timelineCursor: { epoch: "epoch", seq: 5 },
+      });
+      const present = createStreamPresentation();
+      const installed = path === "live" ? source : { ...source };
+      const projected = rows(
+        present({
+          ...presentationOptions,
+          transform: undefined,
+          tail: path === "live" ? [] : [installed],
+          head: path === "live" ? [installed] : [],
+        }),
+      );
+      expect(projected).toEqual([source]);
+      expect(projected[0]).toBe(installed);
+      const row = projected[0];
+      expect(row.kind).toBe("user_message");
+      if (row.kind !== "user_message") throw new Error("Expected original user role");
+      expect(row.sourceText).toBeUndefined();
+      expect(row.sourceText ?? row.text).toBe(literal);
+      expect(parseSwarmEnvelope(row.sourceText ?? row.text)).toEqual({
+        kind: "team",
+        body: "A\nB",
+      });
+      expect(source.text).toBe(literal);
+    },
+  );
+
+  it("does not promote tags nested inside spoken input or replace its complete Copy source", () => {
+    const original = `<spoken-input>\n${literal}\n</spoken-input>`;
+    const source = Object.freeze({ ...userMessage("spoken-frame", 1), text: original });
+    const present = createStreamPresentation();
+    const projected = rows(
+      present({ ...presentationOptions, transform: undefined, tail: [source], head: [] }),
+    );
+    expect(projected).toEqual([{ ...source, text: literal, sourceText: original }]);
+    const row = projected[0];
+    if (row.kind !== "user_message") throw new Error("Expected original user role");
+    expect(parseSwarmEnvelope(row.sourceText ?? row.text)).toBeNull();
+    expect(row.sourceText ?? row.text).toBe(original);
+    expect(source.text).toBe(original);
+  });
+
+  it("recognizes actual main settings and team producers without dropping current guidance or payloads", () => {
+    const raw = `  人类😀\r\n${literal}\n</paseo-swarm-system-settings>  `;
+    const settings = initialPrompt({
+      pwa: {
+        project: "Example",
+        role: "developer",
+        roleClass: "worker",
+        projectBody: raw,
+        roleBody: "Full role guidance",
+        statuses: ["raw-status"],
+        revision: "raw-revision",
+      },
+      agent: { name: "worker", roleClass: "worker", role: "developer", reportsTo: null },
+      brief: "Full orientation",
+    });
+    const close = "\n</paseo-swarm-system-settings>";
+    const closeAt = settings.indexOf(close);
+    expect(closeAt).toBeGreaterThan(0);
+    expect(parseSwarmEnvelope(settings)).toEqual({
+      kind: "settings",
+      body:
+        settings.slice("<paseo-swarm-system-settings>\n".length, closeAt) +
+        settings.slice(closeAt + close.length),
+    });
+    expect(parseSwarmEnvelope(settings)?.body).toContain("Use swarm_board_read when you start");
+    expect(parseSwarmEnvelope(settings)?.body).toContain(raw);
+    expect(parseSwarmEnvelope(settings)?.body).toContain("Full role guidance");
+    expect(parseSwarmEnvelope(settings)?.body).toContain("Orientation: Full orientation");
+
+    const humanBody = `A human added Activity raw-id to Task raw-task.\n${raw}`;
+    const team = messagePrompt({
+      sender: "raw.human",
+      recipient: "raw.manager",
+      taskId: "raw-task",
+      message: humanBody,
+    });
+    expect(parseSwarmEnvelope(team)).toEqual({
+      kind: "team",
+      body: team.slice(
+        "<paseo-swarm-team-message>\n".length,
+        -"\n</paseo-swarm-team-message>".length,
+      ),
+    });
+    expect(parseSwarmEnvelope(team)?.body).toContain(humanBody);
+    expect(parseSwarmEnvelope(team)?.body).toContain("Delivery does not prove");
+  });
+
+  it.each([
+    {
+      status: "idle",
+      label: "Agent raw.worker is idle.",
+      payload:
+        "idle means no turn is executing; it does not describe task completion, success, failure, or waiting for other agents.",
+    },
+    {
+      status: "inactive",
+      label: "Agent raw.worker is inactive.",
+      payload:
+        "inactive means no turn is executing; it does not describe task completion, success, failure, or waiting for other agents.",
+    },
+    {
+      status: "completed",
+      label: "Observed assistant text from this turn",
+      payload: `  中文😀\r\n${literal}  `,
+    },
+    {
+      status: "canceled",
+      label: "Peek at assistant text from the interrupted turn (possibly incomplete)",
+      payload: `  中文😀\r\n${literal}  `,
+    },
+    {
+      status: "failed",
+      label: "Peek at assistant text from the interrupted turn (possibly incomplete)",
+      payload: `  中文😀\r\n${literal}  `,
+    },
+  ])("preserves the actual main runtime producer for $status", ({ status, label, payload }) => {
+    const notification = runtimeNotification({
+      agent: "raw.worker",
+      manager: "raw.manager",
+      status,
+      outcome: "raw detail",
+      report: `  中文😀\r\n${literal}  `,
+    });
+    const parsed = parseSwarmEnvelope(notification);
+    expect(parsed).toEqual({
+      kind: "runtime",
+      body: notification.slice(
+        "<paseo-swarm-runtime-notification>\n".length,
+        -"\n</paseo-swarm-runtime-notification>".length,
+      ),
+    });
+    expect(parsed?.body).toContain(label);
+    expect(parsed?.body).toContain(payload);
+    expect(parsed?.body).toContain(
+      "Framework roster notification; this is not an agent-authored team message.",
+    );
+    expect(parsed?.body).toContain("continue coordinating until genuinely blocked or completed.");
+  });
+
+  it("retains the actual runtime no-text outcome without inventing a report", () => {
+    const parsed = parseSwarmEnvelope(
+      runtimeNotification({ agent: "worker", manager: "manager", status: "failed" }),
+    );
+    expect(parsed?.kind).toBe("runtime");
+    expect(parsed?.body).toContain("No new assistant text is available for this turn.");
+    expect(parsed?.body).toContain(
+      "This runtime outcome does not establish Task completion, success, failure, or cancellation.",
+    );
   });
 });

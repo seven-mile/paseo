@@ -62,7 +62,9 @@ export function createStreamPresentation() {
       /^\s*<spoken-input>([\s\S]*?)<\/spoken-input>(?:\s*<instruction>This message was spoken by the user\.[\s\S]*?<\/instruction>)?\s*$/.exec(
         item.text,
       );
-    const projected = spokenInput ? { ...item, text: spokenInput[1].trim() } : item;
+    const projected = spokenInput
+      ? { ...item, text: spokenInput[1].trim(), sourceText: item.text }
+      : item;
     userMessageCache.set(item, projected);
     return projected;
   }

@@ -206,6 +206,10 @@ const ThemedChevron = withUnistyles(ChevronRight);
 const chevronColor = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 const markdownRules = createPlanMarkdownRules();
 
+export function PlanMarkdownBody({ text }: { text: string }) {
+  return <MarkdownRenderer text={text} rules={markdownRules} markdownit={planMarkdownParser} />;
+}
+
 export function PlanCard(props: PlanCardProps) {
   // A resolution starts its own presentation state; subsequent taps stay local.
   return <PlanCardContent key={props.outcome ?? "proposed"} {...props} />;
@@ -262,7 +266,7 @@ function PlanCardContent({
       {expanded ? (
         <View style={styles.body}>
           {description ? <Text style={styles.description}>{description}</Text> : null}
-          <MarkdownRenderer text={text} rules={markdownRules} markdownit={planMarkdownParser} />
+          <PlanMarkdownBody text={text} />
         </View>
       ) : null}
       {footer ? <View style={styles.footer}>{footer}</View> : null}
