@@ -38,9 +38,9 @@ on this Task. Build its assignment from your Activities:
 
 - the base and head refs in the preparer's workspace;
 - the Task objective and acceptance criteria;
-- reviewer facts: each check or test that ran with its result, what was
-  exercised by hand and on which platform, what nobody verified, and known
-  risks;
+- reviewer facts: how the problem showed before the change, each check or test
+  that ran with its result, what was exercised by hand and on which platform,
+  what nobody verified, known risks, and how to roll the change back;
 - the linked forge issue, if one exists, and public evidence links (CI runs,
   uploaded screenshots).
 
