@@ -70,6 +70,9 @@ const agentSchema = z.object({
   reportsTo: z.string().nullable(),
   workspaceId: z.string().nullable(),
   retired: z.boolean(),
+  pwaBinding: z
+    .object({ projectId: z.string().optional(), contentRoot: z.string(), directory: z.string() })
+    .optional(),
 });
 const taskSchema = z.object({
   id: z.string(),
@@ -100,6 +103,8 @@ export const swarmHumanActivityReceiptSchema = activitySchema.extend({
 export const swarmTaskBoardSchema = z.object({
   version: z.literal(1),
   statuses: z.array(z.string()).optional(),
+  pwaError: z.string().optional(),
+  unassignedTaskCount: z.number().optional(),
   agents: z.array(agentSchema),
   tasks: z.array(taskSchema),
   activities: z.array(activitySchema),
@@ -129,6 +134,36 @@ export function defaultSwarmTaskScope(
   return owners.length === 1 ? (owners[0].qualifiedName ?? owners[0].name) : "";
 }
 
+export function swarmBoardTarget(
+  board: SwarmTaskBoard,
+  selection: {
+    plannerName?: string;
+    agentName?: string;
+    taskId?: string;
+    workspaceId: string;
+    defaultAgentId?: string;
+    explorer?: boolean;
+  },
+) {
+  let name = selection.agentName ?? selection.plannerName;
+  if (name === "") return { teamName: undefined, unassigned: false };
+  if (!name && selection.taskId) {
+    const task = board.tasks.find((candidate) => candidate.id === selection.taskId);
+    if (task) name = task.managerName;
+  }
+  if (!name && selection.explorer)
+    name = defaultSwarmTaskScope(board, selection.workspaceId, selection.defaultAgentId);
+  let agent = name ? findSwarmTaskAgent(board.agents, name) : undefined;
+  const seen = new Set<string>();
+  while (agent?.roleClass === "worker" && agent.reportsTo && !seen.has(agent.paseoAgentId)) {
+    seen.add(agent.paseoAgentId);
+    agent = findSwarmTaskAgent(board.agents, agent.reportsTo);
+  }
+  if (agent && !agent.retired && agent.roleClass !== "worker")
+    return { teamName: agent.qualifiedName ?? agent.name, unassigned: false };
+  return { teamName: undefined, unassigned: Boolean(selection.taskId || name) };
+}
+
 export function swarmTaskColumns(board: SwarmTaskBoard, tasks: readonly SwarmTask[]) {
   const declared = [...new Set(board.statuses ?? [])];
   const observed = [...new Set(tasks.map((task) => task.status))]
@@ -136,6 +171,7 @@ export function swarmTaskColumns(board: SwarmTaskBoard, tasks: readonly SwarmTas
     .sort();
   return [...declared, ...observed].map((status) => ({
     status,
+    undeclared: declared.length > 0 && !declared.includes(status),
     tasks: tasks.filter((task) => task.status === status),
   }));
 }

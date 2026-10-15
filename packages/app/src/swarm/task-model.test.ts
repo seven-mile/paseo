@@ -11,6 +11,7 @@ import {
   scopedSwarmTasks,
   swarmTaskScopeOptions,
   swarmTaskColumns,
+  swarmBoardTarget,
   swarmHumanActivityReceiptSchema,
   unansweredChoices,
   type HumanActivityInput,
@@ -640,5 +641,45 @@ describe("Tasks responsive shell state", () => {
     ).toBe(false);
     expect(sent).toEqual([]);
     expect(() => session.detail("another-task", [])).toThrow("Tasks tab state is closed");
+  });
+});
+
+describe("team board request identity", () => {
+  it("keeps Project as planner entries and resolves explicit Tasks by manager, never createdBy", () => {
+    const value = board();
+    expect(swarmBoardTarget(value, { workspaceId: "planner-workspace" })).toEqual({
+      teamName: undefined,
+      unassigned: false,
+    });
+    value.tasks[0].createdBy = "other.manager";
+    expect(
+      swarmBoardTarget(value, { workspaceId: "planner-workspace", taskId: value.tasks[0].id }),
+    ).toEqual({ teamName: "planner.manager", unassigned: false });
+    value.tasks[0].managerName = "missing";
+    expect(
+      swarmBoardTarget(value, { workspaceId: "planner-workspace", taskId: value.tasks[0].id }),
+    ).toEqual({ teamName: undefined, unassigned: true });
+  });
+  it("uses Explorer's actual focused manager but preserves explicit Project selection", () => {
+    const value = board();
+    expect(swarmBoardTarget(value, { workspaceId: "manager-workspace", explorer: true })).toEqual({
+      teamName: "planner.manager",
+      unassigned: false,
+    });
+    expect(
+      swarmBoardTarget(value, { workspaceId: "manager-workspace", explorer: true, agentName: "" }),
+    ).toEqual({ teamName: undefined, unassigned: false });
+  });
+  it("labels old undeclared statuses while preserving every raw status/task when PWA is unreadable", () => {
+    const value = board();
+    value.statuses = ["survey"];
+    expect(
+      swarmTaskColumns(value, value.tasks).find((column) => column.status === "development"),
+    ).toMatchObject({ undeclared: true, tasks: value.tasks });
+    value.statuses = [];
+    value.pwaError = "Moved directory";
+    expect(swarmTaskColumns(value, value.tasks)).toEqual([
+      { status: "development", undeclared: false, tasks: value.tasks },
+    ]);
   });
 });

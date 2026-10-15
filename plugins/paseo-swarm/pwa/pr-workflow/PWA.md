@@ -8,6 +8,13 @@ statuses:
   - mr-preparation
   - human-review
   - completed
+roles:
+  developer: roles/developer.md
+  planner: roles/planner.md
+  preparer: roles/preparer.md
+  researcher: roles/researcher.md
+  reviewer: roles/reviewer.md
+  supervisor: roles/supervisor.md
 ---
 
 # PR workflow

@@ -18,6 +18,7 @@ import {
   createAgentRpc,
   sendMessageRpc,
   appendHumanActivityRpc,
+  appendActivityRpc,
   createTaskRpc,
   updateTaskRpc,
   pwaSourceSetRpc,
@@ -25,6 +26,8 @@ import {
   pwaRolesReadRpc,
   prepareAgentRpc,
   bindPreparedAgentRpc,
+  bindPwaRpc,
+  registerAgentRpc,
 } from "../shared/swarm";
 
 test("supervisors require independent placement, workers keep caller defaults, and foreign occupants are rejected", async () => {
@@ -44,6 +47,12 @@ test("supervisors require independent placement, workers keep caller defaults, a
     role: "planner",
     reportsTo: null,
     workspaceId: "planner-workspace",
+    projectId: "project",
+    pwaBinding: {
+      projectId: "project",
+      contentRoot: process.env.PASEO_SWARM_PWA_ROOT!,
+      directory: process.env.PASEO_SWARM_PWA_ROOT!,
+    },
     retired: false,
     createdAt: "2026-10-06T00:00:00Z",
     updatedAt: "2026-10-06T00:00:00Z",
@@ -62,6 +71,8 @@ test("supervisors require independent placement, workers keep caller defaults, a
   const workspaceCreations: unknown[] = [];
   const agentCreations: Array<{ workspaceId: string; parent: string }> = [];
   const runtimeWorkspaces = new Map([[planner.paseoAgentId, "planner-workspace"]]);
+  const runtimeParents = new Map<string, string>();
+  let beforeRosterList: (() => Promise<void>) | undefined;
   const prompts: string[] = [];
   const workspace = (workspaceId: string) => ({
     async refresh() {
@@ -73,12 +84,14 @@ test("supervisors require independent placement, workers keep caller defaults, a
         parent: string;
         config: { systemPrompt: string };
       }) {
+        if (workspaceId === "failing-workspace") throw new Error("Native creation unavailable");
         runtimeWorkspaces.set(creation.agentId, workspaceId);
+        runtimeParents.set(creation.agentId, creation.parent);
         prompts.push(creation.config.systemPrompt);
         agentCreations.push({ workspaceId, parent: creation.parent });
         return {
           async refresh() {
-            return { agent: { workspaceId } };
+            return { agent: { workspaceId, labels: { "paseo.parent-agent-id": creation.parent } } };
           },
           async send(text: string, options: unknown) {
             sends.push({ agentId: creation.agentId, text, options });
@@ -101,6 +114,9 @@ test("supervisors require independent placement, workers keep caller defaults, a
       },
       agents: {
         async list() {
+          const beforeList = beforeRosterList;
+          beforeRosterList = undefined;
+          if (beforeList) await beforeList();
           return {
             entries: [...runtimeWorkspaces].map(([id, workspaceId]) => ({
               agent: { id, workspaceId },
@@ -112,7 +128,13 @@ test("supervisors require independent placement, workers keep caller defaults, a
           return {
             async refresh() {
               return {
-                agent: { cwd: "/test/project", workspaceId: runtimeWorkspaces.get(agentId) },
+                agent: {
+                  cwd: "/test/project",
+                  workspaceId: runtimeWorkspaces.get(agentId),
+                  labels: runtimeParents.has(agentId)
+                    ? { "paseo.parent-agent-id": runtimeParents.get(agentId) }
+                    : {},
+                },
               };
             },
             async send(text: string, options: unknown) {
@@ -271,81 +293,176 @@ test("supervisors require independent placement, workers keep caller defaults, a
     runtimeWorkspaces.delete("ordinary-native-agent");
     assert.equal(state.agents.length, savedCount);
     assert.equal(agentCreations.length, createdCount);
-    const prepareLegacy = (name: string) =>
-      invoke(
+    const reservationsBeforeFailure = state.agents.length;
+    const sendsBeforeFailure = sends.length;
+    await assert.rejects(
+      async () => createChild(supervisor, "creation-failure", "failing-workspace"),
+      /Reservation .* retained/,
+    );
+    assert.equal(state.agents.length, reservationsBeforeFailure + 1);
+    const reservation = state.agents.find((entry) => entry.name === "creation-failure");
+    assert.equal(reservation?.creationError, "Native creation unavailable");
+    assert.equal(reservation?.workspaceId, null);
+    await assert.rejects(
+      async () =>
+        invoke(
+          registerAgentRpc.name,
+          registerAgentRpc.input.parse({
+            paseoAgentId: reservation!.paseoAgentId,
+            name: "creation-failure",
+            roleClass: "worker",
+            role: "researcher",
+            reportsTo: supervisor.qualifiedName,
+          }),
+        ),
+      /bind_workspace/,
+    );
+    assert.equal(sends.length, sendsBeforeFailure);
+    await assert.rejects(
+      async () => createChild(supervisor, "creation-failure", "failing-workspace"),
+      /already exists/,
+    );
+    assert.equal(state.agents.length, reservationsBeforeFailure + 1);
+    await assert.rejects(
+      async () =>
+        invoke(
+          prepareAgentRpc.name,
+          prepareAgentRpc.input.parse({
+            name: "implicit-default",
+            roleClass: "planner",
+            role: "planner",
+            projectId: "project",
+          }),
+        ),
+      /Choose a PWA directory explicitly/,
+    );
+    const preparedRoot = prepareAgentRpc.output.parse(
+      await invoke(
         prepareAgentRpc.name,
-        prepareAgentRpc.input.parse({ name, roleClass: "planner", role: "planner" }),
-      ) as Promise<{ agentId: string; systemPrompt: string; agent: AgentRecord }>;
-    const legacyDefault = await prepareLegacy("legacy-default");
-    assert.equal(legacyDefault.agent.projectId, undefined);
-    runtimeWorkspaces.set(legacyDefault.agentId, "supervisor-workspace");
-    await invoke(bindPreparedAgentRpc.name, {
-      agentId: legacyDefault.agentId,
-      workspaceId: "supervisor-workspace",
-    });
-    assert.equal(legacyDefault.agent.projectId, "project");
-    const legacyOverride = await prepareLegacy("legacy-override");
-    runtimeWorkspaces.set(legacyOverride.agentId, "supervisor-workspace");
+        prepareAgentRpc.input.parse({
+          name: "prepared-root",
+          roleClass: "planner",
+          role: "planner",
+          projectId: "project",
+          pwaDirectory: ".",
+        }),
+      ),
+    );
+    assert.equal(preparedRoot.parentAgentId, null);
+    const preparedBinding = { ...preparedRoot.agent.pwaBinding };
+    const preparedPrompt = preparedRoot.systemPrompt;
+    const originalBinding = { ...planner.pwaBinding };
     const source = join(home, "agreement");
     mkdirSync(join(source, "roles"), { recursive: true });
-    writeFileSync(
-      join(source, "PWA.md"),
-      "---\nversion: 1\nproject: Override\n---\nFresh project.\n",
-    );
+    const agreement = (statuses: string) =>
+      `---\nversion: 1\nproject: Override\nstatuses: [${statuses}]\nroles:\n  planner: roles/director.md\n  director: roles/director.md\n  supervisor: roles/supervisor.md\n  researcher: roles/researcher.md\n---\nFresh project.\n`;
+    writeFileSync(join(source, "PWA.md"), agreement("review, survey, completed"));
     writeFileSync(
       join(source, "roles", "director.md"),
       "---\nversion: 1\nroleClass: planner\n---\nDirect.\n",
+    );
+    writeFileSync(
+      join(source, "roles", "supervisor.md"),
+      "---\nversion: 1\nroleClass: supervisor\n---\nSupervise.\n",
     );
     writeFileSync(
       join(source, "roles", "researcher.md"),
       "---\nversion: 1\nroleClass: worker\n---\nFirst role.\n",
     );
     assert.deepEqual(
-      await invoke(pwaSourceSetRpc.name, { projectId: "project", path: "agreement" }),
-      { path: source },
+      await invoke(pwaSourceSetRpc.name, {
+        projectId: "project",
+        path: "agreement",
+        defaultPwa: ".",
+      }),
+      { path: source, defaultPwa: "." },
     );
-    assert.deepEqual(await invoke(pwaSourceReadRpc.name, { projectId: "project" }), {
-      path: source,
-    });
-    const legacyPrompt = legacyOverride.systemPrompt;
-    await assert.rejects(
-      async () =>
-        invoke(bindPreparedAgentRpc.name, {
-          agentId: legacyOverride.agentId,
-          workspaceId: "supervisor-workspace",
+    const discovery = pwaSourceReadRpc.output.parse(
+      await invoke(pwaSourceReadRpc.name, { projectId: "project" }),
+    );
+    assert.equal(discovery.path, source);
+    assert.equal(discovery.defaultPwa, ".");
+    assert.equal(discovery.complete, true);
+    assert.deepEqual(discovery.errors, []);
+    assert.deepEqual(
+      discovery.entries.map((entry) => entry.directory),
+      ["."],
+    );
+    assert.deepEqual(planner.pwaBinding, originalBinding);
+    assert.deepEqual(supervisor.pwaBinding, originalBinding);
+    assert.deepEqual(preparedRoot.agent.pwaBinding, preparedBinding);
+    assert.equal(preparedRoot.systemPrompt, preparedPrompt);
+    const inherited = prepareAgentRpc.output.parse(
+      await invoke(
+        prepareAgentRpc.name,
+        prepareAgentRpc.input.parse({
+          name: "unchanged-source",
+          roleClass: "worker",
+          role: "researcher",
+          reportsTo: supervisor.qualifiedName,
         }),
-      /Prepare this agent with the selected project before binding its PWA directory/,
+      ),
     );
-    assert.equal(legacyOverride.agent.workspaceId, null);
-    assert.equal(legacyOverride.agent.projectId, undefined);
-    assert.equal(legacyOverride.systemPrompt, legacyPrompt);
-
+    assert.doesNotMatch(inherited.systemPrompt, /Fresh project/);
+    const inheritedId = inherited.agentId;
+    const inheritedPrompt = inherited.systemPrompt;
+    const inheritedBinding = { ...inherited.agent.pwaBinding };
     await assert.rejects(
       async () => invoke(pwaSourceSetRpc.name, { projectId: "missing", path: source }),
       /Unknown project/,
     );
-    const choices = (await invoke(pwaRolesReadRpc.name, {
-      projectId: "project",
-      roleClass: "planner",
-    })) as Array<{ role: string }>;
+    const choices = pwaRolesReadRpc.output.parse(
+      await invoke(pwaRolesReadRpc.name, {
+        projectId: "project",
+        path: ".",
+        roleClass: "planner",
+      }),
+    );
     assert.deepEqual(
       choices.map((role) => role.role),
-      ["director"],
+      ["director", "planner"],
     );
-    writeFileSync(
-      join(source, "PWA.md"),
-      "---\nversion: 1\nproject: Override\nstatuses: [review, survey, completed]\n---\nFresh project.\n",
+    // Only explicit confirmation moves the manager to the new directory.
+    await invoke(
+      bindPwaRpc.name,
+      bindPwaRpc.input.parse({ agentName: planner.qualifiedName, pwaDirectory: "." }),
     );
+    assert.deepEqual(supervisor.pwaBinding, originalBinding);
+    await invoke(
+      bindPwaRpc.name,
+      bindPwaRpc.input.parse({ agentName: supervisor.qualifiedName, pwaDirectory: "." }),
+    );
+    runtimeWorkspaces.set(inheritedId, "supervisor-workspace");
+    runtimeParents.set(inheritedId, supervisor.paseoAgentId);
+    await assert.rejects(
+      async () =>
+        invoke(bindPreparedAgentRpc.name, {
+          agentId: inheritedId,
+          workspaceId: "supervisor-workspace",
+        }),
+      /manager's PWA binding changed after preparation/,
+    );
+    const retained = state.agents.find((entry) => entry.paseoAgentId === inheritedId);
+    assert.deepEqual(retained, inherited.agent);
+    assert.equal(retained?.workspaceId, null);
+    assert.equal(inherited.agentId, inheritedId);
+    assert.equal(inherited.systemPrompt, inheritedPrompt);
+    assert.deepEqual(retained?.pwaBinding, inheritedBinding);
     const readStatuses = async () =>
-      boardReadRpc.output.parse(await invoke(boardReadRpc.name, { projectId: "project" })).statuses;
+      boardReadRpc.output.parse(
+        await invoke(boardReadRpc.name, {
+          projectId: "project",
+          teamName: planner.qualifiedName,
+        }),
+      ).statuses;
     assert.deepEqual(await readStatuses(), ["review", "survey", "completed"]);
-    writeFileSync(
-      join(source, "PWA.md"),
-      "---\nversion: 1\nproject: Override\nstatuses: [completed, review]\n---\nFresh project.\n",
-    );
+    writeFileSync(join(source, "PWA.md"), agreement("completed, review"));
     assert.deepEqual(await readStatuses(), ["completed", "review"]);
     assert.equal("statuses" in state, false);
-    assert.deepEqual(await invoke(boardReadRpc.name, {}), state);
+    const plainBoard = boardReadRpc.output.parse(await invoke(boardReadRpc.name, {}));
+    assert.deepEqual(plainBoard.tasks, state.tasks);
+    assert.deepEqual(plainBoard.activities, state.activities);
+    assert.equal(plainBoard.statuses, undefined);
     const prepare = (name: string) =>
       invoke(
         prepareAgentRpc.name,
@@ -353,24 +470,36 @@ test("supervisors require independent placement, workers keep caller defaults, a
           name,
           roleClass: "worker",
           role: "researcher",
-          reportsTo: "planner.supervisor",
+          reportsTo: supervisor.qualifiedName,
         }),
-      ) as Promise<{ agentId: string; systemPrompt: string; agent: AgentRecord }>;
+      ) as Promise<{
+        agentId: string;
+        systemPrompt: string;
+        parentAgentId: string;
+        agent: AgentRecord;
+      }>;
     const first = await prepare("fresh-one");
+    assert.equal(first.parentAgentId, supervisor.paseoAgentId);
     assert.match(first.systemPrompt, /Fresh project/);
     assert.match(first.systemPrompt, /First role/);
+    const firstPrompt = first.systemPrompt;
     writeFileSync(
       join(source, "roles", "researcher.md"),
       "---\nversion: 1\nroleClass: worker\n---\nSecond role.\n",
     );
     const second = await prepare("fresh-two");
     assert.match(second.systemPrompt, /Second role/);
-    assert.doesNotMatch(first.systemPrompt, /Second role/);
+    assert.equal(first.systemPrompt, firstPrompt);
     assert.doesNotMatch(prompts[1], /Fresh project/);
     const count = state.agents.length;
     writeFileSync(join(source, "roles", "researcher.md"), "invalid");
     await assert.rejects(async () => prepare("invalid-preparation"), /YAML frontmatter/);
     assert.equal(state.agents.length, count);
+    writeFileSync(
+      join(source, "roles", "researcher.md"),
+      "---\nversion: 1\nroleClass: worker\n---\nThird role.\n",
+    );
+    runtimeParents.set(first.agentId, supervisor.paseoAgentId);
     runtimeWorkspaces.set(first.agentId, "other-workspace");
     await assert.rejects(
       async () =>
@@ -382,11 +511,112 @@ test("supervisors require independent placement, workers keep caller defaults, a
     );
     assert.equal(first.agent.workspaceId, null);
     runtimeWorkspaces.set(first.agentId, "supervisor-workspace");
+    runtimeParents.set(first.agentId, planner.paseoAgentId);
+    await assert.rejects(
+      async () =>
+        invoke(bindPreparedAgentRpc.name, {
+          agentId: first.agentId,
+          workspaceId: "supervisor-workspace",
+        }),
+      /parent does not match/,
+    );
+    runtimeParents.set(first.agentId, supervisor.paseoAgentId);
+    await assert.rejects(
+      async () =>
+        invoke(
+          registerAgentRpc.name,
+          registerAgentRpc.input.parse({
+            paseoAgentId: first.agentId,
+            name: "fresh-one",
+            roleClass: "worker",
+            role: "researcher",
+            reportsTo: supervisor.qualifiedName,
+            workspaceId: "supervisor-workspace",
+          }),
+        ),
+      /bind_workspace/,
+    );
+    await assert.rejects(
+      async () =>
+        invoke(
+          bindPwaRpc.name,
+          bindPwaRpc.input.parse({
+            agentName: first.agent.qualifiedName,
+            pwaDirectory: ".",
+          }),
+        ),
+      /Finish binding the prepared agent/,
+    );
+    assert.equal(first.agent.workspaceId, null);
+    assert.equal(first.systemPrompt, firstPrompt);
+    const firstBinding = { ...first.agent.pwaBinding };
+    const parentBindingBeforeConfigChange = { ...supervisor.pwaBinding };
+    await invoke(pwaSourceSetRpc.name, {
+      projectId: "project",
+      path: originalBinding.contentRoot,
+      defaultPwa: ".",
+    });
+    assert.deepEqual(supervisor.pwaBinding, parentBindingBeforeConfigChange);
+    assert.deepEqual(first.agent.pwaBinding, firstBinding);
+    const sendsBeforeBind = sends.length;
+    const creationsBeforeBind = agentCreations.length;
     await invoke(bindPreparedAgentRpc.name, {
       agentId: first.agentId,
       workspaceId: "supervisor-workspace",
     });
     assert.equal(first.agent.workspaceId, "supervisor-workspace");
+    assert.equal(first.systemPrompt, firstPrompt);
+    assert.doesNotMatch(first.systemPrompt, /Third role/);
+    assert.equal(sends.length, sendsBeforeBind);
+    assert.equal(agentCreations.length, creationsBeforeBind);
+    const interleaved = await prepare("interleaved-binding");
+    const interleavedId = interleaved.agentId;
+    const interleavedPrompt = interleaved.systemPrompt;
+    const interleavedBinding = { ...interleaved.agent.pwaBinding };
+    runtimeWorkspaces.set(interleavedId, "supervisor-workspace");
+    runtimeParents.set(interleavedId, supervisor.paseoAgentId);
+    let changedDuringRosterRead = false;
+    beforeRosterList = async () => {
+      assert.deepEqual(supervisor.pwaBinding, interleavedBinding);
+      await invoke(
+        bindPwaRpc.name,
+        bindPwaRpc.input.parse({
+          agentName: planner.qualifiedName,
+          pwaDirectory: ".",
+        }),
+      );
+      await invoke(
+        bindPwaRpc.name,
+        bindPwaRpc.input.parse({
+          agentName: supervisor.qualifiedName,
+          pwaDirectory: ".",
+        }),
+      );
+      assert.deepEqual(supervisor.pwaBinding, originalBinding);
+      changedDuringRosterRead = true;
+    };
+    const countBeforeInterleavedBind = state.agents.length;
+    const sendsBeforeInterleavedBind = sends.length;
+    await assert.rejects(
+      async () =>
+        invoke(bindPreparedAgentRpc.name, {
+          agentId: interleavedId,
+          workspaceId: "supervisor-workspace",
+        }),
+      /manager's PWA binding changed after preparation/,
+    );
+    assert.equal(changedDuringRosterRead, true);
+    assert.equal(beforeRosterList, undefined);
+    assert.equal(state.agents.length, countBeforeInterleavedBind);
+    assert.deepEqual(
+      state.agents.find((entry) => entry.paseoAgentId === interleavedId),
+      interleaved.agent,
+    );
+    assert.equal(interleaved.agentId, interleavedId);
+    assert.equal(interleaved.agent.workspaceId, null);
+    assert.deepEqual(interleaved.agent.pwaBinding, interleavedBinding);
+    assert.equal(interleaved.systemPrompt, interleavedPrompt);
+    assert.equal(sends.length, sendsBeforeInterleavedBind);
     const initialSends = sends.length;
     await notifyManager(
       { id: worker.paseoAgentId },
@@ -705,12 +935,66 @@ test("human Activity stays saved when notification fails; storage failure still 
   }
 });
 
-test("plain board reads bypass absent or corrupt sources; project reads resolve PWA statuses", async () => {
+test("team boards use manager ancestry and confirmed PWA bindings while legacy records remain usable", async () => {
   const home = mkdtempSync(join(tmpdir(), "swarm-board-"));
   const previousHome = process.env.PASEO_HOME;
   const previousPwa = process.env.PASEO_SWARM_PWA_ROOT;
   process.env.PASEO_HOME = home;
   delete process.env.PASEO_SWARM_PWA_ROOT;
+  const timestamp = "2026-10-06T00:00:00Z";
+  const writeAgreement = (directory: string, statuses: string) => {
+    mkdirSync(join(directory, "roles"), { recursive: true });
+    writeFileSync(
+      join(directory, "PWA.md"),
+      `---\nversion: 1\nproject: Team\nstatuses: [${statuses}]\nroles:\n  planner: roles/planner.md\n  supervisor: roles/supervisor.md\n  researcher: roles/researcher.md\n---\nTeam agreement.\n`,
+    );
+    for (const [role, roleClass] of [
+      ["planner", "planner"],
+      ["supervisor", "supervisor"],
+      ["researcher", "worker"],
+    ]) {
+      writeFileSync(
+        join(directory, "roles", `${role}.md`),
+        `---\nversion: 1\nroleClass: ${roleClass}\n---\n${role}.\n`,
+      );
+    }
+  };
+  const directoryA = join(home, "a");
+  const directoryB = join(home, "b");
+  writeAgreement(directoryA, "todo, done");
+  writeAgreement(directoryB, "queued, released");
+  const binding = (directory: string) => ({ projectId: "project", contentRoot: home, directory });
+  const agent = (
+    name: string,
+    roleClass: AgentRecord["roleClass"],
+    reportsTo: string | null,
+  ): AgentRecord => ({
+    id: `${name}-record`,
+    paseoAgentId: `${name}-native`,
+    name,
+    qualifiedName: reportsTo ? `${reportsTo}.${name}` : name,
+    aliases: [],
+    roleClass,
+    role: roleClass === "worker" ? "researcher" : roleClass,
+    reportsTo,
+    workspaceId: null,
+    projectId: "project",
+    retired: false,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  const plannerA = { ...agent("a", "planner", null), pwaBinding: binding(directoryA) };
+  const plannerB = { ...agent("b", "planner", null), pwaBinding: binding(directoryB) };
+  const managerA = agent("manager-a", "supervisor", "a");
+  const managerB = agent("manager-b", "supervisor", "b");
+  const legacy = agent("legacy", "planner", null);
+  const agents = [plannerA, plannerB, managerA, managerB, legacy];
+  const nativeWorkspaces = new Map<string, string | null>(
+    agents.map((entry) => [entry.paseoAgentId, entry.workspaceId]),
+  );
+  const nativeParents = new Map<string, string>();
+  const unavailable = new Set<string>();
+  const deliveries: string[] = [];
   const handlers = new Map<string, (input: never, context: PluginHandlerContext) => unknown>();
   registerOperations({
     handle(contract, handler) {
@@ -721,7 +1005,32 @@ test("plain board reads bypass absent or corrupt sources; project reads resolve 
     paseo: {
       agents: {
         async list() {
-          return { entries: [], pageInfo: { nextCursor: null } };
+          return {
+            entries: agents
+              .filter((entry) => !unavailable.has(entry.paseoAgentId))
+              .map((entry) => ({ agent: { id: entry.paseoAgentId } })),
+            pageInfo: { nextCursor: null },
+          };
+        },
+        ref(agentId: string) {
+          return {
+            async refresh() {
+              return nativeWorkspaces.has(agentId)
+                ? {
+                    agent: {
+                      id: agentId,
+                      workspaceId: nativeWorkspaces.get(agentId),
+                      labels: nativeParents.has(agentId)
+                        ? { "paseo.parent-agent-id": nativeParents.get(agentId) }
+                        : {},
+                    },
+                  }
+                : null;
+            },
+            async send(text: string) {
+              deliveries.push(`${agentId}:${text}`);
+            },
+          };
         },
       },
       projects: {
@@ -729,30 +1038,262 @@ test("plain board reads bypass absent or corrupt sources; project reads resolve 
           return { projects: [{ projectId: "project", projectRootPath: home }] };
         },
       },
+      workspaces: {
+        ref() {
+          return {
+            async refresh() {
+              return { projectId: "project" };
+            },
+          };
+        },
+      },
     },
   } as unknown as PluginHandlerContext;
-  const invoke = (projectId?: string) =>
-    handlers.get(boardReadRpc.name)!({ projectId } as never, context);
+  const invoke = (name: string, input: unknown) => handlers.get(name)!(input as never, context);
+  const board = async (input: unknown) =>
+    boardReadRpc.output.parse(await invoke(boardReadRpc.name, input));
   try {
-    await store.update((state) => Object.assign(state, emptyState()));
-    const original = store.read();
-    assert.deepEqual(await invoke(), original);
-    assert.deepEqual(boardReadRpc.output.parse(await invoke("project")).statuses, []);
-    await assert.rejects(async () => invoke("missing"), /Unknown project/);
-    process.env.PASEO_SWARM_PWA_ROOT = join(home, "missing");
-    assert.deepEqual(await invoke(), original);
-    await assert.rejects(async () => invoke("project"), /ENOENT/);
-    writeFileSync(getConfigPath(), "corrupt config");
-    assert.deepEqual(await invoke(), original);
-    await assert.rejects(async () => invoke("project"), SyntaxError);
-    writeFileSync(getConfigPath(), JSON.stringify({ pwaRoot: home }));
-    mkdirSync(join(home, "roles"));
-    writeFileSync(
-      join(home, "roles", "developer.md"),
-      "---\nversion: 1\nroleClass: worker\n---\nDevelop.\n",
+    await store.update((state) => Object.assign(state, { ...emptyState(), agents }));
+    const task = createTaskRpc.output.parse(
+      await invoke(
+        createTaskRpc.name,
+        createTaskRpc.input.parse({
+          id: "cross-created",
+          title: "Cross-created",
+          brief: "Keep raw status",
+          status: "legacy-status",
+          managerName: managerB.qualifiedName,
+          createdBy: plannerA.qualifiedName,
+        }),
+      ),
     );
-    await assert.rejects(async () => invoke("project"), /must contain a planner role/);
-    assert.deepEqual(await invoke(), original);
+    assert.equal(task.managerName, managerB.qualifiedName);
+    assert.equal(task.createdBy, plannerA.qualifiedName);
+    const entrances = await board({ projectId: "project" });
+    assert.deepEqual(entrances.tasks, []);
+    assert.deepEqual(entrances.activities, []);
+    assert.deepEqual(entrances.statuses, []);
+    assert.deepEqual(
+      entrances.agents.map((entry) => entry.qualifiedName),
+      ["a", "b", "legacy"],
+    );
+    const teamA = await board({ projectId: "project", teamName: "a" });
+    const teamB = await board({ projectId: "project", teamName: "b" });
+    assert.deepEqual(teamA.statuses, ["todo", "done"]);
+    assert.deepEqual(teamA.tasks, []);
+    assert.deepEqual(teamB.statuses, ["queued", "released"]);
+    assert.deepEqual(teamB.tasks, [task]);
+    assert.deepEqual((await board({ teamName: managerB.qualifiedName })).tasks, [task]);
+    await invoke(pwaSourceSetRpc.name, { projectId: "project", path: home, defaultPwa: "a" });
+    assert.deepEqual(plannerB.pwaBinding, binding(directoryB));
+    assert.deepEqual((await board({ teamName: "b" })).statuses, ["queued", "released"]);
+    writeAgreement(directoryB, "released, archived");
+    const changed = await board({ teamName: "b" });
+    assert.deepEqual(changed.statuses, ["released", "archived"]);
+    assert.equal(changed.tasks[0].status, "legacy-status");
+    unavailable.add(managerB.paseoAgentId);
+    rmSync(directoryB, { recursive: true });
+    const broken = await board({ projectId: "project", teamName: "b" });
+    assert.deepEqual(broken.tasks, [task]);
+    assert.deepEqual(broken.statuses, []);
+    assert.ok(broken.pwaError);
+    assert.deepEqual(store.read().tasks, [task]);
+    assert.deepEqual((await board({})).tasks, [task]);
+    // A broken sibling is reported without hiding the valid discovered agreement.
+    mkdirSync(directoryB);
+    writeFileSync(join(directoryB, "PWA.md"), "broken");
+    const discovered = pwaSourceReadRpc.output.parse(
+      await invoke(pwaSourceReadRpc.name, { projectId: "project" }),
+    );
+    assert.ok(discovered.entries.some((entry) => entry.directory === "a" && !entry.error));
+    assert.ok(discovered.entries.some((entry) => entry.directory === "b" && entry.error));
+    assert.deepEqual(discovered.errors, []);
+    const legacyBoard = await board({ teamName: "legacy" });
+    assert.ok(legacyBoard.pwaError);
+    await invoke(
+      sendMessageRpc.name,
+      sendMessageRpc.input.parse({
+        senderName: "legacy",
+        recipientName: "a",
+        recipientPaseoAgentId: plannerA.paseoAgentId,
+        body: "Existing legacy agent still communicates",
+      }),
+    );
+    assert.equal(deliveries.length, 1);
+    const legacyTask = createTaskRpc.output.parse(
+      await invoke(
+        createTaskRpc.name,
+        createTaskRpc.input.parse({
+          id: "legacy-record",
+          title: "Existing work",
+          brief: "No PWA required for records",
+          status: "old",
+          managerName: "legacy",
+          createdBy: "legacy",
+        }),
+      ),
+    );
+    await invoke(
+      updateTaskRpc.name,
+      updateTaskRpc.input.parse({ taskId: legacyTask.id, actorName: "legacy", status: "custom" }),
+    );
+    assert.equal((await board({ teamName: "legacy" })).tasks[0].status, "custom");
+    const child = {
+      name: "new-manager",
+      roleClass: "supervisor",
+      role: "supervisor",
+      reportsTo: "legacy",
+      pwaDirectory: "a",
+    };
+    await assert.rejects(
+      async () => invoke(prepareAgentRpc.name, prepareAgentRpc.input.parse(child)),
+      /Confirm the manager's PWA directory/,
+    );
+    assert.equal(legacy.pwaBinding, undefined);
+    await assert.rejects(
+      async () =>
+        invoke(
+          bindPwaRpc.name,
+          bindPwaRpc.input.parse({
+            agentName: "legacy",
+            pwaDirectory: "a",
+          }),
+        ),
+      /Finish binding the prepared agent/,
+    );
+    nativeWorkspaces.set(legacy.paseoAgentId, "legacy-native-workspace");
+    const recovered = registerAgentRpc.output.parse(
+      await invoke(
+        registerAgentRpc.name,
+        registerAgentRpc.input.parse({
+          paseoAgentId: legacy.paseoAgentId,
+          name: "legacy",
+          roleClass: "planner",
+          role: "planner",
+          workspaceId: "legacy-native-workspace",
+          projectId: "project",
+        }),
+      ),
+    );
+    assert.equal(recovered.workspaceId, "legacy-native-workspace");
+    assert.equal(recovered.pwaBinding, undefined);
+    const confirmed = bindPwaRpc.output.parse(
+      await invoke(
+        bindPwaRpc.name,
+        bindPwaRpc.input.parse({
+          agentName: "legacy",
+          pwaDirectory: "a",
+        }),
+      ),
+    );
+    assert.deepEqual(confirmed.pwaBinding, binding(directoryA));
+    const prepared = prepareAgentRpc.output.parse(
+      await invoke(prepareAgentRpc.name, prepareAgentRpc.input.parse(child)),
+    );
+    assert.deepEqual(prepared.agent.pwaBinding, binding(directoryA));
+    assert.equal(prepared.parentAgentId, legacy.paseoAgentId);
+    writeAgreement(directoryB, "queued, released");
+    await assert.rejects(
+      async () =>
+        invoke(
+          prepareAgentRpc.name,
+          prepareAgentRpc.input.parse({
+            ...child,
+            name: "conflicting-child",
+            pwaDirectory: "b",
+          }),
+        ),
+      /Children inherit their manager's PWA directory/,
+    );
+    assert.equal(
+      store.read().agents.some((entry) => entry.name === "conflicting-child"),
+      false,
+    );
+    nativeWorkspaces.set(plannerA.paseoAgentId, "actual-parent-workspace");
+    nativeWorkspaces.set("same-workspace-native", "actual-parent-workspace");
+    nativeParents.set("same-workspace-native", plannerA.paseoAgentId);
+    assert.equal(plannerA.workspaceId, null);
+    await assert.rejects(
+      async () =>
+        invoke(
+          registerAgentRpc.name,
+          registerAgentRpc.input.parse({
+            paseoAgentId: "same-workspace-native",
+            name: "same-workspace",
+            roleClass: "supervisor",
+            role: "supervisor",
+            reportsTo: plannerA.qualifiedName,
+            workspaceId: "actual-parent-workspace",
+          }),
+        ),
+      /Prepare a separate workspace/,
+    );
+    assert.equal(
+      store.read().agents.some((entry) => entry.paseoAgentId === "same-workspace-native"),
+      false,
+    );
+    // Project navigation and unscoped identity reads do not load the PWA config.
+    writeFileSync(getConfigPath(), "corrupt config");
+    assert.deepEqual((await board({})).tasks, store.read().tasks);
+    assert.deepEqual((await board({ projectId: "project" })).tasks, []);
+    await assert.rejects(async () => board({ projectId: "missing" }), /Unknown project/);
+    const unavailableRootTask = createTaskRpc.output.parse(
+      await invoke(
+        createTaskRpc.name,
+        createTaskRpc.input.parse({
+          id: "unavailable-root",
+          title: "Unavailable root",
+          brief: "Manager stays available",
+          status: "historic-raw-status",
+          managerName: managerA.qualifiedName,
+          createdBy: plannerA.qualifiedName,
+        }),
+      ),
+    );
+    const unavailableRootActivity = appendActivityRpc.output.parse(
+      await invoke(
+        appendActivityRpc.name,
+        appendActivityRpc.input.parse({
+          taskId: unavailableRootTask.id,
+          actorName: managerA.qualifiedName,
+          kind: "report",
+          body: "Preserve this existing Activity",
+        }),
+      ),
+    );
+    unavailable.clear();
+    unavailable.add(plannerA.paseoAgentId);
+    const withoutRoot = await board({ projectId: "project" });
+    assert.equal(
+      withoutRoot.agents.some((entry) => entry.paseoAgentId === plannerA.paseoAgentId),
+      false,
+    );
+    assert.equal(withoutRoot.unassignedTaskCount, 1);
+    const directWhileRootUnavailable = await board({});
+    assert.ok(
+      directWhileRootUnavailable.agents.some(
+        (entry) => entry.paseoAgentId === managerA.paseoAgentId,
+      ),
+    );
+    assert.ok(
+      directWhileRootUnavailable.tasks.some((entry) => entry.id === unavailableRootTask.id),
+    );
+    assert.ok(
+      directWhileRootUnavailable.activities.some(
+        (entry) => entry.id === unavailableRootActivity.id,
+      ),
+    );
+    const unassigned = await board({ projectId: "project", unassigned: true });
+    assert.deepEqual(unassigned.tasks, [unavailableRootTask]);
+    assert.equal(unassigned.tasks[0].status, "historic-raw-status");
+    assert.deepEqual(unassigned.activities, [unavailableRootActivity]);
+    unavailable.delete(plannerA.paseoAgentId);
+    const withRoot = await board({ projectId: "project" });
+    assert.ok(withRoot.agents.some((entry) => entry.paseoAgentId === plannerA.paseoAgentId));
+    assert.equal(withRoot.unassignedTaskCount, 0);
+    const reassigned = await board({ projectId: "project", unassigned: true });
+    assert.deepEqual(reassigned.tasks, []);
+    assert.deepEqual(reassigned.activities, []);
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
     else process.env.PASEO_HOME = previousHome;
@@ -765,7 +1306,9 @@ test("plain board reads bypass absent or corrupt sources; project reads resolve 
 test("roster reads filter native availability without releasing historical names", async () => {
   const home = mkdtempSync(join(tmpdir(), "swarm-roster-"));
   const previousHome = process.env.PASEO_HOME;
+  const previousPwa = process.env.PASEO_SWARM_PWA_ROOT;
   process.env.PASEO_HOME = home;
+  process.env.PASEO_SWARM_PWA_ROOT = resolve(__dirname, "../pwa/pr-workflow");
   const timestamp = "2026-10-06T00:00:00Z";
   const agent: AgentRecord = {
     id: "record",
@@ -818,6 +1361,7 @@ test("roster reads filter native availability without releasing historical names
       async () =>
         invoke(createAgentRpc, {
           name: "historical",
+          pwaDirectory: ".",
           roleClass: "planner",
           role: "planner",
         }),
@@ -834,6 +1378,8 @@ test("roster reads filter native availability without releasing historical names
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
     else process.env.PASEO_HOME = previousHome;
+    if (previousPwa === undefined) delete process.env.PASEO_SWARM_PWA_ROOT;
+    else process.env.PASEO_SWARM_PWA_ROOT = previousPwa;
     rmSync(home, { recursive: true, force: true });
   }
 });

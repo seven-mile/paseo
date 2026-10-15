@@ -74,4 +74,27 @@ describe("PWA directory form", () => {
     await form.submit();
     expect(source.requests.map((request) => request.path)).toEqual(["/pwa"]);
   });
+  it("saves the optional relative default with the content root without discarding a failed draft", async () => {
+    const requests: Array<[string, string | null]> = [];
+    const form = openPwaForm({
+      path: "/content",
+      defaultPwa: "old",
+      async save(path, directory) {
+        requests.push([path, directory]);
+        return { path, defaultPwa: directory };
+      },
+    });
+    form.setDefaultPwa("  team-a  ");
+    expect(form.getState().canSubmit).toBe(true);
+    await form.submit();
+    expect(requests).toEqual([["/content", "team-a"]]);
+    expect(form.getState()).toMatchObject({
+      defaultPwa: "team-a",
+      savedDefaultPwa: "team-a",
+      canSubmit: false,
+    });
+    form.setDefaultPwa("");
+    await form.submit();
+    expect(requests[1]).toEqual(["/content", null]);
+  });
 });

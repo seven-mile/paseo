@@ -58,6 +58,7 @@ import {
   swarmHumanActivityReceiptSchema,
   swarmTaskScopeOptions,
   swarmTaskColumns,
+  swarmBoardTarget,
   unansweredChoices,
   type SwarmActivity,
   type SwarmTask,
@@ -187,6 +188,137 @@ export function SwarmTaskSurface(props: SwarmTaskSurfaceProps) {
   return <TaskSurface key={`${props.serverId}:${props.workspaceId}`} {...props} />;
 }
 
+interface SwarmTeamChoice {
+  projectId: string | null | undefined;
+  teamName?: string;
+  unassigned: boolean;
+}
+
+type SwarmTeamSelection = Pick<
+  SwarmTaskSurfaceProps,
+  "plannerName" | "agentName" | "taskId" | "presentation" | "defaultAgentId" | "onScopeChange"
+>;
+
+function resolveSwarmTeamChoice(
+  board: SwarmTaskBoard | undefined,
+  selection: SwarmTeamSelection,
+  workspaceId: string,
+  projectId: string | null | undefined,
+  teamChoice: SwarmTeamChoice | null,
+) {
+  const resolved = board
+    ? swarmBoardTarget(board, {
+        ...selection,
+        workspaceId,
+        explorer: selection.presentation === "explorer",
+      })
+    : { teamName: undefined, unassigned: false };
+  const choice = teamChoice?.projectId === projectId ? teamChoice : null;
+  if (choice) return { teamName: choice.teamName, unassigned: choice.unassigned };
+  return resolved;
+}
+
+function useSwarmTaskBoard({
+  rpc,
+  serverId,
+  projectId,
+  workspaceId,
+  hydrated,
+  online,
+  active,
+  selection,
+}: {
+  rpc: ReturnType<typeof useSwarmRpc>;
+  serverId: string;
+  projectId: string | null | undefined;
+  workspaceId: string;
+  hydrated: boolean;
+  online: boolean;
+  active: boolean;
+  selection: SwarmTeamSelection;
+}) {
+  const { plugin, invoke } = rpc;
+  const enabled = Boolean(plugin) && Boolean(projectId) && hydrated && online && active;
+  const [teamChoice, setTeamChoice] = useState<{
+    projectId: string | null | undefined;
+    teamName?: string;
+    unassigned: boolean;
+  } | null>(null);
+  const index = useFetchQuery(
+    {
+      queryKey: ["swarm", "task-team-index", serverId, projectId],
+      queryFn: async () => swarmTaskBoardSchema.parse(await invoke("swarm.board.read", {})),
+      enabled,
+      dataShape: "value",
+      staleTimeMs: 2500,
+      refetchInterval: active ? 3000 : false,
+    },
+    plugin?.queryClient,
+  );
+  useEffect(() => {
+    setTeamChoice(null);
+  }, [projectId, selection.plannerName, selection.agentName, selection.taskId]);
+  const { teamName, unassigned } = resolveSwarmTeamChoice(
+    index.data,
+    selection,
+    workspaceId,
+    projectId,
+    teamChoice,
+  );
+  const changeScope = useCallback(
+    (value: { plannerName?: string; agentName?: string }) => {
+      setTeamChoice({
+        projectId,
+        teamName: value.agentName ?? value.plannerName,
+        unassigned: false,
+      });
+      selection.onScopeChange?.(value);
+    },
+    [projectId, selection],
+  );
+  const chooseTeam = useCallback(
+    (value: string) => {
+      setTeamChoice({ projectId, teamName: value || undefined, unassigned: !value });
+      if (value) selection.onScopeChange?.({ plannerName: value });
+    },
+    [projectId, selection],
+  );
+  const query = useFetchQuery(
+    {
+      queryKey: ["swarm", "task-board", serverId, projectId, teamName, unassigned],
+      queryFn: async () =>
+        swarmTaskBoardSchema.parse(
+          await invoke("swarm.board.read", {
+            projectId: projectId ?? undefined,
+            teamName,
+            unassigned,
+          }),
+        ),
+      enabled: enabled && Boolean(index.data),
+      dataShape: "value",
+      staleTimeMs: 2500,
+      refetchInterval: active ? 3000 : false,
+    },
+    plugin?.queryClient,
+  );
+  const { refetch } = query;
+  const refresh = useCallback(() => {
+    if (online && active) {
+      void index.refetch();
+      void refetch();
+    }
+  }, [refetch, online, active, index]);
+  return {
+    query,
+    contentQuery: index.isError && !index.data ? index : query,
+    teamName,
+    unassigned,
+    changeScope,
+    chooseTeam,
+    refresh,
+  };
+}
+
 function TaskSurface({
   serverId,
   workspaceId,
@@ -195,11 +327,11 @@ function TaskSurface({
   retainedState: providedState,
   ...selection
 }: SwarmTaskSurfaceProps) {
-  useTranslation();
   const [localState] = useState(openSwarmTaskSurfaceState);
   const retainedState = providedState ?? localState;
   useEffect(() => () => localState.close(), [localState]);
-  const { plugin, invoke } = useSwarmRpc(serverId);
+  const rpc = useSwarmRpc(serverId);
+  const { plugin, invoke } = rpc;
   const connection = useHostRuntimeConnectionStatus(serverId);
   const retainedActive = useRetainedPanelActive();
   const active = isActive && retainedActive;
@@ -224,24 +356,17 @@ function TaskSurface({
     [structure, serverId],
   );
   const online = connection === "online";
-  const query = useFetchQuery(
-    {
-      queryKey: ["swarm", "task-board", serverId, projectId],
-      queryFn: async () =>
-        swarmTaskBoardSchema.parse(
-          await invoke("swarm.board.read", { projectId: projectId ?? undefined }),
-        ),
-      enabled: Boolean(plugin) && Boolean(projectId) && hydrated && online && active,
-      dataShape: "value",
-      staleTimeMs: 2500,
-      refetchInterval: active ? 3000 : false,
-    },
-    plugin?.queryClient,
-  );
-  const { refetch } = query;
-  const refresh = useCallback(() => {
-    if (online && active) void refetch();
-  }, [refetch, online, active]);
+  const { query, contentQuery, teamName, unassigned, changeScope, chooseTeam, refresh } =
+    useSwarmTaskBoard({
+      rpc,
+      serverId,
+      projectId,
+      workspaceId,
+      hydrated,
+      online,
+      active,
+      selection,
+    });
   const { style: keyboardStyle } = useKeyboardShiftStyle({
     mode: "padding",
     enabled: compact && isNative && active && !keyboardInsetHandled,
@@ -264,29 +389,84 @@ function TaskSurface({
           disabled={!plugin || !online || !active}
           onRefresh={refresh}
         />
-        <TaskLoadContent
-          retainedState={retainedState}
-          query={query}
-          unavailable={unavailable}
-          hydrated={hydrated}
-          connecting={connection === "connecting" || connection === "idle"}
-          online={online}
-          active={active}
-          workspaceId={workspaceId}
-          projectWorkspaceIds={projectWorkspaceIds}
-          knownWorkspaceIds={knownWorkspaceIds}
-          compact={compact}
-          invoke={invoke}
-          onRefresh={refresh}
-          {...selection}
-        />
+        {!teamName && !unassigned && query.data ? (
+          <ProjectTeams board={query.data} onChoose={chooseTeam} />
+        ) : (
+          <TaskLoadContent
+            retainedState={retainedState}
+            query={contentQuery}
+            unavailable={unavailable}
+            hydrated={hydrated}
+            connecting={connection === "connecting" || connection === "idle"}
+            online={online}
+            active={active}
+            workspaceId={workspaceId}
+            projectWorkspaceIds={projectWorkspaceIds}
+            knownWorkspaceIds={knownWorkspaceIds}
+            compact={compact}
+            invoke={invoke}
+            onRefresh={refresh}
+            {...selection}
+            agentName={teamName}
+            onScopeChange={changeScope}
+            serverScoped
+          />
+        )}
       </Animated.View>
     </View>
   );
 }
 
+function ProjectTeams({
+  board,
+  onChoose,
+}: {
+  board: SwarmTaskBoard;
+  onChoose(name: string): void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <ScrollView style={styles.detail} testID="swarm-project-teams">
+      <Text style={styles.title}>{t("swarm.sidebar.planners")}</Text>
+      {board.agents
+        .filter((agent) => agent.roleClass === "planner" && !agent.retired)
+        .map((agent) => (
+          <TeamEntry
+            key={agent.paseoAgentId}
+            name={agent.qualifiedName ?? agent.name}
+            onChoose={onChoose}
+          />
+        ))}
+      {!board.agents.length ? (
+        <Text style={styles.meta}>{t("swarm.sidebar.noPlanners")}</Text>
+      ) : null}
+      {board.unassignedTaskCount ? (
+        <TeamEntry name="" label={t("swarm.tasks.unassigned")} onChoose={onChoose} />
+      ) : null}
+    </ScrollView>
+  );
+}
+
+function TeamEntry({
+  name,
+  label,
+  onChoose,
+}: {
+  name: string;
+  label?: string;
+  onChoose(name: string): void;
+}) {
+  const select = useCallback(() => onChoose(name), [name, onChoose]);
+  return (
+    <Button variant="outline" onPress={select}>
+      {label ?? name}
+    </Button>
+  );
+}
+
 type LoadedTasksProps = {
   retainedState: SwarmTaskSurfaceState;
+  serverScoped?: boolean;
   board: SwarmTaskBoard;
   workspaceId: string;
   projectWorkspaceIds: readonly string[];
@@ -364,6 +544,11 @@ function TaskLoadContent({
       {query.isError ? (
         <Text style={styles.error} accessibilityRole="alert">
           {query.error.message}
+        </Text>
+      ) : null}
+      {query.data.pwaError ? (
+        <Text style={styles.error} accessibilityRole="alert">
+          {t("swarm.pwa.teamUnavailable", { reason: query.data.pwaError })}
         </Text>
       ) : null}
       <LoadedTasks board={query.data} online={online && active} {...props} />
@@ -475,6 +660,7 @@ function LoadedTasks({
   onScopeChange,
   presentation = "main",
   defaultAgentId,
+  serverScoped,
 }: LoadedTasksProps) {
   const { t } = useTranslation();
   const initialScope = initialTaskScope(
@@ -553,12 +739,14 @@ function LoadedTasks({
   );
   const tasks = useMemo(
     () =>
-      scopedSwarmTasks(board, {
-        projectWorkspaceIds,
-        knownWorkspaceIds,
-        agentName: scope || undefined,
-      }),
-    [board, projectWorkspaceIds, knownWorkspaceIds, scope],
+      serverScoped
+        ? board.tasks
+        : scopedSwarmTasks(board, {
+            projectWorkspaceIds,
+            knownWorkspaceIds,
+            agentName: scope || undefined,
+          }),
+    [board, projectWorkspaceIds, knownWorkspaceIds, scope, serverScoped],
   );
   const filtered = useMemo(
     () => filterSwarmTasks(tasks, statuses, search),
@@ -722,7 +910,13 @@ function TaskKanban({
       {columns.map((column) => (
         <View style={styles.column} key={column.status} testID={`swarm-column-${column.status}`}>
           <View style={styles.columnHeading}>
-            <StatusBadge label={column.status} />
+            <StatusBadge
+              label={
+                column.undeclared
+                  ? t("swarm.tasks.undeclaredStatus", { status: column.status })
+                  : column.status
+              }
+            />
             <Text style={styles.meta}>{column.tasks.length}</Text>
           </View>
           <ScrollView contentContainerStyle={styles.columnCards} nestedScrollEnabled>
