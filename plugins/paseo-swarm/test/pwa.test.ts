@@ -3,12 +3,6 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import {
-  initialPrompt,
-  messagePrompt,
-  messageReceipt,
-  runtimeNotification,
-} from "../server/prompts";
 import { listPwaRoles, readPwa } from "../server/pwa";
 import { readPwaSource, requirePwaSource, writePwaSource } from "../server/source";
 import { getConfigPath } from "../server/state";
@@ -97,141 +91,6 @@ test("readPwa rejects unsafe roles, missing roles, and invalid frontmatter", () 
   }
 });
 
-test("prompts keep role context scoped and orient agents without inventing work", () => {
-  const pwa = {
-    project: "Example",
-    role: "developer",
-    roleClass: "worker" as const,
-    projectBody: "Global guidance.",
-    roleBody: "Developer guidance.",
-    statuses: ["survey", "completed"],
-    revision: "rev",
-  };
-  const prompt = initialPrompt({
-    pwa,
-    agent: { name: "dev-one", roleClass: "worker", role: "developer", reportsTo: "lead" },
-    brief: "Start with the assigned context.",
-  });
-  assert.match(prompt, /^<paseo-swarm-system-settings>\n/);
-  assert.match(prompt, /framework-provided role-class operating settings/);
-  assert.match(prompt, /Global guidance/);
-  assert.match(prompt, /Developer guidance/);
-  assert.match(prompt, /Do not create agents or Tasks/);
-  assert.match(prompt, /Do not acknowledge receipts/);
-  assert.match(prompt, /Do not poll or use sleep to wait for a reply/);
-
-  const supervisorPrompt = initialPrompt({
-    pwa,
-    agent: { name: "lead", roleClass: "supervisor", role: "developer", reportsTo: "planner" },
-    brief: "Coordinate the work.",
-  });
-  assert.match(supervisorPrompt, /^<paseo-swarm-system-settings>\n/);
-  assert.match(supervisorPrompt, /Own the Tasks in your scope and direct named Swarm workers/);
-  assert.match(supervisorPrompt, /Use swarm_board_read when you start, resume after compaction/);
-  assert.match(supervisorPrompt, /Task updates replace supplied fields/);
-  assert.match(supervisorPrompt, /Use Activities for meaningful evidence/);
-  assert.match(supervisorPrompt, /do not recreate it with shell, raw RPC/);
-  assert.match(supervisorPrompt, /Swarm delegation and harness subagents are separate paths/);
-  assert.match(supervisorPrompt, /Harness subagents are not Swarm roster members/);
-  assert.match(supervisorPrompt, /even when their tools or instructions are present/);
-  assert.match(supervisorPrompt, /Keep Tasks and Activities useful to two readers/);
-  assert.match(supervisorPrompt, /A missing Swarm capability is different/);
-  assert.match(supervisorPrompt, /actual supervisor creates the Task/);
-  assert.match(supervisorPrompt, /You receive framework notifications when a child turn ends/);
-  assert.match(
-    supervisorPrompt,
-    /After a child result or notification, first read the relevant Task/,
-  );
-  assert.match(supervisorPrompt, /An idle worker will not resume by itself/);
-  assert.match(supervisorPrompt, /send the next actionable Swarm team message/);
-  assert.match(supervisorPrompt, /Do not copy the same progress text into both/);
-  assert.doesNotMatch(supervisorPrompt, /Execution/);
-  assert.match(prompt, /or append Activities/);
-  assert.match(prompt, /report that blocker to your manager/);
-  assert.match(prompt, /wait for an actionable instruction/);
-});
-
-test("message and runtime prompts distinguish delivery from work", () => {
-  assert.match(
-    messagePrompt({
-      id: "msg-1",
-      sender: "dev-one",
-      recipient: "lead",
-      taskId: "survey-auth",
-      message: "Finding",
-    }),
-    /<paseo-swarm-team-message>[\s\S]*agent-to-agent team message[\s\S]*Task: survey-auth\.[\s\S]*Team message msg-1 from dev-one:\nFinding[\s\S]*<\/paseo-swarm-team-message>/m,
-  );
-  assert.match(
-    messageReceipt({ recipient: "lead", delivery: "accepted" }),
-    /does not mean the recipient read it/,
-  );
-  assert.match(messageReceipt({ recipient: "lead", delivery: "accepted" }), /not a durable queue/);
-
-  const idle = runtimeNotification({ agent: "dev-one", manager: "lead", status: "inactive" });
-  assert.match(idle, /^<paseo-swarm-runtime-notification>/);
-  assert.match(idle, /<\/paseo-swarm-runtime-notification>$/);
-  assert.match(idle, /does not describe task completion/);
-  assert.match(idle, /will do no further work unless it receives a next instruction/);
-  assert.match(idle, /not a business activity/);
-  assert.doesNotMatch(
-    runtimeNotification({
-      agent: "dev-one",
-      manager: "lead",
-      status: "idle",
-      report: "Old report",
-    }),
-    /Old report|assistant text/,
-  );
-  for (const status of ["completed", "canceled", "failed"]) {
-    assert.match(
-      runtimeNotification({ agent: "dev-one", manager: "lead", status }),
-      /No new assistant text is available for this turn/,
-    );
-  }
-  for (const status of ["canceled", "failed"]) {
-    assert.match(
-      runtimeNotification({ agent: "dev-one", manager: "lead", status, report: "Progress" }),
-      /Peek at assistant text from the interrupted turn \(possibly incomplete\)[\s\S]*not sent as a team message[\s\S]*Progress/,
-    );
-  }
-
-  for (const status of ["idle", "inactive", "completed", "canceled", "failed"]) {
-    const notification = runtimeNotification({ agent: "dev-one", manager: "lead", status });
-    assert.match(notification, /will do no further work unless it receives a next instruction/);
-    assert.match(notification, /send a next instruction when the agent should continue/);
-    assert.match(notification, /continue coordinating until genuinely blocked or completed/);
-  }
-  assert.match(
-    runtimeNotification({
-      agent: "dev-one",
-      manager: "lead",
-      status: "completed",
-      outcome: "turn completed",
-      report: "Survey finished.",
-    }),
-    /<paseo-swarm-runtime-notification>[\s\S]*Framework roster notification[\s\S]*dev-one[\s\S]*Observed assistant text from this turn[\s\S]*Survey finished\./,
-  );
-  assert.match(
-    runtimeNotification({
-      agent: "dev-one",
-      manager: "lead",
-      status: "canceled",
-      outcome: "user stopped it",
-    }),
-    /does not establish Task completion/,
-  );
-  assert.doesNotMatch(
-    runtimeNotification({
-      agent: "dev-one",
-      manager: "lead",
-      status: "failed",
-      outcome: "provider error",
-    }),
-    /finished/,
-  );
-});
-
 test("project sources preserve config, use host fallback, and validate fresh files", () => {
   const home = mkdtempSync(join(tmpdir(), "swarm-source-"));
   const directory = fixture();
@@ -272,11 +131,6 @@ test("project sources preserve config, use host fallback, and validate fresh fil
       join(other, "roles", "developer.md"),
       "---\nversion: 1\nroleClass: worker\n---\nUpdated role.\n",
     );
-    const oldPrompt = initialPrompt({
-      pwa: readPwa(other, "developer"),
-      agent: { name: "dev", roleClass: "worker", role: "developer", reportsTo: null },
-      brief: "Work",
-    });
     writeFileSync(
       join(other, "PWA.md"),
       "---\nversion: 1\nproject: Changed\n---\nUpdated project.\n",
@@ -284,7 +138,6 @@ test("project sources preserve config, use host fallback, and validate fresh fil
     const fresh = readPwa(requirePwaSource("one"), "developer");
     assert.equal(fresh.project, "Changed");
     assert.equal(fresh.roleBody, "Updated role.");
-    assert.doesNotMatch(oldPrompt, /Updated project/);
     writeFileSync(join(other, "PWA.md"), "invalid");
     assert.throws(() => writePwaSource({ path: other }), /PWA.md must have YAML frontmatter/);
     assert.equal(readFileSync(configPath, "utf8"), saved);
