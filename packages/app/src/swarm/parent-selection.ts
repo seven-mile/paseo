@@ -49,6 +49,7 @@ export interface SwarmParentChoice {
   paseoAgentId: string;
   serverId: string;
   workspaceId: string | null;
+  pwaBinding?: { projectId?: string; contentRoot: string; directory: string };
 }
 
 export function filterSwarmParents(
@@ -68,4 +69,89 @@ export function filterSwarmParents(
 
 export function resolveSwarmParent(parents: readonly SwarmParentChoice[], selected: string | null) {
   return parents.some((parent) => parent.name === selected) ? selected : (parents[0]?.name ?? null);
+}
+
+export interface SwarmCreationDraftContext {
+  key: string;
+  serverId: string;
+  roleClass: "planner" | "supervisor" | "worker";
+  hasProject: boolean;
+}
+
+export interface SwarmCreationDraft extends SwarmCreationDraftContext {
+  hasResolvedProject: boolean;
+  directory: string | null | undefined;
+  role: string;
+  parent: string | null;
+}
+
+export function reconcileSwarmCreationDraft(
+  draft: SwarmCreationDraft,
+  context: SwarmCreationDraftContext,
+): SwarmCreationDraft {
+  if (draft.key === context.key) return draft;
+  const initialHydration =
+    !draft.hasResolvedProject &&
+    context.hasProject &&
+    draft.serverId === context.serverId &&
+    draft.roleClass === context.roleClass;
+  return {
+    ...context,
+    hasResolvedProject: draft.hasResolvedProject || context.hasProject,
+    directory: undefined,
+    role: "",
+    parent: initialHydration ? draft.parent : null,
+  };
+}
+
+export function swarmPwaSourceIdentity(
+  roleClass: SwarmCreationDraftContext["roleClass"],
+  sourcePath: string | null | undefined,
+  directory: string,
+  parentBinding: SwarmParentChoice["pwaBinding"],
+) {
+  if (roleClass === "planner") return JSON.stringify(["planner", sourcePath, directory]);
+  return JSON.stringify([
+    "inherited",
+    parentBinding?.projectId,
+    parentBinding?.contentRoot,
+    parentBinding?.directory,
+  ]);
+}
+
+export interface SwarmPreparedAgent {
+  agentId: string;
+  systemPrompt: string;
+  parentAgentId: string | null;
+}
+
+// A failed native create/bind keeps the prepared prompt and identity for this form lifetime.
+export function openSwarmPreparation(onConflict: (agentId: string) => string) {
+  let reservation: { key: string; result: SwarmPreparedAgent } | null = null;
+  let pending: { key: string; result: Promise<SwarmPreparedAgent> } | null = null;
+  return {
+    async prepare(
+      key: string,
+      create: () => Promise<SwarmPreparedAgent>,
+    ): Promise<SwarmPreparedAgent> {
+      if (reservation) {
+        if (reservation.key === key) return reservation.result;
+        throw new Error(onConflict(reservation.result.agentId));
+      }
+      if (pending) {
+        if (pending.key === key) return pending.result;
+        const prepared = await pending.result;
+        throw new Error(onConflict(prepared.agentId));
+      }
+      const result = create();
+      pending = { key, result };
+      try {
+        const prepared = await result;
+        reservation = { key, result: prepared };
+        return prepared;
+      } finally {
+        pending = null;
+      }
+    },
+  };
 }

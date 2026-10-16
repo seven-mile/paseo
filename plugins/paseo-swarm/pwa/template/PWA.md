@@ -1,6 +1,10 @@
 ---
 version: 1
 project: New project
+roles:
+  contributor: roles/contributor.md
+  coordinator: roles/coordinator.md
+  lead: roles/lead.md
 ---
 
 # Project working agreement

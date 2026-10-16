@@ -23,7 +23,11 @@ interface ProjectPwaSettingsProps {
   projectId: string;
 }
 
-export function ProjectPwaSettings({ serverId, projectId }: ProjectPwaSettingsProps) {
+export function ProjectPwaSettings(props: ProjectPwaSettingsProps) {
+  return <ProjectPwaSettingsSession key={`${props.serverId}:${props.projectId}`} {...props} />;
+}
+
+function ProjectPwaSettingsSession({ serverId, projectId }: ProjectPwaSettingsProps) {
   const { t } = useTranslation();
   const { plugin, invoke } = useSwarmRpc(serverId);
   const queryClient = useQueryClient();
@@ -47,12 +51,13 @@ export function ProjectPwaSettings({ serverId, projectId }: ProjectPwaSettingsPr
     if (!data) return;
     setSession({
       path: data.path,
-      async save(path) {
+      defaultPwa: data.defaultPwa,
+      async save(path, defaultPwa) {
         const saved = savedPwaSourceSchema.parse(
-          await invoke("swarm.pwa_source.set", { projectId, path }),
+          await invoke("swarm.pwa_source.set", { projectId, path, defaultPwa }),
         );
         await queryClient.cancelQueries({ queryKey, exact: true });
-        queryClient.setQueryData(queryKey, saved);
+        void queryClient.invalidateQueries({ queryKey, exact: true });
         void queryClient.invalidateQueries({
           queryKey: ["swarm", "creation-target", serverId, projectId],
         });
@@ -67,7 +72,7 @@ export function ProjectPwaSettings({ serverId, projectId }: ProjectPwaSettingsPr
   let content;
   if (query.isError) {
     content = (
-      <SettingsRow label={t("swarm.pwa.directory")} error={query.error.message}>
+      <SettingsRow label={t("swarm.pwa.contentRoot")} error={query.error.message}>
         <Button variant="outline" size="sm" onPress={retry}>
           {t("common.actions.retry")}
         </Button>
@@ -75,7 +80,7 @@ export function ProjectPwaSettings({ serverId, projectId }: ProjectPwaSettingsPr
     );
   } else if (!query.data) {
     content = (
-      <SettingsRow label={t("swarm.pwa.directory")} hint={t("common.states.loading")}>
+      <SettingsRow label={t("swarm.pwa.contentRoot")} hint={t("common.states.loading")}>
         <Button variant="outline" size="sm" disabled>
           {t("swarm.pwa.edit")}
         </Button>
@@ -84,8 +89,23 @@ export function ProjectPwaSettings({ serverId, projectId }: ProjectPwaSettingsPr
   } else {
     content = (
       <SettingsRow
-        label={t("swarm.pwa.directory")}
-        hint={query.data.path ?? t("swarm.pwa.notConfigured")}
+        label={t("swarm.pwa.contentRoot")}
+        hint={[
+          query.data.path ?? t("swarm.pwa.notConfigured"),
+          query.data.defaultPwa
+            ? t("swarm.pwa.defaultValue", { directory: query.data.defaultPwa })
+            : t("swarm.pwa.noDefault"),
+          query.data.rootError,
+          query.data.complete
+            ? t("swarm.pwa.discovered", { count: query.data.entries.length })
+            : t("swarm.pwa.partial"),
+          ...query.data.entries
+            .filter((entry) => entry.error)
+            .map((entry) => `${entry.title} · ${entry.directory}: ${entry.error}`),
+          ...query.data.errors.map((entry) => `${entry.directory}: ${entry.error}`),
+        ]
+          .filter(Boolean)
+          .join("\n")}
       >
         <Button variant="outline" size="sm" onPress={open} testID="project-pwa-edit">
           {t("swarm.pwa.edit")}
@@ -118,7 +138,7 @@ function PwaFormSheet({ snapshot, onClose }: { snapshot: PwaFormSnapshot; onClos
     if (!pending) onClose();
   }, [onClose, pending]);
   const submit = useCallback(() => void form.submit(), [form]);
-  const header = useMemo(() => ({ title: t("swarm.pwa.directory") }), [t]);
+  const header = useMemo(() => ({ title: t("swarm.pwa.contentRoot") }), [t]);
   const footer = useMemo(
     () => (
       <View style={styles.footer}>
@@ -161,8 +181,20 @@ function PwaFormSheet({ snapshot, onClose }: { snapshot: PwaFormSnapshot; onClos
           editable={!pending}
           autoCapitalize="none"
           autoCorrect={false}
-          accessibilityLabel={t("swarm.pwa.directory")}
+          accessibilityLabel={t("swarm.pwa.contentRoot")}
           testID="project-pwa-directory"
+        />
+      </Field>
+      <Field label={t("swarm.pwa.defaultDirectory")} hint={t("swarm.pwa.defaultHint")}>
+        <FormTextInput
+          key={`default:${state.inputRevision}`}
+          initialValue={state.defaultPwa}
+          onChangeText={form.setDefaultPwa}
+          size={size}
+          editable={!pending}
+          autoCapitalize="none"
+          autoCorrect={false}
+          accessibilityLabel={t("swarm.pwa.defaultDirectory")}
         />
       </Field>
       {state.status.kind === "success" ? (

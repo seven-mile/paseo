@@ -9,11 +9,12 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import type { ReactElement, ReactNode, RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
+import { i18n } from "@/i18n/i18next";
 import { Pressable, Text, View } from "react-native";
 import type { PressableStateCallbackType } from "react-native";
 import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
 import { createNameId } from "mnemonic-id";
-import { skipToken, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronDown,
   FileText,
@@ -24,6 +25,7 @@ import {
   Users,
 } from "lucide-react-native";
 import { useFetchQuery } from "@/data/query";
+import type { PwaDiscovery, PwaEntry } from "@/swarm/pwa-form-model";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -43,6 +45,9 @@ import {
   getSwarmCreationLoadKey,
   filterSwarmParents,
   resolveSwarmParent,
+  reconcileSwarmCreationDraft,
+  swarmPwaSourceIdentity,
+  type SwarmCreationDraft,
   type SwarmParentChoice,
   type SwarmCreationLoadState,
 } from "@/swarm/parent-selection";
@@ -222,7 +227,7 @@ export interface SwarmWorkspaceTarget {
 }
 
 export interface SwarmWorkspaceTargetOptions {
-  roles: readonly SwarmRoleChoice[];
+  source: PwaDiscovery;
   parents: readonly SwarmParentChoice[];
 }
 
@@ -235,74 +240,40 @@ export interface SwarmWorkspaceOptions {
 
 export interface SwarmWorkspaceOperations {
   loadTarget(target: SwarmWorkspaceTarget): Promise<SwarmWorkspaceTargetOptions>;
+  loadRoles(input: {
+    target: SwarmWorkspaceTarget;
+    directory?: string;
+    parentName?: string | null;
+  }): Promise<readonly SwarmRoleChoice[]>;
+  bindPwa(input: {
+    target: SwarmWorkspaceTarget;
+    directory: string;
+    parentName: string;
+  }): Promise<void>;
   prepareAgent: (input: {
     target: SwarmWorkspaceTarget;
     name: string;
     role: string;
     reportsTo: string | null;
     brief: string;
-  }) => Promise<{ agentId: string; systemPrompt: string }>;
+    pwaDirectory?: string;
+    pwaSourceIdentity?: string;
+  }) => Promise<{ agentId: string; systemPrompt: string; parentAgentId: string | null }>;
   bindAgent: (input: { serverId: string; agentId: string; workspaceId: string }) => Promise<void>;
 }
 
-function swarmTargetState(
-  target: SwarmWorkspaceTarget | null,
-  operations: SwarmWorkspaceOperations | undefined,
-  connected: boolean,
-  query: UseQueryResult<SwarmWorkspaceTargetOptions, Error>,
-  selectedRole: string,
-  t: TFunction,
-) {
-  const roles = query.data?.roles ?? [];
-  const role = roles.some((choice) => choice.role === selectedRole)
-    ? selectedRole
-    : (roles[0]?.role ?? "");
-  let loadState: SwarmCreationLoadState = "loaded";
-  if (!target) loadState = "missing-project";
-  else if (!operations) loadState = "not-installed";
-  else if (!connected) loadState = "pending";
-  else if (query.isError) loadState = "error";
-  else if (!query.data) loadState = "pending";
-  const rawError = loadState === "error" ? toErrorMessage(query.error) : null;
-  const targetPending = loadState === "pending";
-  const loadKey = getSwarmCreationLoadKey(loadState, roles);
-  const targetError = targetPending ? null : (rawError ?? (loadKey ? t(loadKey) : null));
-  return { roles, role, loadState, rawError, targetPending, targetError };
-}
-
-function swarmWorkspaceSubmission(
-  operations: SwarmWorkspaceOperations | undefined,
-  target: SwarmWorkspaceTarget | null,
-  loadState: SwarmCreationLoadState,
-  validationKey: string | null,
-  selection: { role: string; name: string; reportsTo: string | null },
-) {
-  if (!operations || !target || loadState !== "loaded" || validationKey) return undefined;
-  return {
-    prepareAgent: operations.prepareAgent,
-    target,
-    role: selection.role,
-    name: selection.name,
-    reportsTo: selection.reportsTo,
-    brief: "",
-  };
-}
-
-function useSwarmWorkspaceState(
+function useSwarmCreationTarget(
   options: SwarmWorkspaceOptions | undefined,
   project: HostProjectListItem | null,
   serverId: string,
 ) {
-  const { t } = useTranslation();
   const connected = useHostRuntimeIsConnected(serverId);
-  const [selectedRole, setRole] = useState("");
-  const [parent, setParent] = useState<string | null>(options?.initialParent ?? null);
-  const [name, setName] = useState(options?.initialName ?? options?.roleClass ?? "agent");
   const placement = project?.hosts.find((host) => host.serverId === serverId);
   const target = useMemo(
     () => (placement ? { serverId, projectId: placement.projectId } : null),
     [placement, serverId],
   );
+  const contextKey = `${serverId}:${target?.projectId ?? ""}:${options?.roleClass ?? ""}`;
   const operations = options?.forServer(serverId);
   const query = useFetchQuery({
     queryKey: ["swarm", "creation-target", serverId, target?.projectId, options?.roleClass],
@@ -312,14 +283,79 @@ function useSwarmWorkspaceState(
     staleTimeMs: 0,
     retry: false,
   });
-  const { roles, role, loadState, rawError, targetPending, targetError } = swarmTargetState(
-    target,
-    operations,
-    connected,
-    query,
-    selectedRole,
-    t,
+  const source = query.data?.source;
+  return { target, contextKey, connected, operations, query, source };
+}
+
+type SwarmCreationTargetState = ReturnType<typeof useSwarmCreationTarget>;
+
+function useSwarmCreationDraft(
+  options: SwarmWorkspaceOptions | undefined,
+  serverId: string,
+  targetState: SwarmCreationTargetState,
+) {
+  const { target, contextKey, source } = targetState;
+  const hasProject = target !== null;
+  const draftContext = useMemo(
+    () => ({ key: contextKey, serverId, roleClass: options?.roleClass ?? "planner", hasProject }),
+    [contextKey, serverId, options?.roleClass, hasProject],
   );
+  const [draft, setDraft] = useState<SwarmCreationDraft>(() => ({
+    ...draftContext,
+    hasResolvedProject: hasProject,
+    directory: undefined,
+    role: "",
+    parent: options?.initialParent ?? null,
+  }));
+  const currentDraft = reconcileSwarmCreationDraft(draft, draftContext);
+  const [name, setName] = useState(options?.initialName ?? options?.roleClass ?? "agent");
+  useEffect(() => {
+    setDraft((previous) => {
+      const next = reconcileSwarmCreationDraft(previous, draftContext);
+      return source && next.directory === undefined
+        ? { ...next, directory: options?.roleClass === "planner" ? source.defaultPwa : null }
+        : next;
+    });
+  }, [draftContext, source, options?.roleClass]);
+  const changeRole = useCallback(
+    (value: string) =>
+      setDraft((previous) => ({
+        ...(previous.key === contextKey ? previous : currentDraft),
+        role: value,
+      })),
+    [contextKey, currentDraft],
+  );
+  const changeDirectory = useCallback(
+    (value: string) =>
+      setDraft((previous) => ({
+        ...(previous.key === contextKey ? previous : currentDraft),
+        directory: value,
+        role: "",
+      })),
+    [contextKey, currentDraft],
+  );
+  const changeParent = useCallback(
+    (value: string) =>
+      setDraft((previous) => ({
+        ...(previous.key === contextKey ? previous : currentDraft),
+        parent: value,
+        role: "",
+      })),
+    [contextKey, currentDraft],
+  );
+  return { currentDraft, name, setName, changeRole, changeDirectory, changeParent };
+}
+
+type SwarmCreationDraftState = ReturnType<typeof useSwarmCreationDraft>;
+
+function useSwarmCreationRoles(
+  options: SwarmWorkspaceOptions | undefined,
+  project: HostProjectListItem | null,
+  serverId: string,
+  targetState: SwarmCreationTargetState,
+  currentDraft: SwarmCreationDraft,
+) {
+  const { target, contextKey, connected, operations, query, source } = targetState;
   const parents = useMemo(
     () =>
       options && query.data
@@ -332,37 +368,275 @@ function useSwarmWorkspaceState(
         : [],
     [options, project, query.data, serverId],
   );
-  const effectiveParent = resolveSwarmParent(parents, parent);
-  const validationKey = getSwarmCreationValidationKey({
-    loadState,
-    roleClass: options?.roleClass ?? "planner",
+  const parent = resolveSwarmParent(parents, currentDraft.parent);
+  const selectedParent = parents.find((choice) => choice.name === parent);
+  const inherited = options?.roleClass !== "planner";
+  const directory = currentDraft.directory ?? "";
+  const entry = source?.entries.find((choice) => choice.directory === directory);
+  const canReadRoles = inherited
+    ? Boolean(selectedParent?.pwaBinding)
+    : Boolean(entry && !entry.error);
+  const rolesQuery = useFetchQuery({
+    queryKey: [
+      "swarm",
+      "creation-roles",
+      contextKey,
+      inherited ? undefined : source?.path,
+      inherited ? parent : directory,
+      selectedParent?.pwaBinding,
+    ],
+    queryFn:
+      target && operations && canReadRoles
+        ? () =>
+            operations.loadRoles({
+              target,
+              directory: inherited ? undefined : directory,
+              parentName: inherited ? parent : undefined,
+            })
+        : skipToken,
+    enabled: connected,
+    dataShape: "value",
+    staleTimeMs: 0,
+    retry: false,
+  });
+  return { parents, parent, selectedParent, inherited, directory, entry, canReadRoles, rolesQuery };
+}
+
+type SwarmCreationRoleState = ReturnType<typeof useSwarmCreationRoles>;
+
+function swarmCreationLoadState(
+  targetState: SwarmCreationTargetState,
+  canReadRoles: boolean,
+  rolesQuery: SwarmCreationRoleState["rolesQuery"],
+): SwarmCreationLoadState {
+  const { target, operations, connected, query } = targetState;
+  let loadState: SwarmCreationLoadState = "loaded";
+  if (!target) loadState = "missing-project";
+  else if (!operations) loadState = "not-installed";
+  else if (!connected || query.isPending || (canReadRoles && rolesQuery.isPending))
+    loadState = "pending";
+  else if (query.isError || rolesQuery.isError) loadState = "error";
+  return loadState;
+}
+
+function swarmCreationPwaError(
+  inherited: boolean,
+  needsBinding: boolean,
+  directory: string,
+  entry: PwaEntry | undefined,
+  t: TFunction,
+) {
+  if (inherited) return needsBinding ? t("swarm.pwa.confirmRequired") : null;
+  if (entry?.error) return entry.error;
+  if (!directory) return t("swarm.pwa.choose");
+  if (!entry) return t("swarm.pwa.selectionUnavailable");
+  return null;
+}
+
+function swarmCreationStatus(
+  options: SwarmWorkspaceOptions | undefined,
+  targetState: SwarmCreationTargetState,
+  roleState: SwarmCreationRoleState,
+  currentDraft: SwarmCreationDraft,
+  t: TFunction,
+) {
+  const { query } = targetState;
+  const { inherited, selectedParent, rolesQuery, canReadRoles, directory, entry, parents, parent } =
+    roleState;
+  const needsBinding =
+    inherited && Boolean(selectedParent) && (!selectedParent?.pwaBinding || rolesQuery.isError);
+  const roles = rolesQuery.data ?? [];
+  const role = currentDraft.role;
+  const loadState = swarmCreationLoadState(targetState, canReadRoles, rolesQuery);
+  const rawError = query.error?.message ?? rolesQuery.error?.message ?? null;
+  const pwaError = swarmCreationPwaError(inherited, needsBinding, directory, entry, t);
+  const validationKey =
+    pwaError || !canReadRoles
+      ? "swarm.pwa.choose"
+      : getSwarmCreationValidationKey({
+          loadState,
+          roleClass: options?.roleClass ?? "planner",
+          roles,
+          role,
+          parents,
+          reportsTo: parent,
+        });
+  const targetPending = loadState === "pending";
+  const loadKey = getSwarmCreationLoadKey(loadState, roles);
+  const targetError = rawError ?? pwaError ?? (loadKey ? t(loadKey) : null);
+  return {
+    needsBinding,
     roles,
     role,
-    parents,
-    reportsTo: effectiveParent,
+    loadState,
+    rawError,
+    validationKey,
+    targetPending,
+    targetError,
+  };
+}
+
+type SwarmCreationStatus = ReturnType<typeof swarmCreationStatus>;
+
+function useSwarmPwaBinding(
+  targetState: SwarmCreationTargetState,
+  roleState: SwarmCreationRoleState,
+) {
+  const { target, operations, query, contextKey } = targetState;
+  const { parent, directory, entry, canReadRoles, rolesQuery } = roleState;
+  const [binding, setBinding] = useState<{ key: string; pending: boolean; error: string | null }>({
+    key: "",
+    pending: false,
+    error: null,
   });
+  const bindingKey = `${contextKey}:${parent}:${directory}`;
+  const confirmBinding = useCallback(async () => {
+    if (!target || !operations || !parent || !entry || entry.error) return;
+    setBinding({ key: bindingKey, pending: true, error: null });
+    try {
+      await operations.bindPwa({ target, parentName: parent, directory });
+      await query.refetch();
+      if (canReadRoles) await rolesQuery.refetch();
+      setBinding({ key: bindingKey, pending: false, error: null });
+    } catch (error) {
+      setBinding({ key: bindingKey, pending: false, error: toErrorMessage(error) });
+    }
+  }, [target, operations, parent, entry, bindingKey, directory, query, canReadRoles, rolesQuery]);
+  const refresh = useCallback(() => {
+    void query.refetch();
+    if (canReadRoles) void rolesQuery.refetch();
+  }, [query, rolesQuery, canReadRoles]);
+  return {
+    confirmBinding,
+    refresh,
+    bindingPending: binding.key === bindingKey && binding.pending,
+    bindingError: binding.key === bindingKey ? binding.error : null,
+  };
+}
+
+function swarmDiscoveryMessage(source: PwaDiscovery | undefined, t: TFunction) {
+  if (!source) return null;
+  let discoveryState: string | null = null;
+  if (!source.complete) discoveryState = t("swarm.pwa.partial");
+  else if (!source.entries.length) discoveryState = t("swarm.pwa.empty");
+  return [
+    source.rootError,
+    discoveryState,
+    ...source.errors.map((item) => `${item.directory}: ${item.error}`),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function swarmCreationForm(
+  options: SwarmWorkspaceOptions | undefined,
+  source: PwaDiscovery | undefined,
+  draftState: SwarmCreationDraftState,
+  roleState: SwarmCreationRoleState,
+  status: SwarmCreationStatus,
+  bindingState: ReturnType<typeof useSwarmPwaBinding>,
+  t: TFunction,
+) {
+  const { name, setName, changeRole, changeDirectory, changeParent } = draftState;
+  const { parents, parent, directory, inherited, selectedParent } = roleState;
+  const { roles, role, targetError, targetPending, needsBinding } = status;
+  const { refresh, confirmBinding } = bindingState;
   const form = options
     ? {
         roleClass: options.roleClass,
         roles,
         parents,
         role,
-        parent: effectiveParent,
+        parent,
         name,
-        onRoleChange: setRole,
-        onParentChange: setParent,
+        onRoleChange: changeRole,
+        onParentChange: changeParent,
         onNameChange: setName,
         targetError,
         targetPending,
-        onRetry: target && operations ? () => void query.refetch() : null,
+        onRetry: refresh,
+        pwaEntries: source?.entries ?? [],
+        directory,
+        onDirectoryChange: changeDirectory,
+        onPwaOpen: refresh,
+        inheritedDirectory:
+          inherited && !needsBinding ? selectedParent?.pwaBinding?.directory : undefined,
+        needsBinding,
+        onConfirmBinding: confirmBinding,
+        bindingPending: bindingState.bindingPending,
+        bindingError: bindingState.bindingError,
+        discoveryMessage: swarmDiscoveryMessage(source, t),
       }
     : undefined;
-  const submission = swarmWorkspaceSubmission(operations, target, loadState, validationKey, {
-    role,
-    name,
-    reportsTo: effectiveParent,
-  });
-  return { form, submission, validationKey, rawError, bindAgent: operations?.bindAgent };
+  return form;
+}
+
+function swarmCreationSubmission(
+  options: SwarmWorkspaceOptions | undefined,
+  targetState: SwarmCreationTargetState,
+  draftState: SwarmCreationDraftState,
+  roleState: SwarmCreationRoleState,
+  status: SwarmCreationStatus,
+) {
+  const { target, operations, source } = targetState;
+  const { name } = draftState;
+  const { parent, inherited, directory, selectedParent } = roleState;
+  const { loadState, validationKey, role } = status;
+  const submission =
+    operations && target && loadState === "loaded" && !validationKey
+      ? {
+          prepareAgent: operations.prepareAgent,
+          target,
+          role,
+          name,
+          reportsTo: parent,
+          brief: "",
+          pwaDirectory: inherited ? undefined : directory,
+          pwaSourceIdentity: swarmPwaSourceIdentity(
+            options?.roleClass ?? "planner",
+            source?.path,
+            directory,
+            selectedParent?.pwaBinding,
+          ),
+        }
+      : undefined;
+  return submission;
+}
+
+function useSwarmWorkspaceState(
+  options: SwarmWorkspaceOptions | undefined,
+  project: HostProjectListItem | null,
+  serverId: string,
+) {
+  const { t } = useTranslation();
+  const targetState = useSwarmCreationTarget(options, project, serverId);
+  const draftState = useSwarmCreationDraft(options, serverId, targetState);
+  const roleState = useSwarmCreationRoles(
+    options,
+    project,
+    serverId,
+    targetState,
+    draftState.currentDraft,
+  );
+  const status = swarmCreationStatus(options, targetState, roleState, draftState.currentDraft, t);
+  const bindingState = useSwarmPwaBinding(targetState, roleState);
+  const form = swarmCreationForm(
+    options,
+    targetState.source,
+    draftState,
+    roleState,
+    status,
+    bindingState,
+    t,
+  );
+  const submission = swarmCreationSubmission(options, targetState, draftState, roleState, status);
+  return {
+    form,
+    submission,
+    validationKey: status.validationKey,
+    rawError: status.rawError,
+    bindAgent: targetState.operations?.bindAgent,
+  };
 }
 
 interface NewWorkspaceScreenProps {
@@ -925,24 +1199,28 @@ function SwarmFormControls({
 }) {
   const { t } = useTranslation();
   if (!input) return null;
-  if (input.targetPending) return <LoadingSpinner color={styles.swarmSpinnerColor.color} />;
-  if (input.targetError) {
-    return (
-      <Alert variant="error" title={input.targetError} testID="swarm-target-error">
-        {input.onRetry ? (
-          <Button variant="outline" size="sm" onPress={input.onRetry} testID="swarm-target-retry">
-            {t("common.actions.retry")}
-          </Button>
-        ) : null}
-      </Alert>
-    );
-  }
   return (
-    <SwarmFormControlsInner
-      input={input}
-      isPending={isPending}
-      badgePressableStyle={badgePressableStyle}
-    />
+    <>
+      <SwarmFormControlsInner
+        input={input}
+        isPending={isPending}
+        badgePressableStyle={badgePressableStyle}
+      />
+      {input.targetPending ? <LoadingSpinner color={styles.swarmSpinnerColor.color} /> : null}
+      {input.targetError || input.discoveryMessage || input.bindingError ? (
+        <Alert
+          variant="error"
+          title={input.bindingError ?? input.targetError ?? input.discoveryMessage ?? ""}
+          testID="swarm-target-error"
+        >
+          {input.onRetry ? (
+            <Button variant="outline" size="sm" onPress={input.onRetry} testID="swarm-target-retry">
+              {t("common.actions.retry")}
+            </Button>
+          ) : null}
+        </Alert>
+      ) : null}
+    </>
   );
 }
 
@@ -957,7 +1235,30 @@ function SwarmFormControlsInner({
 }) {
   const { t } = useTranslation();
   const { theme } = useUnistyles();
-  const [openPicker, setOpenPicker] = useState<"role" | "parent" | null>(null);
+  const [openPicker, setOpenPicker] = useState<"role" | "parent" | "pwa" | null>(null);
+  const pwaAnchorRef = useRef<View>(null);
+  const pwaOptions = useMemo(
+    () =>
+      input.pwaEntries.map((entry) => ({
+        id: entry.directory,
+        label: `${entry.title} · ${entry.directory}${entry.error ? ` · ${entry.error}` : ""}`,
+      })),
+    [input.pwaEntries],
+  );
+  const handlePwaSelect = useCallback(
+    (value: string) => {
+      input.onDirectoryChange(value);
+      setOpenPicker(null);
+    },
+    [input],
+  );
+  const handlePwaOpenChange = useCallback(
+    (open: boolean) => {
+      setOpenPicker(open ? "pwa" : null);
+      if (open) input.onPwaOpen();
+    },
+    [input],
+  );
   const roleAnchorRef = useRef<View>(null);
   const parentAnchorRef = useRef<View>(null);
   const roleOptions = useMemo(
@@ -970,8 +1271,7 @@ function SwarmFormControlsInner({
   );
   const roleLabel =
     input.roles.find((choice) => choice.role === input.role)?.title ??
-    input.role ??
-    t("swarm.creation.role");
+    (input.role || t("swarm.creation.role"));
   const parentLabel =
     input.parents.find((choice) => choice.name === input.parent)?.title ??
     (input.roleClass === "supervisor"
@@ -1029,8 +1329,11 @@ function SwarmFormControlsInner({
     [input],
   );
   const handleRoleOpenChange = useCallback(
-    (open: boolean) => setOpenPicker(open ? "role" : null),
-    [],
+    (open: boolean) => {
+      setOpenPicker(open ? "role" : null);
+      if (open) input.onPwaOpen();
+    },
+    [input],
   );
   const renderParentOption = useCallback<NonNullable<ComboboxProps["renderOption"]>>(
     ({ option, selected, active, onPress }) => (
@@ -1089,11 +1392,49 @@ function SwarmFormControlsInner({
   );
   return (
     <>
+      {input.inheritedDirectory ? (
+        <Text style={styles.badgeText}>
+          {t("swarm.pwa.inherited", { directory: input.inheritedDirectory })}
+        </Text>
+      ) : (
+        <>
+          {trigger(
+            pwaAnchorRef,
+            pwaOptions.find((option) => option.id === input.directory)?.label ??
+              (input.directory || t("swarm.pwa.choose")),
+            roleIcon,
+            () => handlePwaOpenChange(true),
+            t("swarm.pwa.directory"),
+            t("swarm.pwa.directory"),
+          )}
+          <Combobox
+            options={pwaOptions}
+            value={input.directory}
+            onSelect={handlePwaSelect}
+            title={t("swarm.pwa.directory")}
+            open={openPicker === "pwa"}
+            onOpenChange={handlePwaOpenChange}
+            desktopPlacement="bottom-start"
+            anchorRef={pwaAnchorRef}
+          />
+          {input.needsBinding ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onPress={input.onConfirmBinding}
+              loading={input.bindingPending}
+              disabled={isPending || input.bindingPending || !input.directory}
+            >
+              {t("swarm.pwa.confirmBinding")}
+            </Button>
+          ) : null}
+        </>
+      )}
       {trigger(
         roleAnchorRef,
         roleLabel,
         roleIcon,
-        () => setOpenPicker("role"),
+        () => handleRoleOpenChange(true),
         t("swarm.creation.swarmRole"),
         t("swarm.creation.roleHint"),
       )}
@@ -1354,6 +1695,8 @@ interface CreateChatAgentInput {
     name: string;
     reportsTo: string | null;
     brief: string;
+    pwaDirectory?: string;
+    pwaSourceIdentity?: string;
   };
 }
 
@@ -1450,10 +1793,15 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
           role: input.swarm.role,
           reportsTo: input.swarm.reportsTo,
           brief: text,
+          pwaDirectory: input.swarm.pwaDirectory,
+          pwaSourceIdentity: input.swarm.pwaSourceIdentity,
         })
       : null;
   const initialAgent: NonNullable<CreateWorkspaceRequestOptions["agent"]> = {
     ...(preparedSwarmAgent ? { agentId: preparedSwarmAgent.agentId } : {}),
+    ...(preparedSwarmAgent?.parentAgentId
+      ? { labels: { "paseo.parent-agent-id": preparedSwarmAgent.parentAgentId } }
+      : {}),
     config: {
       provider,
       cwd,
@@ -1518,14 +1866,29 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
     retry: (request: CreateAgentRequestOptions) =>
       execute({
         ...initialAgent,
-        config: { ...request.config!, cwd },
+        config: {
+          ...request.config!,
+          cwd,
+          ...(preparedSwarmAgent ? { systemPrompt: preparedSwarmAgent.systemPrompt } : {}),
+        },
         initialPrompt: request.initialPrompt ?? "",
         clientMessageId: initialAgent.clientMessageId,
         images: request.images,
         attachments: request.attachments,
       }),
   };
-  await agentCreation.result;
+  try {
+    await agentCreation.result;
+  } catch (error) {
+    if (!preparedSwarmAgent) throw error;
+    throw new Error(
+      i18n.t("swarm.creation.preparedFailed", {
+        id: preparedSwarmAgent.agentId,
+        reason: toErrorMessage(error),
+      }),
+      { cause: error },
+    );
+  }
   if (outcome === "background") clearConsumedDraft();
   return outcome;
 }
@@ -1919,6 +2282,16 @@ interface NewWorkspaceFormStackInput {
     targetError: string | null;
     targetPending: boolean;
     onRetry: (() => void) | null;
+    pwaEntries: readonly PwaEntry[];
+    directory: string;
+    onDirectoryChange(directory: string): void;
+    onPwaOpen(): void;
+    inheritedDirectory?: string;
+    needsBinding: boolean;
+    onConfirmBinding(): void;
+    bindingPending: boolean;
+    bindingError: string | null;
+    discoveryMessage: string | null;
   };
 }
 

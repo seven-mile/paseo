@@ -1,8 +1,36 @@
 import { z } from "zod";
 
-export const pwaSourceSchema = z.object({ path: z.string().nullable() });
-export const savedPwaSourceSchema = z.object({ path: z.string() });
-export type PwaSource = z.infer<typeof pwaSourceSchema>;
+export const pwaRoleSchema = z.object({
+  role: z.string(),
+  roleClass: z.enum(["planner", "supervisor", "worker"]),
+  title: z.string(),
+  description: z.string(),
+});
+export const pwaEntrySchema = z.object({
+  directory: z.string(),
+  title: z.string(),
+  roles: z.array(pwaRoleSchema),
+  statuses: z.array(z.string()),
+  error: z.string().optional(),
+});
+export const savedPwaSourceSchema = z.object({
+  path: z.string(),
+  defaultPwa: z.string().nullable(),
+});
+export const pwaSourceSchema = z.object({
+  path: z.string().nullable(),
+  defaultPwa: z.string().nullable(),
+  entries: z.array(pwaEntrySchema),
+  complete: z.boolean(),
+  errors: z.array(z.object({ directory: z.string(), error: z.string() })),
+  rootError: z.string().optional(),
+});
+export interface PwaSource {
+  path: string | null;
+  defaultPwa?: string | null;
+}
+export type PwaDiscovery = z.infer<typeof pwaSourceSchema>;
+export type PwaEntry = z.infer<typeof pwaEntrySchema>;
 
 export type PwaFormStatus =
   | { kind: "editing" }
@@ -13,6 +41,8 @@ export type PwaFormStatus =
 export interface PwaFormState {
   path: string;
   savedPath: string;
+  defaultPwa: string;
+  savedDefaultPwa: string;
   status: PwaFormStatus;
   canSubmit: boolean;
   inputRevision: number;
@@ -20,7 +50,8 @@ export interface PwaFormState {
 
 export interface PwaFormSnapshot {
   path: string | null;
-  save(path: string): Promise<PwaSource>;
+  defaultPwa?: string | null;
+  save(path: string, defaultPwa: string | null): Promise<PwaSource>;
 }
 
 export function openPwaForm(snapshot: PwaFormSnapshot) {
@@ -30,6 +61,8 @@ export function openPwaForm(snapshot: PwaFormSnapshot) {
   let state: PwaFormState = {
     path: initialPath,
     savedPath: initialPath,
+    defaultPwa: snapshot.defaultPwa ?? "",
+    savedDefaultPwa: snapshot.defaultPwa ?? "",
     status: { kind: "editing" },
     canSubmit: false,
     inputRevision: 0,
@@ -40,7 +73,10 @@ export function openPwaForm(snapshot: PwaFormSnapshot) {
     const trimmedPath = next.path.trim();
     state = {
       ...next,
-      canSubmit: canEdit && trimmedPath.length > 0 && trimmedPath !== next.savedPath,
+      canSubmit:
+        canEdit &&
+        trimmedPath.length > 0 &&
+        (trimmedPath !== next.savedPath || next.defaultPwa.trim() !== next.savedDefaultPwa),
     };
     for (const listener of listeners) listener();
   }
@@ -58,16 +94,22 @@ export function openPwaForm(snapshot: PwaFormSnapshot) {
       if (closed || state.status.kind === "pending") return;
       publish({ ...state, path, status: { kind: "editing" } });
     },
+    setDefaultPwa(defaultPwa: string) {
+      if (closed || state.status.kind === "pending") return;
+      publish({ ...state, defaultPwa, status: { kind: "editing" } });
+    },
     async submit() {
       if (closed || !state.canSubmit) return;
       publish({ ...state, status: { kind: "pending" } });
       try {
-        const saved = await snapshot.save(state.path.trim());
+        const saved = await snapshot.save(state.path.trim(), state.defaultPwa.trim() || null);
         const savedPath = saved.path ?? "";
         publish({
           ...state,
           path: savedPath,
           savedPath,
+          defaultPwa: saved.defaultPwa ?? "",
+          savedDefaultPwa: saved.defaultPwa ?? "",
           status: { kind: "success" },
           inputRevision: state.inputRevision + 1,
         });

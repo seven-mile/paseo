@@ -37,6 +37,21 @@ export const ja: TranslationResources = {
       save: "保存",
       directoryLabel: "ディレクトリ",
       saved: "PWA ディレクトリを保存しました",
+      defaultDirectory: "Default PWA directory (optional)",
+      defaultHint:
+        "Directory relative to the content root. Use . for its PWA; leave blank to require a selection.",
+      defaultValue: "Default: {{directory}}",
+      noDefault: "No default PWA",
+      discovered: "{{count}} PWA directories found",
+      partial: "Discovery is incomplete. Refresh to retry unreadable directories.",
+      empty: "No PWA directories found.",
+      choose: "Choose a PWA directory",
+      selectionUnavailable: "The selected PWA directory is unavailable. Choose another or refresh.",
+      inherited: "Inherited PWA · {{directory}}",
+      confirmRequired: "Confirm a PWA directory for this parent before creating a child.",
+      confirmBinding: "Confirm parent PWA binding",
+      teamUnavailable: "Team PWA unavailable: {{reason}}",
+      contentRoot: "PWA content root",
     },
     tasks: {
       title: "タスク",
@@ -94,6 +109,8 @@ export const ja: TranslationResources = {
         bodyRequired: "アクティビティを入力するか選択肢を選んでください。",
       },
       noMatches: "一致するタスクはありません。",
+      unassigned: "Unattributed Tasks",
+      undeclaredStatus: "Undeclared status · {{status}}",
     },
     creation: {
       notInstalled: "選択したホストに Swarm がインストールされていません。",
@@ -113,6 +130,9 @@ export const ja: TranslationResources = {
       supervisorHint: "このワーカーの報告先スーパーバイザーを選択します。",
       agentName: "エージェント名",
       nameHint: "チーム内で呼びかける短い名前を付けます。例: code-review。",
+      reservationChanged:
+        "Prepared agent {{id}} is reserved for the previous submission. Restore that submission or ask a human to resolve the reservation.",
+      preparedFailed: "Prepared agent {{id}}: {{reason}}",
     },
   },
   paneFind: {

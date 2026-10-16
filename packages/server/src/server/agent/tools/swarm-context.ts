@@ -75,6 +75,22 @@ export function summarizeSwarmBoard(
 ) {
   const name = actor.qualifiedName ?? actor.name;
   const teamName = actor.roleClass === "worker" ? (actor.reportsTo ?? name) : name;
+  const managedNames = new Set([name]);
+  let added = true;
+  while (added) {
+    added = false;
+    for (const agent of board.agents ?? []) {
+      const qualifiedName = agent.qualifiedName ?? agent.name;
+      if (
+        agent.reportsTo &&
+        managedNames.has(agent.reportsTo) &&
+        !managedNames.has(qualifiedName)
+      ) {
+        managedNames.add(qualifiedName);
+        added = true;
+      }
+    }
+  }
   const agents = (board.agents ?? [])
     .filter((agent) => {
       const qualifiedName = agent.qualifiedName ?? agent.name;
@@ -99,9 +115,7 @@ export function summarizeSwarmBoard(
   const tasks = (board.tasks ?? [])
     .filter(
       (task) =>
-        (task.managerName === name ||
-          task.managerName.startsWith(`${name}.`) ||
-          task.workerNames.includes(name)) &&
+        (managedNames.has(task.managerName) || task.workerNames.includes(name)) &&
         (!input.status || task.status === input.status),
     )
     .sort((left, right) => left.id.localeCompare(right.id))
