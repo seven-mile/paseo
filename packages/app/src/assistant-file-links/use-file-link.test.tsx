@@ -2,9 +2,9 @@
  * @vitest-environment jsdom
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, waitFor } from "@testing-library/react";
 import React, { useCallback, useMemo, useState, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToastApi } from "@/components/toast-host";
 import type { InlinePathTarget } from "./parse";
 import { AssistantFileLinkResolverProvider } from "./provider";
@@ -21,10 +21,13 @@ import { RetainedPanelActivity } from "@/components/retained-panel";
 import { ToastApiProvider } from "@/contexts/toast-api-context";
 import { useSessionStore } from "@/stores/session-store";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
-import { SwarmCanonicalLinkProvider } from "@/swarm/canonical-links";
+import { SwarmCanonicalLinkProvider, useMarkdownLinkPress } from "@/swarm/canonical-links";
 import { openSwarmReference } from "@/swarm/navigation";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { i18n } from "@/i18n/i18next";
+import { MarkdownLinkText } from "@/components/markdown/link-text";
+import { createSwarmEnvelopeMarkdownParser } from "@/swarm/envelope-markdown";
+import { parseSwarmEnvelope } from "@/swarm/system-envelope";
 
 vi.stubGlobal("React", React);
 
@@ -56,6 +59,7 @@ const SOURCE = {
   text: "dumm.md",
   markup: "linkify",
 };
+const ENVELOPE_LINK_STYLE = {};
 
 function resolvedSuggestions(
   entries: DirectorySuggestionResult["entries"],
@@ -282,6 +286,142 @@ describe("canonical assistant links", () => {
       expect(openExternalUrl).not.toHaveBeenCalled();
     },
   );
+
+  afterEach(cleanup);
+
+  function EnvelopeReferenceLink({
+    href,
+    label,
+    presses,
+  }: {
+    href: string;
+    label: string;
+    presses: Array<{ uri: string; allowDefault: boolean }>;
+  }) {
+    const onLinkPress = useMarkdownLinkPress();
+    const handlePress = useCallback(
+      () => presses.push({ uri: href, allowDefault: onLinkPress(href) }),
+      [href, onLinkPress, presses],
+    );
+    return (
+      <MarkdownLinkText style={ENVELOPE_LINK_STYLE} onPress={handlePress}>
+        {label}
+      </MarkdownLinkText>
+    );
+  }
+
+  function EnvelopeReferenceLinks({
+    original,
+    presses,
+  }: {
+    original: string;
+    presses: Array<{ uri: string; allowDefault: boolean }>;
+  }) {
+    const envelope = parseSwarmEnvelope(original);
+    if (!envelope) throw new Error("The real tagged envelope fixture must parse");
+    const tokens = createSwarmEnvelopeMarkdownParser(envelope.kind).parse(envelope.body, {});
+    const links: ReactNode[] = [];
+    for (const block of tokens) {
+      const children = block.children ?? [];
+      for (let index = 0; index < children.length; index += 1) {
+        const token = children[index];
+        if (token.type !== "link_open" || token.attrGet("data-swarm-envelope-reference") !== "true")
+          continue;
+        const href = token.attrGet("href");
+        const text = children[index + 1];
+        if (!href || text?.type !== "text" || children[index + 2]?.type !== "link_close")
+          throw new Error("A generated field reference must retain its actual href and text token");
+        links.push(
+          <EnvelopeReferenceLink
+            key={`${block.map?.[0]}:${index}`}
+            href={href}
+            label={text.content}
+            presses={presses}
+          />,
+        );
+      }
+    }
+    return links;
+  }
+
+  it.each([
+    {
+      line: "Team message from planner.worker to planner:",
+      label: "planner.worker",
+      uri: "paseo-swarm://agent/planner.worker",
+      reference: {
+        kind: "agent",
+        paseoAgentId: "raw-agent",
+        qualifiedName: "planner.worker",
+        workspaceId: "destination",
+      },
+    },
+    {
+      line: "Task: task-id.",
+      label: "task-id",
+      uri: "paseo-swarm://task/task-id",
+      reference: { kind: "task", taskId: "task-id", workspaceId: "destination" },
+    },
+  ] as const)(
+    "dispatches the generated $label link through the real provider",
+    async ({ line, label, uri, reference }) => {
+      canonicalPlugin?.invoke.mockResolvedValueOnce({
+        ...CANONICAL_BOARD,
+        tasks: CANONICAL_BOARD.tasks.map((task) => ({ ...task, id: "task-id" })),
+      });
+      const { Wrapper, openedFiles, getDirectorySuggestions } = createCanonicalWrapper();
+      const presses: Array<{ uri: string; allowDefault: boolean }> = [];
+      const view = render(
+        <EnvelopeReferenceLinks
+          original={`<paseo-swarm-team-message>\n${line}\n</paseo-swarm-team-message>`}
+          presses={presses}
+        />,
+        { wrapper: Wrapper },
+      );
+      expect(canonicalPlugin?.invoke).not.toHaveBeenCalled();
+      expect(openSwarmReference).not.toHaveBeenCalled();
+      fireEvent.click(view.getByRole("link", { name: label }));
+      expect(presses).toEqual([{ uri, allowDefault: false }]);
+      await waitFor(() =>
+        expect(openSwarmReference).toHaveBeenCalledExactlyOnceWith({
+          serverId: "server-1",
+          workspaceId: "source",
+          host: "explorer",
+          isCompact: false,
+          reference,
+        }),
+      );
+      expect(canonicalPlugin?.invoke).toHaveBeenCalledExactlyOnceWith("swarm.board.read", {});
+      expect(openedFiles).toEqual([]);
+      expect(getDirectorySuggestions).not.toHaveBeenCalled();
+      expect(openExternalUrl).not.toHaveBeenCalled();
+    },
+  );
+
+  it("consumes an unknown generated Task reference with unavailable feedback", async () => {
+    const { Wrapper, toast, openedFiles, getDirectorySuggestions } = createCanonicalWrapper();
+    const presses: Array<{ uri: string; allowDefault: boolean }> = [];
+    const view = render(
+      <EnvelopeReferenceLinks
+        original={"<paseo-swarm-team-message>\nTask: missing-task.\n</paseo-swarm-team-message>"}
+        presses={presses}
+      />,
+      { wrapper: Wrapper },
+    );
+    fireEvent.click(view.getByRole("link", { name: "missing-task" }));
+    expect(presses).toEqual([{ uri: "paseo-swarm://task/missing-task", allowDefault: false }]);
+    await waitFor(() =>
+      expect(toast.show).toHaveBeenCalledExactlyOnceWith(
+        i18n.t("swarm.tasks.referenceUnavailable"),
+        { variant: "error" },
+      ),
+    );
+    expect(canonicalPlugin?.invoke).toHaveBeenCalledExactlyOnceWith("swarm.board.read", {});
+    expect(openSwarmReference).not.toHaveBeenCalled();
+    expect(openedFiles).toEqual([]);
+    expect(getDirectorySuggestions).not.toHaveBeenCalled();
+    expect(openExternalUrl).not.toHaveBeenCalled();
+  });
 
   it("uses the raw canonical href before file-looking label disambiguation", async () => {
     const { Wrapper, getDirectorySuggestions } = createCanonicalWrapper();

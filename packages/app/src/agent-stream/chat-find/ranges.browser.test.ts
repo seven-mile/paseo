@@ -65,3 +65,72 @@ it("matches whitespace across text nodes without inspecting hidden link destinat
     "world\nline",
   ]);
 });
+
+it("finds an envelope body inside one marker without counting its controls or original disclosure", () => {
+  const root = document.createElement("div");
+  const row = document.createElement("div");
+  row.dataset.messageId = "envelope-message";
+  row.innerHTML =
+    '<div data-message-text="true"><div><button>find body</button><div data-card-body="true">İ😀find <strong>body</strong></div></div></div><button>Original message</button>';
+  root.append(row);
+  document.body.append(root);
+
+  const matches = () => findMessageMatches(root, "envelope-message", "find body");
+  expect(row.querySelectorAll('[data-message-text="true"]')).toHaveLength(1);
+  expect(matches().map((range) => range.toString())).toEqual(["find body"]);
+  expect(matches()[0]!.startOffset).toBe(3);
+  expect(matches()[0]!.startContainer.parentElement?.dataset.cardBody).toBe("true");
+  expect(findRenderedMatches(row, "Original message")).toEqual([]);
+
+  const original = document.createElement("div");
+  original.textContent =
+    "<paseo-swarm-team-message>\nİ😀find **body**\n</paseo-swarm-team-message>";
+  row.append(original);
+  expect(findMessageMatches(root, "envelope-message", "paseo-swarm-team-message")).toEqual([]);
+  expect(findRenderedMatches(row, "paseo-swarm-team-message")).toEqual([]);
+  expect(matches().map((range) => range.toString())).toEqual(["find body"]);
+  expect(findMessageMatches(root, "envelope-message", "İ😀find")).toHaveLength(1);
+
+  row.querySelector('[data-card-body="true"]')!.remove();
+  expect(matches()).toEqual([]);
+  expect(findMessageMatches(root, "envelope-message", "İ😀find")).toEqual([]);
+});
+
+it("keeps Task and agent link text searchable across field boundaries without raw duplicates", () => {
+  const root = document.createElement("div");
+  const row = document.createElement("div");
+  row.dataset.messageId = "linked-envelope-message";
+  row.innerHTML =
+    '<div data-message-text="true"><div data-paseo-markdown-tag="p">İ😀Task: <div role="link"><span data-reference="task">task-id</span></div>.</div><div data-paseo-markdown-tag="p">Agent <div role="link"><span data-reference="agent">planner.worker</span></div> is idle.</div></div><button>Original message</button>';
+  root.append(row);
+  document.body.append(root);
+  const taskText = row.querySelector('[data-reference="task"]')!.firstChild;
+  const agentText = row.querySelector('[data-reference="agent"]')!.firstChild;
+  const matches = (query: string) => findMessageMatches(root, "linked-envelope-message", query);
+  const task = matches("task-id");
+  expect(task.map((range) => range.toString())).toEqual(["task-id"]);
+  expect(task[0]!.startContainer).toBe(taskText);
+  expect(task[0]!.startOffset).toBe(0);
+  const crossField = matches("Task: task-id");
+  expect(crossField.map((range) => range.toString())).toEqual(["Task: task-id"]);
+  expect(crossField[0]!.startOffset).toBe(3);
+  expect(crossField[0]!.endContainer).toBe(taskText);
+  expect(crossField[0]!.endOffset).toBe(7);
+  const agent = matches("planner.worker");
+  expect(agent.map((range) => range.toString())).toEqual(["planner.worker"]);
+  expect(agent[0]!.startContainer).toBe(agentText);
+  expect(agent[0]!.startOffset).toBe(0);
+
+  const original = document.createElement("div");
+  original.textContent =
+    "<paseo-swarm-team-message>\nİ😀Task: task-id.\nAgent planner.worker is idle.\n</paseo-swarm-team-message>";
+  row.append(original);
+  expect(matches("task-id").map((range) => range.toString())).toEqual(["task-id"]);
+  expect(matches("Task: task-id").map((range) => range.toString())).toEqual(["Task: task-id"]);
+  expect(matches("planner.worker").map((range) => range.toString())).toEqual(["planner.worker"]);
+  expect(findRenderedMatches(row, "Original message")).toEqual([]);
+  row.querySelector('[data-message-text="true"]')!.remove();
+  expect(matches("task-id")).toEqual([]);
+  expect(matches("Task: task-id")).toEqual([]);
+  expect(matches("planner.worker")).toEqual([]);
+});

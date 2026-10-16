@@ -432,6 +432,14 @@ export const ru: TranslationResources = {
     },
   },
   message: {
+    envelope: {
+      titles: {
+        settings: "Настройки",
+        team: "Сообщение команды",
+        runtime: "Уведомление о выполнении",
+      },
+      originalMessage: "Исходное сообщение",
+    },
     diagram: {
       diagram: "Диаграмма",
       zoomIn: "Увеличить масштаб",

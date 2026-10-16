@@ -432,6 +432,14 @@ export const ja: TranslationResources = {
     },
   },
   message: {
+    envelope: {
+      titles: {
+        settings: "設定",
+        team: "チームメッセージ",
+        runtime: "実行時通知",
+      },
+      originalMessage: "元のメッセージ",
+    },
     diagram: {
       diagram: "図",
       zoomIn: "拡大",
