@@ -98,8 +98,9 @@ describe("CLI resolution", () => {
     expect(resolvePaseoCliShim(binDir, cliEntry, "win32")).toBe(shim);
   });
   it("preserves an explicit CLI override", () => {
-    vi.stubEnv("PASEO_CLI", "/custom/cli-wrapper");
-    expect(resolvePaseoCliExecutablePath()).toBe("/custom/cli-wrapper");
+    const wrapper = join(createTempDir("swarm-cli-override-"), "cli-wrapper");
+    vi.stubEnv("PASEO_CLI", wrapper);
+    expect(resolvePaseoCliExecutablePath()).toBe(wrapper);
   });
 });
 
