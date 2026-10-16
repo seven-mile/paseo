@@ -12,7 +12,7 @@ statuses:
 
 # PR workflow
 
-**面向人类的文本与交付报告始终使用中文描述。**
+**Task、Activity 与交付报告使用中文。PR/MR 标题、正文和 commit message 使用英文。**
 
 This project moves each delivery through `survey`, `development`, `review`,
 `mr-preparation`, `human-review`, and `completed`. A supervisor may return a
@@ -29,6 +29,15 @@ Workers may inspect local repositories, edit local files, run tests, and report
 evidence. Workers do not push, create or modify remote PRs/MRs, undraft,
 approve, merge, or publish. A supervisor or human handles any authorized
 remote effect.
+
+PR/MR text has a different reader from the Task record: a reviewer who has
+the diff, the linked issue, and the repository, and none of the Task,
+Activities, board links, or agent conversations. In `mr-preparation` the
+supervisor gives a preparer with no earlier turns on the Task a fixed bundle:
+base and head refs, the Task objective and acceptance criteria, reviewer facts,
+the linked issue, and public evidence links. The preparer writes and checks the
+title and body from that bundle and the diff. The supervisor sends any
+corrections back to the preparer and posts the text it returns.
 
 Model/provider routing is an operating note configurable by this text. Do not
 assume an environment model default, and do not treat a runtime status as a
