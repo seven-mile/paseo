@@ -152,8 +152,9 @@ export async function confirmRelayPairing(): Promise<boolean> {
 export function printDirectConnectionGuidance(): void {
   console.log("Daemon is running with relay off.");
   console.log(
-    "To connect another device directly, use the daemon's TCP address over your LAN, Tailscale, or another VPN.",
+    "Pair later with paseo-swarm daemon pair --relay --home <path>, or configure a reachable direct TLS endpoint allowing your Web UI origin.",
   );
+  console.log("Opening the Web UI alone does not discover this daemon.");
   console.log(`Learn more: ${RELAY_DOCS_URL}#direct-connections`);
 }
 
@@ -169,7 +170,7 @@ export async function runPairCommand(options: PairOptions): Promise<void> {
 
   if (offline)
     output.writeStderr(
-      `Offline pairing offer. Start with: paseo daemon start --home ${JSON.stringify(target.kind === "instance" ? target.home : "")}\n`,
+      `Offline pairing offer. Start with: paseo-swarm daemon start --home ${JSON.stringify(target.kind === "instance" ? target.home : "")}\n`,
     );
 
   outputPairingResult(pairing, options, output);
@@ -186,12 +187,12 @@ function outputPairingResult(
         `${JSON.stringify({
           code: "RELAY_DISABLED",
           message: "Relay pairing is disabled for this daemon.",
-          action: "Run paseo daemon pair --relay --json to enable it explicitly.",
+          action: "Run paseo-swarm daemon pair --relay --json to enable it explicitly.",
         })}\n`,
       );
     } else {
       output.writeStderr(`${chalk.red("Relay pairing is disabled for this daemon.")}\n`);
-      output.writeStderr(`${chalk.yellow("Run paseo daemon pair --relay to enable it.")}\n`);
+      output.writeStderr(`${chalk.yellow("Run paseo-swarm daemon pair --relay to enable it.")}\n`);
     }
     output.setExitCode(1);
     return;

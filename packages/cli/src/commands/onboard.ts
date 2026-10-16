@@ -111,22 +111,27 @@ async function resolveVoiceSelection(mode: OnboardOptions["voice"]): Promise<boo
   return answer;
 }
 
-function printNextSteps(pairingUrl: string | null, paseoHome: string, richUi: boolean): void {
+function printNextSteps(
+  pairingUrl: string | null,
+  paseoHome: string,
+  richUi: boolean,
+  appBaseUrl: string,
+): void {
   const daemonLogPath = path.join(paseoHome, "daemon.log");
   const nextStepsLines = [
     pairingUrl
       ? "1. Open Paseo and scan the QR code above, or paste the pairing link."
       : "1. Open Paseo and connect to your daemon.",
-    "2. Web app: https://app.paseo.sh",
-    "3. Desktop app: https://github.com/getpaseo/paseo/releases/latest",
+    `2. Web app: ${appBaseUrl}`,
+    "3. Desktop launch is unsupported by paseo-swarm; connect using the Web UI.",
     "4. Docs: https://paseo.sh/docs",
-    `5. Example: paseo run --home ${JSON.stringify(paseoHome)} --output-schema schema.json "extract fields"`,
+    `5. Example: paseo-swarm run --home ${JSON.stringify(paseoHome)} --output-schema schema.json "extract fields"`,
   ];
   const quickReferenceLines = [
-    "1. paseo --help",
-    `2. paseo ls --home ${JSON.stringify(paseoHome)}`,
-    `3. paseo run --home ${JSON.stringify(paseoHome)} "your prompt"`,
-    `4. paseo status --home ${JSON.stringify(paseoHome)}`,
+    "1. paseo-swarm --help",
+    `2. paseo-swarm ls --home ${JSON.stringify(paseoHome)}`,
+    `3. paseo-swarm run --home ${JSON.stringify(paseoHome)} "your prompt"`,
+    `4. paseo-swarm status --home ${JSON.stringify(paseoHome)}`,
     `5. Daemon logs: ${daemonLogPath}`,
   ];
 
@@ -152,7 +157,7 @@ export function onboardCommand(): Command {
   return addLocalDaemonOptions(new Command("onboard"))
     .description("Run first-time setup, start daemon, and print pairing instructions")
     .option("--listen <listen>", "Listen target (host:port, port, or unix socket path)")
-    .option("--port <port>", "Port to listen on (default: 6767)")
+    .option("--port <port>", "Port to listen on (default: 6769)")
     .option("--relay", "Enable relay connection without prompting")
     .option("--no-relay", "Disable relay connection")
     .option("--no-mcp", "Disable the Agent MCP HTTP endpoint")
@@ -271,10 +276,20 @@ export async function runOnboard(options: OnboardOptions): Promise<void> {
   }
   const ready = await waitForDaemonReady(paseoHome, { timeoutMs });
   log.message(`Daemon ready on ${ready.listen}`);
+  const configClient = await connectToDaemon({ target: options.daemonTarget, timeout: timeoutMs });
+  let appBaseUrl: string;
+  try {
+    const { config } = await configClient.getDaemonConfig();
+    if (!config.app?.baseUrl) throw new Error("Daemon configuration is missing app.baseUrl");
+    appBaseUrl = config.app.baseUrl;
+  } finally {
+    await configClient.close();
+  }
 
   if (options.relay === false) {
     log.message("Relay pairing skipped because --no-relay was provided.");
-    printNextSteps(null, paseoHome, richUi);
+    printDirectConnectionGuidance();
+    printNextSteps(null, paseoHome, richUi, appBaseUrl);
     if (richUi) outro("Paseo daemon is running.");
     return;
   }
@@ -288,7 +303,7 @@ export async function runOnboard(options: OnboardOptions): Promise<void> {
     const shouldEnable = richUi ? await confirmRelayPairing() : false;
     if (!shouldEnable) {
       printDirectConnectionGuidance();
-      printNextSteps(null, paseoHome, richUi);
+      printNextSteps(null, paseoHome, richUi, appBaseUrl);
       if (richUi) outro("Paseo daemon is running.");
       return;
     }
@@ -298,7 +313,7 @@ export async function runOnboard(options: OnboardOptions): Promise<void> {
 
   if (!pairing.url) {
     log.warn("Relay pairing URL is unavailable for this daemon configuration.");
-    printNextSteps(null, paseoHome, richUi);
+    printNextSteps(null, paseoHome, richUi, appBaseUrl);
     if (richUi) {
       outro("Paseo daemon is running.");
     }
@@ -312,7 +327,7 @@ export async function runOnboard(options: OnboardOptions): Promise<void> {
       columns: process.stdout.columns,
     }),
   );
-  printNextSteps(pairing.url, paseoHome, richUi);
+  printNextSteps(pairing.url, paseoHome, richUi, appBaseUrl);
   if (richUi) {
     outro("Paseo is ready!");
   }

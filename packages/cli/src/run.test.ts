@@ -1,11 +1,17 @@
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { Command } from "commander";
+import * as daemonClient from "./utils/client.js";
+import * as serverProcess from "@getpaseo/server/process";
+import { runOpenCommand } from "./commands/agent/open.js";
+import { openDesktopWithAgent } from "./commands/open.js";
+import { resolveServerRunnerFromDir } from "./commands/daemon/local-daemon.js";
 import { createCli } from "./cli";
-import { createCliParseArgv } from "./run";
+import { createCliParseArgv, runCli } from "./run";
 
 const runModuleUrl = new URL("./run.ts", import.meta.url).href;
 
@@ -35,6 +41,85 @@ async function runCliWithClosedStdout(
 }
 
 describe("runCli", () => {
+  it("retains empty-argument onboard under the fork display name", () => {
+    expect(createCliParseArgv({ argv: [], cwd: process.cwd() })).toEqual([
+      "paseo-swarm",
+      "paseo-swarm",
+      "onboard",
+    ]);
+  });
+
+  it.each(["@getpaseo/server", "@paseo-swarm/server", "@other-owner/server"])(
+    "checks the exact server identity and runner path: %s",
+    (name) => {
+      const root = mkdtempSync(path.join(tmpdir(), "paseo-runner-identity-"));
+      try {
+        writeFileSync(path.join(root, "package.json"), JSON.stringify({ name, version: "1.2.3" }));
+        expect(resolveServerRunnerFromDir(root)).toBeNull();
+        const scripts = path.join(root, "dist", "scripts");
+        mkdirSync(scripts, { recursive: true });
+        const runner = path.join(scripts, "supervisor-entrypoint.js");
+        writeFileSync(runner, "// fixture; never executed\n");
+        expect(resolveServerRunnerFromDir(root)).toBe(
+          name === "@other-owner/server" ? null : runner,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("rejects a directory shortcut without spawning Desktop", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "paseo-desktop-disabled-"));
+    const spawnSpy = vi.spyOn(serverProcess, "spawnProcess").mockImplementation(() => {
+      throw new Error("Unexpected Desktop spawn");
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const previousExitCode = process.exitCode;
+    try {
+      process.exitCode = undefined;
+      expect(await runCli(["."], { cwd: root })).toBe(1);
+      expect(stderr).toHaveBeenCalledWith(
+        "paseo-swarm does not launch Desktop. Connect using the Web UI.\n",
+      );
+      expect(spawnSpy).not.toHaveBeenCalled();
+    } finally {
+      process.exitCode = previousExitCode;
+      stderr.mockRestore();
+      spawnSpy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([undefined, "explicit-server"])(
+    "rejects agent open before connecting or spawning (server=%s)",
+    async (server) => {
+      const connect = vi
+        .spyOn(daemonClient, "connectToDaemon")
+        .mockRejectedValue(new Error("Unexpected daemon connection"));
+      const spawnSpy = vi.spyOn(serverProcess, "spawnProcess").mockImplementation(() => {
+        throw new Error("Unexpected Desktop spawn");
+      });
+      try {
+        await expect(
+          runOpenCommand(
+            "agent-1",
+            { daemonTarget: { kind: "endpoint", host: "localhost:1" }, server },
+            new Command(),
+          ),
+        ).rejects.toMatchObject({ code: "DESKTOP_UNSUPPORTED" });
+        await expect(
+          openDesktopWithAgent({ serverId: "explicit-server", agentId: "agent-1" }),
+        ).rejects.toMatchObject({ code: "DESKTOP_UNSUPPORTED" });
+        expect(connect).not.toHaveBeenCalled();
+        expect(spawnSpy).not.toHaveBeenCalled();
+      } finally {
+        connect.mockRestore();
+        spawnSpy.mockRestore();
+      }
+    },
+  );
+
   it("lets plugin update own --version while preserving global output options", async () => {
     const cli = createCli()
       .exitOverride()

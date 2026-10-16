@@ -57,11 +57,23 @@ describe("OpenCode terminal agent hooks", () => {
       dispose();
 
       expect(commands).toEqual([
-        ["paseo", "hooks", "opencode", "session.status.busy"],
-        ["paseo", "hooks", "opencode", "session.status.idle"],
+        ["paseo-swarm", "hooks", "opencode", "session.status.busy"],
+        ["paseo-swarm", "hooks", "opencode", "session.status.idle"],
       ]);
     },
   );
+
+  it("uses the injected absolute hook CLI rather than PATH", async () => {
+    const { plugin, commands } = loadInstalledPlugin(
+      "terminal-1",
+      Promise.resolve(0),
+      "/own fork/bin/paseo",
+    );
+    await plugin
+      .server()
+      .event({ event: { type: "session.status", properties: { status: { type: "busy" } } } });
+    expect(commands).toEqual([["/own fork/bin/paseo", "hooks", "opencode", "session.status.busy"]]);
+  });
 
   it("reports OpenCode 1 status and permission events through server()", async () => {
     const { plugin, commands } = loadInstalledPlugin();
@@ -80,11 +92,11 @@ describe("OpenCode terminal agent hooks", () => {
 
     expect(plugin.id).toBe("paseo-terminal-activity");
     expect(commands).toEqual([
-      ["paseo", "hooks", "opencode", "session.status.busy"],
-      ["paseo", "hooks", "opencode", "permission.asked"],
-      ["paseo", "hooks", "opencode", "permission.replied"],
-      ["paseo", "hooks", "opencode", "session.status.retry"],
-      ["paseo", "hooks", "opencode", "session.status.idle"],
+      ["paseo-swarm", "hooks", "opencode", "session.status.busy"],
+      ["paseo-swarm", "hooks", "opencode", "permission.asked"],
+      ["paseo-swarm", "hooks", "opencode", "permission.replied"],
+      ["paseo-swarm", "hooks", "opencode", "session.status.retry"],
+      ["paseo-swarm", "hooks", "opencode", "session.status.idle"],
     ]);
   });
 
@@ -102,8 +114,8 @@ describe("OpenCode terminal agent hooks", () => {
     dispose();
 
     expect(commands).toEqual([
-      ["paseo", "hooks", "opencode", "permission.asked"],
-      ["paseo", "hooks", "opencode", "permission.replied"],
+      ["paseo-swarm", "hooks", "opencode", "permission.asked"],
+      ["paseo-swarm", "hooks", "opencode", "permission.replied"],
     ]);
   });
 
@@ -122,13 +134,13 @@ describe("OpenCode terminal agent hooks", () => {
       event: { type: "session.status", properties: { status: { type: "idle" } } },
     });
     await Promise.resolve();
-    expect(commands).toEqual([["paseo", "hooks", "opencode", "session.status.busy"]]);
+    expect(commands).toEqual([["paseo-swarm", "hooks", "opencode", "session.status.busy"]]);
 
     finishFirstHook();
     await Promise.all([working, idle]);
     expect(commands).toEqual([
-      ["paseo", "hooks", "opencode", "session.status.busy"],
-      ["paseo", "hooks", "opencode", "session.status.idle"],
+      ["paseo-swarm", "hooks", "opencode", "session.status.busy"],
+      ["paseo-swarm", "hooks", "opencode", "session.status.idle"],
     ]);
   });
 
@@ -244,7 +256,11 @@ interface InstalledPlugin {
   }): () => void;
 }
 
-function loadInstalledPlugin(terminalId = "terminal-1", exited = Promise.resolve(0)) {
+function loadInstalledPlugin(
+  terminalId = "terminal-1",
+  exited = Promise.resolve(0),
+  cliPath?: string,
+) {
   const configDir = createTempDir("paseo-opencode-runtime-");
   const { configPath } = installAgentHooks(opencodeAgentHookProvider, { configDir });
   const source = readFileSync(configPath, "utf8");
@@ -254,7 +270,7 @@ function loadInstalledPlugin(terminalId = "terminal-1", exited = Promise.resolve
     source.replace("export default", "globalThis.plugin ="),
     {
       AbortController,
-      process: { env: { PASEO_TERMINAL_ID: terminalId } },
+      process: { env: { PASEO_TERMINAL_ID: terminalId, PASEO_HOOK_CLI: cliPath } },
       Bun: {
         spawn(command: string[]) {
           commands.push(command);

@@ -1,9 +1,17 @@
 import * as pty from "node-pty";
 import xterm, { type Terminal as TerminalType } from "@xterm/headless";
 import { randomUUID } from "crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
-import { basename, delimiter, dirname, extname, join, resolve as resolvePath } from "node:path";
+import {
+  basename,
+  delimiter,
+  dirname,
+  extname,
+  join,
+  relative,
+  resolve as resolvePath,
+} from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { createExternalProcessEnv } from "../server/paseo-env.js";
@@ -16,7 +24,7 @@ import type { TerminalActivity, TerminalActivityState } from "@getpaseo/protocol
 
 const { Terminal } = xterm;
 const require = createRequire(import.meta.url);
-const PASEO_CLI_BIN_ENTRY = "@getpaseo/cli/bin/paseo";
+const PASEO_CLI_BIN_ENTRY = "@paseo-swarm/cli/bin/paseo";
 let nodePtySpawnHelperChecked = false;
 const TERMINAL_TITLE_DEBOUNCE_MS = 150;
 const TERMINAL_EXIT_OUTPUT_LINE_LIMIT = 12;
@@ -410,9 +418,9 @@ export function resolvePaseoCliExecutablePath(): string | null {
   }
 
   const externalCliEntrypoint = resolveExternalProcessPath(cliEntrypoint);
-  const npmBinDir = findNpmBinDir(dirname(externalCliEntrypoint));
+  const npmBinDir = findNpmBinDir(externalCliEntrypoint);
   if (npmBinDir) {
-    const shim = resolvePaseoCliShim(npmBinDir);
+    const shim = resolvePaseoCliShim(npmBinDir, externalCliEntrypoint);
     if (shim) {
       return shim;
     }
@@ -425,42 +433,65 @@ function resolvePaseoCliBinEntrypoint(): string | null {
   try {
     return require.resolve(PASEO_CLI_BIN_ENTRY);
   } catch {
-    return null;
+    return resolveWorkspaceCliBin();
   }
 }
 
-function findNpmBinDir(startPath: string): string | null {
-  let current = startPath;
-  while (true) {
-    const candidate = join(current, "node_modules", ".bin");
-    if (hasPaseoCliShim(candidate)) {
-      return candidate;
+export function resolveWorkspaceCliBin(moduleUrl: string = import.meta.url): string | null {
+  let current = dirname(fileURLToPath(moduleUrl));
+  while (dirname(current) !== current) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(current, "package.json"), "utf8"));
+      if (manifest.name === "@getpaseo/server") {
+        const root = resolvePath(current, "../..");
+        const workspace = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+        const cliDir = join(root, "packages", "cli");
+        const cli = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8"));
+        return workspace.workspaces?.includes("packages/cli") && cli.name === "@getpaseo/cli"
+          ? join(cliDir, "bin", "paseo")
+          : null;
+      }
+    } catch {
+      // Continue through source/dist directories without a package manifest.
     }
-
-    const parent = dirname(current);
-    if (parent === current) {
-      return null;
-    }
-    current = parent;
-  }
-}
-
-function hasPaseoCliShim(binDir: string): boolean {
-  return resolvePaseoCliShim(binDir) !== null;
-}
-
-function resolvePaseoCliShim(binDir: string): string | null {
-  for (const name of paseoCliShimNames()) {
-    const candidate = join(binDir, name);
-    if (existsSync(candidate)) {
-      return candidate;
-    }
+    current = dirname(current);
   }
   return null;
 }
 
-function paseoCliShimNames(): string[] {
-  return process.platform === "win32" ? ["paseo.cmd", "paseo.exe", "paseo"] : ["paseo"];
+function findNpmBinDir(cliEntrypoint: string): string | null {
+  let current = dirname(cliEntrypoint);
+  while (true) {
+    for (const candidate of [join(current, "node_modules", ".bin"), current]) {
+      if (resolvePaseoCliShim(candidate, cliEntrypoint)) return candidate;
+    }
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+export function resolvePaseoCliShim(
+  binDir: string,
+  cliEntrypoint: string,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  const names = platform === "win32" ? ["paseo-swarm.cmd", "paseo.cmd"] : ["paseo-swarm", "paseo"];
+  for (const name of names) {
+    const candidate = join(binDir, name);
+    try {
+      if (platform === "win32") {
+        const target = relative(binDir, cliEntrypoint).replaceAll("\\", "/").toLowerCase();
+        const content = readFileSync(candidate, "utf8").replaceAll("\\", "/").toLowerCase();
+        if (content.includes(`"%dp0%/${target}"`)) return candidate;
+      } else if (realpathSync(candidate) === realpathSync(cliEntrypoint)) {
+        return candidate;
+      }
+    } catch {
+      // Ignore shims for a different or removed installation.
+    }
+  }
+  return null;
 }
 
 function resolveZshShellIntegrationRuntimeDir(): string {
