@@ -1,0 +1,10 @@
+
+Running 1 test using 1 worker
+
+(node:891324) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:891324) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [browser] › packages/app/e2e/browser/chat-find.spec.ts:853:15 › Metro framed UserMessage component contract › preserves exact tagged text, body ranges, attachment and ordinary plain Copy (7.0s)
+
+  1 passed (1.7m)

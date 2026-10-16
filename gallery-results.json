@@ -1,0 +1,1244 @@
+{
+  "variants": [
+    {
+      "name": "1280-light",
+      "dimensions": {
+        "width": 1280,
+        "height": 900,
+        "scrollWidth": 1280
+      },
+      "geometry": {
+        "left": 230,
+        "right": 1050,
+        "width": 820,
+        "viewport": 1280,
+        "links": [
+          {
+            "label": "ui-swarm-system-envelopes",
+            "rects": [
+              {
+                "left": 285.203125,
+                "right": 495.890625,
+                "width": 210.6875
+              }
+            ]
+          },
+          {
+            "label": "planner.ui-evolution.sidebar-dev",
+            "rects": [
+              {
+                "left": 399.28125,
+                "right": 641.203125,
+                "width": 241.921875
+              }
+            ]
+          },
+          {
+            "label": "planner.ui-evolution",
+            "rects": [
+              {
+                "left": 665.8125,
+                "right": 815.28125,
+                "width": 149.46875
+              }
+            ]
+          },
+          {
+            "label": "planner.ui-evolution",
+            "rects": [
+              {
+                "left": 322.53125,
+                "right": 472,
+                "width": 149.46875
+              }
+            ]
+          }
+        ]
+      },
+      "controls": {
+        "idle": {
+          "label": "ui-swarm-system-envelopes",
+          "focused": false,
+          "textStyles": [
+            {
+              "tag": "DIV",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(0, 0, 0)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(35, 153, 86)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 0,
+              "directText": "ui-swarm-system-envelopes",
+              "color": "rgb(35, 153, 86)",
+              "decoration": "none"
+            }
+          ],
+          "left": 285.203125,
+          "right": 495.890625,
+          "width": 210.6875,
+          "top": 808,
+          "bottom": 829,
+          "scrollX": 0,
+          "scrollY": 0,
+          "hovered": false,
+          "attached": true
+        },
+        "hover": {
+          "label": "ui-swarm-system-envelopes",
+          "focused": false,
+          "textStyles": [
+            {
+              "tag": "DIV",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(0, 0, 0)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(35, 153, 86)",
+              "decoration": "underline"
+            },
+            {
+              "tag": "SPAN",
+              "children": 0,
+              "directText": "ui-swarm-system-envelopes",
+              "color": "rgb(35, 153, 86)",
+              "decoration": "none"
+            }
+          ],
+          "left": 285.203125,
+          "right": 495.890625,
+          "width": 210.6875,
+          "top": 439,
+          "bottom": 460,
+          "scrollX": 0,
+          "scrollY": 369,
+          "hovered": true,
+          "attached": true
+        },
+        "focus": {
+          "label": "ui-swarm-system-envelopes",
+          "focused": true,
+          "textStyles": [
+            {
+              "tag": "DIV",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(0, 0, 0)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(35, 153, 86)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 0,
+              "directText": "ui-swarm-system-envelopes",
+              "color": "rgb(35, 153, 86)",
+              "decoration": "none"
+            }
+          ],
+          "left": 285.203125,
+          "right": 495.890625,
+          "width": 210.6875,
+          "top": 270,
+          "bottom": 291,
+          "scrollX": 0,
+          "scrollY": 538,
+          "hovered": false,
+          "attached": true
+        }
+      },
+      "actualLinkedFieldRangesPassed": true,
+      "rawExcludedFromRanges": true,
+      "hostlessActivationNoNavigation": true,
+      "cardStayedExpanded": true,
+      "plainOriginalPreserved": true,
+      "fixtureDocumentsServed": 1
+    },
+    {
+      "name": "1280-dark",
+      "dimensions": {
+        "width": 1280,
+        "height": 900,
+        "scrollWidth": 1280
+      },
+      "geometry": {
+        "left": 230,
+        "right": 1050,
+        "width": 820,
+        "viewport": 1280,
+        "links": [
+          {
+            "label": "ui-swarm-system-envelopes",
+            "rects": [
+              {
+                "left": 285.203125,
+                "right": 495.890625,
+                "width": 210.6875
+              }
+            ]
+          },
+          {
+            "label": "planner.ui-evolution.sidebar-dev",
+            "rects": [
+              {
+                "left": 399.28125,
+                "right": 641.203125,
+                "width": 241.921875
+              }
+            ]
+          },
+          {
+            "label": "planner.ui-evolution",
+            "rects": [
+              {
+                "left": 665.8125,
+                "right": 815.28125,
+                "width": 149.46875
+              }
+            ]
+          },
+          {
+            "label": "planner.ui-evolution",
+            "rects": [
+              {
+                "left": 322.53125,
+                "right": 472,
+                "width": 149.46875
+              }
+            ]
+          }
+        ]
+      },
+      "controls": {
+        "idle": {
+          "label": "ui-swarm-system-envelopes",
+          "focused": false,
+          "textStyles": [
+            {
+              "tag": "DIV",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(0, 0, 0)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(124, 203, 160)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 0,
+              "directText": "ui-swarm-system-envelopes",
+              "color": "rgb(124, 203, 160)",
+              "decoration": "none"
+            }
+          ],
+          "left": 285.203125,
+          "right": 495.890625,
+          "width": 210.6875,
+          "top": 808,
+          "bottom": 829,
+          "scrollX": 0,
+          "scrollY": 0,
+          "hovered": false,
+          "attached": true
+        },
+        "hover": {
+          "label": "ui-swarm-system-envelopes",
+          "focused": false,
+          "textStyles": [
+            {
+              "tag": "DIV",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(0, 0, 0)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(124, 203, 160)",
+              "decoration": "underline"
+            },
+            {
+              "tag": "SPAN",
+              "children": 0,
+              "directText": "ui-swarm-system-envelopes",
+              "color": "rgb(124, 203, 160)",
+              "decoration": "none"
+            }
+          ],
+          "left": 285.203125,
+          "right": 495.890625,
+          "width": 210.6875,
+          "top": 439,
+          "bottom": 460,
+          "scrollX": 0,
+          "scrollY": 369,
+          "hovered": true,
+          "attached": true
+        },
+        "focus": {
+          "label": "ui-swarm-system-envelopes",
+          "focused": true,
+          "textStyles": [
+            {
+              "tag": "DIV",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(0, 0, 0)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(124, 203, 160)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 0,
+              "directText": "ui-swarm-system-envelopes",
+              "color": "rgb(124, 203, 160)",
+              "decoration": "none"
+            }
+          ],
+          "left": 285.203125,
+          "right": 495.890625,
+          "width": 210.6875,
+          "top": 270,
+          "bottom": 291,
+          "scrollX": 0,
+          "scrollY": 538,
+          "hovered": false,
+          "attached": true
+        }
+      },
+      "actualLinkedFieldRangesPassed": true,
+      "rawExcludedFromRanges": true,
+      "hostlessActivationNoNavigation": true,
+      "cardStayedExpanded": true,
+      "plainOriginalPreserved": true,
+      "fixtureDocumentsServed": 1
+    },
+    {
+      "name": "390-light",
+      "dimensions": {
+        "width": 390,
+        "height": 900,
+        "scrollWidth": 390
+      },
+      "geometry": {
+        "left": 20,
+        "right": 370,
+        "width": 350,
+        "viewport": 390,
+        "links": [
+          {
+            "label": "ui-swarm-system-envelopes",
+            "rects": [
+              {
+                "left": 75.203125,
+                "right": 285.890625,
+                "width": 210.6875
+              }
+            ]
+          },
+          {
+            "label": "planner.ui-evolution.sidebar-dev",
+            "rects": [
+              {
+                "left": 33,
+                "right": 274.921875,
+                "width": 241.921875
+              }
+            ]
+          },
+          {
+            "label": "planner.ui-evolution",
+            "rects": [
+              {
+                "left": 33,
+                "right": 182.46875,
+                "width": 149.46875
+              }
+            ]
+          },
+          {
+            "label": "planner.ui-evolution",
+            "rects": [
+              {
+                "left": 112.53125,
+                "right": 262,
+                "width": 149.46875
+              }
+            ]
+          }
+        ]
+      },
+      "controls": {
+        "idle": {
+          "label": "ui-swarm-system-envelopes",
+          "focused": false,
+          "textStyles": [
+            {
+              "tag": "DIV",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(0, 0, 0)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(35, 153, 86)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 0,
+              "directText": "ui-swarm-system-envelopes",
+              "color": "rgb(35, 153, 86)",
+              "decoration": "none"
+            }
+          ],
+          "left": 75.203125,
+          "right": 285.890625,
+          "width": 210.6875,
+          "top": 1118,
+          "bottom": 1139,
+          "scrollX": 0,
+          "scrollY": 0,
+          "hovered": false,
+          "attached": true
+        },
+        "hover": {
+          "label": "ui-swarm-system-envelopes",
+          "focused": false,
+          "textStyles": [
+            {
+              "tag": "DIV",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(0, 0, 0)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(35, 153, 86)",
+              "decoration": "underline"
+            },
+            {
+              "tag": "SPAN",
+              "children": 0,
+              "directText": "ui-swarm-system-envelopes",
+              "color": "rgb(35, 153, 86)",
+              "decoration": "none"
+            }
+          ],
+          "left": 75.203125,
+          "right": 285.890625,
+          "width": 210.6875,
+          "top": 439,
+          "bottom": 460,
+          "scrollX": 0,
+          "scrollY": 679,
+          "hovered": true,
+          "attached": true
+        },
+        "focus": {
+          "label": "ui-swarm-system-envelopes",
+          "focused": true,
+          "textStyles": [
+            {
+              "tag": "DIV",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(0, 0, 0)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(35, 153, 86)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 0,
+              "directText": "ui-swarm-system-envelopes",
+              "color": "rgb(35, 153, 86)",
+              "decoration": "none"
+            }
+          ],
+          "left": 75.203125,
+          "right": 285.890625,
+          "width": 210.6875,
+          "top": 54,
+          "bottom": 75,
+          "scrollX": 0,
+          "scrollY": 1064,
+          "hovered": false,
+          "attached": true
+        }
+      },
+      "actualLinkedFieldRangesPassed": true,
+      "rawExcludedFromRanges": true,
+      "hostlessActivationNoNavigation": true,
+      "cardStayedExpanded": true,
+      "plainOriginalPreserved": true,
+      "fixtureDocumentsServed": 1
+    },
+    {
+      "name": "390-dark",
+      "dimensions": {
+        "width": 390,
+        "height": 900,
+        "scrollWidth": 390
+      },
+      "geometry": {
+        "left": 20,
+        "right": 370,
+        "width": 350,
+        "viewport": 390,
+        "links": [
+          {
+            "label": "ui-swarm-system-envelopes",
+            "rects": [
+              {
+                "left": 75.203125,
+                "right": 285.890625,
+                "width": 210.6875
+              }
+            ]
+          },
+          {
+            "label": "planner.ui-evolution.sidebar-dev",
+            "rects": [
+              {
+                "left": 33,
+                "right": 274.921875,
+                "width": 241.921875
+              }
+            ]
+          },
+          {
+            "label": "planner.ui-evolution",
+            "rects": [
+              {
+                "left": 33,
+                "right": 182.46875,
+                "width": 149.46875
+              }
+            ]
+          },
+          {
+            "label": "planner.ui-evolution",
+            "rects": [
+              {
+                "left": 112.53125,
+                "right": 262,
+                "width": 149.46875
+              }
+            ]
+          }
+        ]
+      },
+      "controls": {
+        "idle": {
+          "label": "ui-swarm-system-envelopes",
+          "focused": false,
+          "textStyles": [
+            {
+              "tag": "DIV",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(0, 0, 0)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(124, 203, 160)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 0,
+              "directText": "ui-swarm-system-envelopes",
+              "color": "rgb(124, 203, 160)",
+              "decoration": "none"
+            }
+          ],
+          "left": 75.203125,
+          "right": 285.890625,
+          "width": 210.6875,
+          "top": 1118,
+          "bottom": 1139,
+          "scrollX": 0,
+          "scrollY": 0,
+          "hovered": false,
+          "attached": true
+        },
+        "hover": {
+          "label": "ui-swarm-system-envelopes",
+          "focused": false,
+          "textStyles": [
+            {
+              "tag": "DIV",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(0, 0, 0)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(124, 203, 160)",
+              "decoration": "underline"
+            },
+            {
+              "tag": "SPAN",
+              "children": 0,
+              "directText": "ui-swarm-system-envelopes",
+              "color": "rgb(124, 203, 160)",
+              "decoration": "none"
+            }
+          ],
+          "left": 75.203125,
+          "right": 285.890625,
+          "width": 210.6875,
+          "top": 439,
+          "bottom": 460,
+          "scrollX": 0,
+          "scrollY": 679,
+          "hovered": true,
+          "attached": true
+        },
+        "focus": {
+          "label": "ui-swarm-system-envelopes",
+          "focused": true,
+          "textStyles": [
+            {
+              "tag": "DIV",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(0, 0, 0)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 1,
+              "directText": "",
+              "color": "rgb(124, 203, 160)",
+              "decoration": "none"
+            },
+            {
+              "tag": "SPAN",
+              "children": 0,
+              "directText": "ui-swarm-system-envelopes",
+              "color": "rgb(124, 203, 160)",
+              "decoration": "none"
+            }
+          ],
+          "left": 75.203125,
+          "right": 285.890625,
+          "width": 210.6875,
+          "top": 54,
+          "bottom": 75,
+          "scrollX": 0,
+          "scrollY": 1064,
+          "hovered": false,
+          "attached": true
+        }
+      },
+      "actualLinkedFieldRangesPassed": true,
+      "rawExcludedFromRanges": true,
+      "hostlessActivationNoNavigation": true,
+      "cardStayedExpanded": true,
+      "plainOriginalPreserved": true,
+      "fixtureDocumentsServed": 1
+    }
+  ],
+  "errors": [],
+  "violations": [],
+  "requests": [
+    {
+      "name": "1280-light",
+      "url": "http://localhost:35365/envelope-reference-links?theme=light&lang=en",
+      "method": "GET",
+      "type": "document",
+      "allowed": true,
+      "fixtureDocument": true
+    },
+    {
+      "name": "1280-light",
+      "url": "http://localhost:35365/packages/app/e2e/support/envelope-gallery.fixture.bundle?platform=web&dev=false&minify=false&hot=false&lazy=true",
+      "method": "GET",
+      "type": "script",
+      "allowed": true,
+      "fixtureDocument": false
+    },
+    {
+      "name": "1280-light",
+      "url": "http://localhost:35365/packages/app/src/attachments/web/indexeddb-attachment-store.bundle?platform=web&dev=false&minify=false&hot=false&lazy=true&modulesOnly=true&runModule=false",
+      "method": "GET",
+      "type": "script",
+      "allowed": true,
+      "fixtureDocument": false
+    },
+    {
+      "name": "1280-dark",
+      "url": "http://localhost:35365/envelope-reference-links?theme=dark&lang=en",
+      "method": "GET",
+      "type": "document",
+      "allowed": true,
+      "fixtureDocument": true
+    },
+    {
+      "name": "1280-dark",
+      "url": "http://localhost:35365/packages/app/e2e/support/envelope-gallery.fixture.bundle?platform=web&dev=false&minify=false&hot=false&lazy=true",
+      "method": "GET",
+      "type": "script",
+      "allowed": true,
+      "fixtureDocument": false
+    },
+    {
+      "name": "1280-dark",
+      "url": "http://localhost:35365/packages/app/src/attachments/web/indexeddb-attachment-store.bundle?platform=web&dev=false&minify=false&hot=false&lazy=true&modulesOnly=true&runModule=false",
+      "method": "GET",
+      "type": "script",
+      "allowed": true,
+      "fixtureDocument": false
+    },
+    {
+      "name": "390-light",
+      "url": "http://localhost:35365/envelope-reference-links?theme=light&lang=en",
+      "method": "GET",
+      "type": "document",
+      "allowed": true,
+      "fixtureDocument": true
+    },
+    {
+      "name": "390-light",
+      "url": "http://localhost:35365/packages/app/e2e/support/envelope-gallery.fixture.bundle?platform=web&dev=false&minify=false&hot=false&lazy=true",
+      "method": "GET",
+      "type": "script",
+      "allowed": true,
+      "fixtureDocument": false
+    },
+    {
+      "name": "390-light",
+      "url": "http://localhost:35365/packages/app/src/attachments/web/indexeddb-attachment-store.bundle?platform=web&dev=false&minify=false&hot=false&lazy=true&modulesOnly=true&runModule=false",
+      "method": "GET",
+      "type": "script",
+      "allowed": true,
+      "fixtureDocument": false
+    },
+    {
+      "name": "390-dark",
+      "url": "http://localhost:35365/envelope-reference-links?theme=dark&lang=en",
+      "method": "GET",
+      "type": "document",
+      "allowed": true,
+      "fixtureDocument": true
+    },
+    {
+      "name": "390-dark",
+      "url": "http://localhost:35365/packages/app/e2e/support/envelope-gallery.fixture.bundle?platform=web&dev=false&minify=false&hot=false&lazy=true",
+      "method": "GET",
+      "type": "script",
+      "allowed": true,
+      "fixtureDocument": false
+    },
+    {
+      "name": "390-dark",
+      "url": "http://localhost:35365/packages/app/src/attachments/web/indexeddb-attachment-store.bundle?platform=web&dev=false&minify=false&hot=false&lazy=true&modulesOnly=true&runModule=false",
+      "method": "GET",
+      "type": "script",
+      "allowed": true,
+      "fixtureDocument": false
+    }
+  ],
+  "webSockets": [],
+  "popups": [],
+  "probes": [
+    {
+      "name": "1280-light",
+      "idle": {
+        "label": "ui-swarm-system-envelopes",
+        "focused": false,
+        "textStyles": [
+          {
+            "tag": "DIV",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(0, 0, 0)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(35, 153, 86)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 0,
+            "directText": "ui-swarm-system-envelopes",
+            "color": "rgb(35, 153, 86)",
+            "decoration": "none"
+          }
+        ],
+        "left": 285.203125,
+        "right": 495.890625,
+        "width": 210.6875,
+        "top": 808,
+        "bottom": 829,
+        "scrollX": 0,
+        "scrollY": 0,
+        "hovered": false,
+        "attached": true
+      },
+      "hover": {
+        "label": "ui-swarm-system-envelopes",
+        "focused": false,
+        "textStyles": [
+          {
+            "tag": "DIV",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(0, 0, 0)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(35, 153, 86)",
+            "decoration": "underline"
+          },
+          {
+            "tag": "SPAN",
+            "children": 0,
+            "directText": "ui-swarm-system-envelopes",
+            "color": "rgb(35, 153, 86)",
+            "decoration": "none"
+          }
+        ],
+        "left": 285.203125,
+        "right": 495.890625,
+        "width": 210.6875,
+        "top": 439,
+        "bottom": 460,
+        "scrollX": 0,
+        "scrollY": 369,
+        "hovered": true,
+        "attached": true
+      },
+      "afterScreenshot": {
+        "label": "ui-swarm-system-envelopes",
+        "focused": false,
+        "textStyles": [
+          {
+            "tag": "DIV",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(0, 0, 0)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(35, 153, 86)",
+            "decoration": "underline"
+          },
+          {
+            "tag": "SPAN",
+            "children": 0,
+            "directText": "ui-swarm-system-envelopes",
+            "color": "rgb(35, 153, 86)",
+            "decoration": "none"
+          }
+        ],
+        "left": 285.203125,
+        "right": 495.890625,
+        "width": 210.6875,
+        "top": 439,
+        "bottom": 460,
+        "scrollX": 0,
+        "scrollY": 369,
+        "hovered": true,
+        "attached": true
+      }
+    },
+    {
+      "name": "1280-dark",
+      "idle": {
+        "label": "ui-swarm-system-envelopes",
+        "focused": false,
+        "textStyles": [
+          {
+            "tag": "DIV",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(0, 0, 0)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(124, 203, 160)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 0,
+            "directText": "ui-swarm-system-envelopes",
+            "color": "rgb(124, 203, 160)",
+            "decoration": "none"
+          }
+        ],
+        "left": 285.203125,
+        "right": 495.890625,
+        "width": 210.6875,
+        "top": 808,
+        "bottom": 829,
+        "scrollX": 0,
+        "scrollY": 0,
+        "hovered": false,
+        "attached": true
+      },
+      "hover": {
+        "label": "ui-swarm-system-envelopes",
+        "focused": false,
+        "textStyles": [
+          {
+            "tag": "DIV",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(0, 0, 0)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(124, 203, 160)",
+            "decoration": "underline"
+          },
+          {
+            "tag": "SPAN",
+            "children": 0,
+            "directText": "ui-swarm-system-envelopes",
+            "color": "rgb(124, 203, 160)",
+            "decoration": "none"
+          }
+        ],
+        "left": 285.203125,
+        "right": 495.890625,
+        "width": 210.6875,
+        "top": 439,
+        "bottom": 460,
+        "scrollX": 0,
+        "scrollY": 369,
+        "hovered": true,
+        "attached": true
+      },
+      "afterScreenshot": {
+        "label": "ui-swarm-system-envelopes",
+        "focused": false,
+        "textStyles": [
+          {
+            "tag": "DIV",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(0, 0, 0)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(124, 203, 160)",
+            "decoration": "underline"
+          },
+          {
+            "tag": "SPAN",
+            "children": 0,
+            "directText": "ui-swarm-system-envelopes",
+            "color": "rgb(124, 203, 160)",
+            "decoration": "none"
+          }
+        ],
+        "left": 285.203125,
+        "right": 495.890625,
+        "width": 210.6875,
+        "top": 439,
+        "bottom": 460,
+        "scrollX": 0,
+        "scrollY": 369,
+        "hovered": true,
+        "attached": true
+      }
+    },
+    {
+      "name": "390-light",
+      "idle": {
+        "label": "ui-swarm-system-envelopes",
+        "focused": false,
+        "textStyles": [
+          {
+            "tag": "DIV",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(0, 0, 0)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(35, 153, 86)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 0,
+            "directText": "ui-swarm-system-envelopes",
+            "color": "rgb(35, 153, 86)",
+            "decoration": "none"
+          }
+        ],
+        "left": 75.203125,
+        "right": 285.890625,
+        "width": 210.6875,
+        "top": 1118,
+        "bottom": 1139,
+        "scrollX": 0,
+        "scrollY": 0,
+        "hovered": false,
+        "attached": true
+      },
+      "hover": {
+        "label": "ui-swarm-system-envelopes",
+        "focused": false,
+        "textStyles": [
+          {
+            "tag": "DIV",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(0, 0, 0)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(35, 153, 86)",
+            "decoration": "underline"
+          },
+          {
+            "tag": "SPAN",
+            "children": 0,
+            "directText": "ui-swarm-system-envelopes",
+            "color": "rgb(35, 153, 86)",
+            "decoration": "none"
+          }
+        ],
+        "left": 75.203125,
+        "right": 285.890625,
+        "width": 210.6875,
+        "top": 439,
+        "bottom": 460,
+        "scrollX": 0,
+        "scrollY": 679,
+        "hovered": true,
+        "attached": true
+      },
+      "afterScreenshot": {
+        "label": "ui-swarm-system-envelopes",
+        "focused": false,
+        "textStyles": [
+          {
+            "tag": "DIV",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(0, 0, 0)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(35, 153, 86)",
+            "decoration": "underline"
+          },
+          {
+            "tag": "SPAN",
+            "children": 0,
+            "directText": "ui-swarm-system-envelopes",
+            "color": "rgb(35, 153, 86)",
+            "decoration": "none"
+          }
+        ],
+        "left": 75.203125,
+        "right": 285.890625,
+        "width": 210.6875,
+        "top": 439,
+        "bottom": 460,
+        "scrollX": 0,
+        "scrollY": 679,
+        "hovered": true,
+        "attached": true
+      }
+    },
+    {
+      "name": "390-dark",
+      "idle": {
+        "label": "ui-swarm-system-envelopes",
+        "focused": false,
+        "textStyles": [
+          {
+            "tag": "DIV",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(0, 0, 0)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(124, 203, 160)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 0,
+            "directText": "ui-swarm-system-envelopes",
+            "color": "rgb(124, 203, 160)",
+            "decoration": "none"
+          }
+        ],
+        "left": 75.203125,
+        "right": 285.890625,
+        "width": 210.6875,
+        "top": 1118,
+        "bottom": 1139,
+        "scrollX": 0,
+        "scrollY": 0,
+        "hovered": false,
+        "attached": true
+      },
+      "hover": {
+        "label": "ui-swarm-system-envelopes",
+        "focused": false,
+        "textStyles": [
+          {
+            "tag": "DIV",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(0, 0, 0)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(124, 203, 160)",
+            "decoration": "underline"
+          },
+          {
+            "tag": "SPAN",
+            "children": 0,
+            "directText": "ui-swarm-system-envelopes",
+            "color": "rgb(124, 203, 160)",
+            "decoration": "none"
+          }
+        ],
+        "left": 75.203125,
+        "right": 285.890625,
+        "width": 210.6875,
+        "top": 439,
+        "bottom": 460,
+        "scrollX": 0,
+        "scrollY": 679,
+        "hovered": true,
+        "attached": true
+      },
+      "afterScreenshot": {
+        "label": "ui-swarm-system-envelopes",
+        "focused": false,
+        "textStyles": [
+          {
+            "tag": "DIV",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(0, 0, 0)",
+            "decoration": "none"
+          },
+          {
+            "tag": "SPAN",
+            "children": 1,
+            "directText": "",
+            "color": "rgb(124, 203, 160)",
+            "decoration": "underline"
+          },
+          {
+            "tag": "SPAN",
+            "children": 0,
+            "directText": "ui-swarm-system-envelopes",
+            "color": "rgb(124, 203, 160)",
+            "decoration": "none"
+          }
+        ],
+        "left": 75.203125,
+        "right": 285.890625,
+        "width": 210.6875,
+        "top": 439,
+        "bottom": 460,
+        "scrollX": 0,
+        "scrollY": 679,
+        "hovered": true,
+        "attached": true
+      }
+    }
+  ],
+  "phase": {
+    "name": "390-dark",
+    "step": "plain original and linked-field Range"
+  }
+}
