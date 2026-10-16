@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   chmodSync,
   copyFileSync,
@@ -6,12 +7,21 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+
+const require = createRequire(import.meta.url);
+const { load } = require("js-yaml");
+const { AppInfo } = require("app-builder-lib/out/appInfo");
+const { LinuxTargetHelper } = require("app-builder-lib/out/targets/LinuxTargetHelper");
+const AppImageTarget = require("app-builder-lib/out/targets/appimage/AppImageTarget").default;
+const FpmTarget = require("app-builder-lib/out/targets/FpmTarget").default;
+const { installLinuxLauncher } = require("../../scripts/linux-sandbox");
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -25,18 +35,18 @@ function createFakeMacBundle(options: { includeHelper: boolean }): {
   shimPath: string;
 } {
   const root = mkdtempSync(join(tmpdir(), "paseo-cli-shim-test-"));
-  const appPath = join(root, "Paseo.app");
+  const appPath = join(root, "Paseo Swarm.app");
   const contentsPath = join(appPath, "Contents");
   const resourcesPath = join(contentsPath, "Resources");
   const shimPath = join(resourcesPath, "bin", "paseo");
-  const mainPath = join(contentsPath, "MacOS", "Paseo");
+  const mainPath = join(contentsPath, "MacOS", "Paseo Swarm");
   const helperPath = join(
     contentsPath,
     "Frameworks",
-    "Paseo Helper.app",
+    "Paseo Swarm Helper.app",
     "Contents",
     "MacOS",
-    "Paseo Helper",
+    "Paseo Swarm Helper",
   );
 
   mkdirSync(dirname(shimPath), { recursive: true });
@@ -53,6 +63,7 @@ function createFakeMacBundle(options: { includeHelper: boolean }): {
       [
         "#!/bin/sh",
         'printf "helper env=%s/%s cli=%s\\n" "$ELECTRON_RUN_AS_NODE" "$PASEO_NODE_ENV" "$PASEO_CLI"',
+        'printf "state=%s listen=%s\\n" "$PASEO_HOME" "$PASEO_LISTEN"',
         'printf "args=%s\\n" "$*"',
         "",
       ].join("\n"),
@@ -63,6 +74,59 @@ function createFakeMacBundle(options: { includeHelper: boolean }): {
 }
 
 describe("desktop packaging", () => {
+  it.each(["deb", "rpm"])(
+    "generates a valid %s package identifier for the Swarm product",
+    async (target) => {
+      const config = load(readFileSync(join(packageRoot, "electron-builder.yml"), "utf8"));
+      const metadata = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+      const appInfo = new AppInfo({ config, metadata }, undefined, config.linux);
+      const metadataOptions = await FpmTarget.prototype.computeFpmMetaInfoOptions.call({
+        options: { ...config.linux, ...config[target] },
+        packager: { appInfo, info: { metadata } },
+      });
+      expect(metadataOptions.name).toMatch(/^[a-z0-9][a-z0-9+.-]+$/);
+      expect(metadataOptions.name).toBe("paseo-swarm");
+    },
+  );
+
+  it("generates Linux desktop entries matching the Swarm executable and dock identity", async () => {
+    const config = load(readFileSync(join(packageRoot, "electron-builder.yml"), "utf8"));
+    const metadata = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+    const appInfo = new AppInfo({ config, metadata }, undefined, config.linux);
+    const packager = {
+      config,
+      appInfo,
+      platformSpecificBuildOptions: config.linux,
+      executableName: config.linux.executableName,
+      fileAssociations: [],
+    };
+    const helper = new LinuxTargetHelper(packager);
+    const entry = await helper.computeDesktopEntry(config.linux);
+    expect(metadata.desktopName).toBe(`${appInfo.productFilename}.desktop`);
+    expect(entry).toContain(`Exec="/opt/${config.productName}/${packager.executableName}" %U`);
+    expect(entry).toContain(`StartupWMClass=${config.productName}`);
+    const appImage = new AppImageTarget("appImage", packager, helper, "unused");
+    expect(await appImage.desktopEntry.value).toContain(
+      `Exec=AppRun --class="${config.productName}" %U`,
+    );
+  });
+
+  it("wraps the executable selected by the Linux builder configuration", () => {
+    const config = load(readFileSync(join(packageRoot, "electron-builder.yml"), "utf8"));
+    const executableName = config.linux.executableName ?? config.executableName;
+    const root = mkdtempSync(join(tmpdir(), "paseo-linux-packaging-"));
+    try {
+      writeFileSync(join(root, executableName), "electron executable");
+      installLinuxLauncher(root);
+      expect(readFileSync(join(root, `${executableName}.bin`), "utf8")).toBe("electron executable");
+      expect(readFileSync(join(root, executableName), "utf8")).toBe(
+        readFileSync(join(packageRoot, "scripts", "linux-sandbox", "launcher.sh"), "utf8"),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses an Electron runtime whose Squirrel handoff explicitly wakes ShipIt", () => {
     const pkg = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
       devDependencies?: Record<string, string>;
@@ -119,11 +183,11 @@ describe("desktop packaging", () => {
     expect(runtimeTrace).toContain('"packages/server/dist/server/skills/**"');
   });
 
-  it("registers Paseo agent links with the operating system", () => {
+  it("leaves official Paseo agent links with the official app", () => {
     const config = readFileSync(join(packageRoot, "electron-builder.yml"), "utf8");
 
-    expect(config).toContain("name: Paseo agent link");
-    expect(config).toContain("- paseo");
+    expect(config).toContain("protocols: []");
+    expect(config).not.toContain("- paseo");
   });
 
   // electron-builder packs production dependencies declared in package.json into
@@ -160,6 +224,81 @@ describe("desktop packaging", () => {
     } finally {
       rmSync(bundle.root, { recursive: true, force: true });
     }
+  });
+
+  it("keeps the public paseo-swarm link on the bundled shim and isolated daemon", () => {
+    if (process.platform === "win32") return;
+    const bundle = createFakeMacBundle({ includeHelper: true });
+    try {
+      const command = join(bundle.root, "paseo-swarm");
+      symlinkSync(bundle.shimPath, command);
+      const state = join(bundle.root, "swarm-state");
+      const result = spawnSync(command, ["--version"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PASEO_HOME: state,
+          PASEO_LISTEN: "127.0.0.1:16769",
+        },
+      });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`cli=${bundle.shimPath}`);
+      expect(result.stdout).toContain(`state=${state} listen=127.0.0.1:16769`);
+      expect(result.stdout).toContain("@getpaseo/cli/dist/index.js");
+    } finally {
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["paseo-swarm", "paseo-swarm.bin"])(
+    "runs the Linux CLI shim through %s",
+    (executable) => {
+      if (process.platform === "win32") return;
+      const root = mkdtempSync(join(tmpdir(), "swarm-linux-cli-"));
+      try {
+        const bin = join(root, "resources", "bin");
+        mkdirSync(bin, { recursive: true });
+        const shim = join(bin, "paseo");
+        copyFileSync(join(packageRoot, "bin", "paseo"), shim);
+        chmodSync(shim, 0o755);
+        writeExecutable(
+          join(root, executable),
+          '#!/bin/sh\nprintf "state=%s listen=%s" "$PASEO_HOME" "$PASEO_LISTEN"\n',
+        );
+        const result = spawnSync(shim, ["--version"], {
+          encoding: "utf8",
+          env: { ...process.env, PASEO_HOME: root, PASEO_LISTEN: "127.0.0.1:16769" },
+        });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toBe(`state=${root} listen=127.0.0.1:16769`);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("uses Swarm CLI defaults when the existing env variables are unset", () => {
+    if (process.platform === "win32") return;
+    const bundle = createFakeMacBundle({ includeHelper: true });
+    try {
+      const env = { ...process.env, HOME: bundle.root };
+      delete env.PASEO_HOME;
+      delete env.PASEO_LISTEN;
+      const result = spawnSync(bundle.shimPath, ["--version"], { encoding: "utf8", env });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        `state=${join(bundle.root, ".paseo-swarm")} listen=127.0.0.1:6769`,
+      );
+    } finally {
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the builder executable name in the Windows CLI shim", () => {
+    const config = load(readFileSync(join(packageRoot, "electron-builder.yml"), "utf8"));
+    const executableName = config.win.executableName ?? config.executableName;
+    const shim = readFileSync(join(packageRoot, "bin", "paseo.cmd"), "utf8");
+    expect(shim).toContain(`\\..\\${executableName}.exe`);
   });
 
   it("fails packaged macOS CLI startup when Helper is missing", () => {

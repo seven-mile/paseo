@@ -29,6 +29,33 @@ the titlebar row. Production builds leave the variable unset and show no label.
 
 `npm run dev` is only a shorthand for `npm run dev:server`. Keep `127.0.0.1:6767` for the packaged app and production-style `~/.paseo` state.
 
+## Local Swarm macOS release
+
+Install dependencies with `npm ci`, then run `npm run release:local`. The command
+uses the existing desktop build with electron-builder's local ad-hoc signature
+(`mac.identity: "-"`) and no notarization. App and DMG artifacts stay in
+`packages/desktop/release/local/`; build logs stay in `.dev/swarm-releases/runs/`.
+It does not install or launch the app, write application state, reinstall
+dependencies, or change Git configuration. This signature is for local use,
+not Developer ID distribution.
+
+To install or update, quit Paseo Swarm and wait for its agents to finish, open the
+DMG in `packages/desktop/release/local/`, and drag `Paseo Swarm.app` onto Applications.
+Choose Replace when Finder asks about the existing copy, then eject the DMG and
+launch `/Applications/Paseo Swarm.app`. Replacing the application preserves the
+runtime data stored in your user directory. The build command does not stop
+processes, back up or replace installed apps, register Spotlight entries, or launch
+the result. Spotlight indexing is managed asynchronously by macOS.
+
+Launching the app defaults to persistent runtime data in `~/.paseo-swarm` and
+`~/Library/Application Support/Paseo Swarm`, with daemon port `6769`. The existing
+`PASEO_HOME`, `PASEO_LISTEN`, and `PASEO_ELECTRON_USER_DATA_DIR` variables override
+these defaults, including values inherited from a parent process. Without an
+explicit `PASEO_LISTEN`, an existing daemon endpoint in `config.json` is preserved.
+The installed `paseo-swarm` command points to the app's internal `bin/paseo` shim;
+that internal filename is not the public CLI name. Local releases include
+uncommitted source changes and never pull Git changes or publish a release.
+
 ## Nix desktop package
 
 The flake exposes `packages.<system>.desktop` on Linux and macOS:

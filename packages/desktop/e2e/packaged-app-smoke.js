@@ -9,7 +9,14 @@ const { extractFile } = require("@electron/asar");
 const { WebSocket } = require("ws");
 const assert = require("node:assert/strict");
 
-const EXECUTABLE_NAME = "Paseo";
+// Resolve the same per-platform override as electron-builder, including Linux's
+// executable/desktop-file identifier rather than its human-readable product name.
+const builderConfig = require("js-yaml").load(
+  fs.readFileSync(path.join(__dirname, "..", "electron-builder.yml"), "utf8"),
+);
+const builderPlatform = { darwin: "mac", linux: "linux", win32: "win" }[process.platform];
+const EXECUTABLE_NAME =
+  builderConfig[builderPlatform]?.executableName ?? builderConfig.executableName;
 const SMOKE_TIMEOUT_MS = 60_000;
 const EXIT_TIMEOUT_MS = 10_000;
 const TERMINAL_CAPTURE_ATTEMPTS = 20;

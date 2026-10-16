@@ -94,6 +94,7 @@ Do not:
 npm run dev                          # Start the dev daemon
 npm run dev:app                      # Start Expo against the dev daemon
 npm run dev:desktop                  # Start Electron desktop dev
+npm run release:local                # Build and verify local Swarm macOS artifacts
 npm run cli -- ls -a -g              # List all agents
 npm run cli -- daemon status         # Check daemon status
 npm run typecheck                    # Always run after changes

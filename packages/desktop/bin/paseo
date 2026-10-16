@@ -7,7 +7,7 @@ case "$SCRIPT_PATH" in
   *) SCRIPT_PATH="$(pwd)/$SCRIPT_PATH" ;;
 esac
 
-# Follow symlinks so `/usr/local/bin/paseo` resolves back into the app bundle.
+# Follow symlinks so `~/.local/bin/paseo-swarm` resolves back into the app bundle.
 while [ -L "$SCRIPT_PATH" ]; do
   SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)
   LINK_TARGET=$(readlink "$SCRIPT_PATH")
@@ -21,7 +21,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)
 RESOURCES_DIR=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
 
 MACOS_DIR="${RESOURCES_DIR}/../MacOS"
-MACOS_HELPER_EXECUTABLE="${RESOURCES_DIR}/../Frameworks/Paseo Helper.app/Contents/MacOS/Paseo Helper"
+MACOS_HELPER_EXECUTABLE="${RESOURCES_DIR}/../Frameworks/Paseo Swarm Helper.app/Contents/MacOS/Paseo Swarm Helper"
 
 # macOS CLI invocations must enter Electron through the agent Helper. Launching
 # the main APPL executable here makes later daemon supervision inherit app UI
@@ -32,10 +32,10 @@ if [ -d "${MACOS_DIR}" ]; then
     exit 1
   fi
   APP_EXECUTABLE="${MACOS_HELPER_EXECUTABLE}"
-elif [ -x "${RESOURCES_DIR}/../Paseo.bin" ]; then
-  APP_EXECUTABLE="${RESOURCES_DIR}/../Paseo.bin"
-elif [ -x "${RESOURCES_DIR}/../Paseo" ]; then
-  APP_EXECUTABLE="${RESOURCES_DIR}/../Paseo"
+elif [ -x "${RESOURCES_DIR}/../paseo-swarm.bin" ]; then
+  APP_EXECUTABLE="${RESOURCES_DIR}/../paseo-swarm.bin"
+elif [ -x "${RESOURCES_DIR}/../paseo-swarm" ]; then
+  APP_EXECUTABLE="${RESOURCES_DIR}/../paseo-swarm"
 else
   echo "Bundled Paseo executable not found relative to ${RESOURCES_DIR}" >&2
   exit 1
@@ -43,5 +43,8 @@ fi
 
 RUNNER_PATH="${RESOURCES_DIR}/app.asar.unpacked/dist/daemon/node-entrypoint-runner.js"
 CLI_ENTRYPOINT="${RESOURCES_DIR}/app.asar/node_modules/@getpaseo/cli/dist/index.js"
+
+export PASEO_HOME="${PASEO_HOME:-$HOME/.paseo-swarm}"
+export PASEO_LISTEN="${PASEO_LISTEN:-127.0.0.1:6769}"
 
 exec env ELECTRON_RUN_AS_NODE=1 PASEO_NODE_ENV=production PASEO_CLI="${SCRIPT_PATH}" "${APP_EXECUTABLE}" --disable-warning=DEP0040 "${RUNNER_PATH}" node-script "${CLI_ENTRYPOINT}" "$@"

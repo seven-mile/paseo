@@ -7,11 +7,12 @@ export function getLocalBinDir(): string {
 }
 
 export function getCliTargetPath(): string {
-  const filename = process.platform === "win32" ? "paseo.cmd" : "paseo";
+  const filename = process.platform === "win32" ? "paseo-swarm.cmd" : "paseo-swarm";
   return path.join(getLocalBinDir(), filename);
 }
 
 export function getBundledCliShimPath(): string {
+  // The public command is paseo-swarm; this private resource keeps its upstream basename.
   const cliShimFilename = process.platform === "win32" ? "paseo.cmd" : "paseo";
 
   if (process.platform === "darwin") {

@@ -3,11 +3,14 @@ setlocal
 
 set "SCRIPT_DIR=%~dp0"
 set "RESOURCES_DIR=%SCRIPT_DIR%.."
-set "APP_EXECUTABLE=%RESOURCES_DIR%\..\Paseo.exe"
+set "APP_EXECUTABLE=%RESOURCES_DIR%\..\Paseo Swarm.exe"
 if not exist "%APP_EXECUTABLE%" (
   echo Bundled Paseo executable not found at %APP_EXECUTABLE% 1>&2
   exit /b 1
 )
+
+if not defined PASEO_HOME set "PASEO_HOME=%USERPROFILE%\.paseo-swarm"
+if not defined PASEO_LISTEN set "PASEO_LISTEN=127.0.0.1:6769"
 
 set "ELECTRON_RUN_AS_NODE=1"
 set "PASEO_NODE_ENV=production"

@@ -133,6 +133,82 @@ test("scroll detector accounts for delayed wheel input and growth below the new 
   ).toHaveLength(1);
 });
 
+test("scroll detector tracks an entered image through shrinkage and virtual offset estimates", () => {
+  const before: ScrollFrame = {
+    at: 1000,
+    scrollTop: 3418,
+    scrollHeight: 48167,
+    viewportHeight: 516,
+    virtualized: true,
+    loading: false,
+    rows: [
+      { id: "image", top: -677, height: 560 },
+      { id: "reading", top: -117, height: 130 },
+    ],
+    anchor: "reading",
+    wheelTotal: 0,
+    lastWheelAt: 900,
+    inputFinishedAt: null,
+    imageLoads: 0,
+    mounted: 2,
+    unmounted: 0,
+  };
+  expect(
+    findScrollJumps([
+      before,
+      {
+        ...before,
+        at: 1050,
+        scrollTop: 3246,
+        wheelTotal: 160,
+        lastWheelAt: 1040,
+        rows: [
+          { id: "image", top: -517, height: 225 },
+          { id: "reading", top: -292, height: 130 },
+        ],
+      },
+    ]),
+  ).toEqual([]);
+
+  const imageBefore = {
+    ...before,
+    wheelTotal: 160,
+    scrollTop: 2190,
+    rows: [
+      { id: "image", top: -686, height: 560 },
+      { id: "reading", top: -126, height: 100 },
+    ],
+  };
+  const imageAfter = {
+    ...imageBefore,
+    at: 1050,
+    scrollTop: 1899,
+    wheelTotal: 320,
+    lastWheelAt: 1040,
+    rows: [
+      { id: "image", top: -526, height: 1632 },
+      { id: "reading", top: 1106, height: 100 },
+    ],
+  };
+  const recent = { ...imageBefore, at: 850, wheelTotal: 0 };
+  expect(findScrollJumps([recent, imageBefore, imageAfter])).toEqual([]);
+  // A simultaneous displacement of the reader itself must still fail.
+  expect(
+    findScrollJumps([
+      recent,
+      imageBefore,
+      {
+        ...imageAfter,
+        rows: imageAfter.rows.map((row) => ({
+          id: row.id,
+          height: row.height,
+          top: row.top + 400,
+        })),
+      },
+    ]),
+  ).toHaveLength(1);
+});
+
 for (const cadence of scrollCadences) {
   test(`varied timeline preserves reading position during ${cadence.name} upward scrolling`, async ({
     page,

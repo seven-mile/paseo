@@ -244,23 +244,35 @@ const FOOTER_GEOMETRY_TOLERANCE = 0.01;
  * Settings together at the end.
  */
 export async function expectFooterIconRow(page: Page): Promise<void> {
-  const boxes = (
-    await Promise.all(
-      FOOTER_ICON_TEST_IDS.map((testID) =>
-        page.locator(`[data-testid="${testID}"]:visible`).first().boundingBox(),
-      ),
-    )
-  ).map((box) => box!);
-  const [first] = boxes;
-  for (const box of boxes) {
-    expect(Math.abs(box.y + box.height / 2 - first!.y - first!.height / 2)).toBeLessThan(2);
-    expect(Math.abs(box.width - first!.width)).toBeLessThan(FOOTER_GEOMETRY_TOLERANCE);
-  }
-  const gaps = boxes.slice(1).map((box, index) => box.x - (boxes[index]!.x + boxes[index]!.width));
-  for (const index of [0, 1, 3]) {
-    expect(Math.abs(gaps[index]!)).toBeLessThan(FOOTER_GEOMETRY_TOLERANCE);
-  }
-  expect(gaps[2]).toBeGreaterThan(first!.width);
+  // A compact drawer translates while opening. Read every icon in one layout
+  // snapshot; separate boundingBox RPCs can sample different animation frames.
+  await expect(async () => {
+    const boxes = await page
+      .locator('[data-testid="sidebar-footer-bottom-line"]:visible')
+      .first()
+      .evaluate(
+        (footer, testIDs) =>
+          testIDs.map((testID) => {
+            const element = footer.querySelector(`[data-testid="${testID}"]`);
+            if (!element) throw new Error(`Missing footer icon: ${testID}`);
+            const { x, y, width, height } = element.getBoundingClientRect();
+            return { x, y, width, height };
+          }),
+        FOOTER_ICON_TEST_IDS,
+      );
+    const [first] = boxes;
+    for (const box of boxes) {
+      expect(Math.abs(box.y + box.height / 2 - first!.y - first!.height / 2)).toBeLessThan(2);
+      expect(Math.abs(box.width - first!.width)).toBeLessThan(FOOTER_GEOMETRY_TOLERANCE);
+    }
+    const gaps = boxes
+      .slice(1)
+      .map((box, index) => box.x - (boxes[index]!.x + boxes[index]!.width));
+    for (const index of [0, 1, 3]) {
+      expect(Math.abs(gaps[index]!)).toBeLessThan(FOOTER_GEOMETRY_TOLERANCE);
+    }
+    expect(gaps[2]).toBeGreaterThan(first!.width);
+  }).toPass({ timeout: 10_000 });
 }
 
 export async function expectFooterSeparator(page: Page, shown: boolean): Promise<void> {
@@ -285,7 +297,9 @@ export async function hoverFooterAddProject(page: Page): Promise<void> {
   await page.locator('[data-testid="sidebar-add-project"]:visible').hover();
   const tooltip = page.getByTestId("sidebar-add-project-tooltip");
   await expect(tooltip.getByText("Add project", { exact: true })).toBeVisible();
-  await expect(tooltip.getByText("Ctrl+O", { exact: true })).toBeVisible();
+  await expect(
+    tooltip.getByText(process.platform === "darwin" ? "⌘O" : "Ctrl+O", { exact: true }),
+  ).toBeVisible();
 }
 
 export async function footerScreenshot(page: Page, name: string): Promise<void> {

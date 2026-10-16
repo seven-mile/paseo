@@ -73,7 +73,8 @@ jobs:
       - name: Smoke installed RPM with restricted user namespaces
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
-          sudo dpkg --remove paseo
+          deb_package=$(dpkg-deb --field packages/desktop/release/*.deb Package)
+          sudo dpkg --remove "$deb_package"
           # Ubuntu supplies the runtime libraries under Debian package names.
           # RPM still performs the real payload installation and postinstall.
           sudo rpm --install --nodeps packages/desktop/release/*.rpm
