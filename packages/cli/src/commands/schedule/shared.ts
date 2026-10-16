@@ -34,7 +34,7 @@ export async function connectScheduleClient(
     throw {
       code: "DAEMON_NOT_RUNNING",
       message: `Cannot connect to daemon at ${resolvedHost}: ${message}`,
-      details: "Start the daemon with: paseo daemon start",
+      details: "Start the daemon with: paseo-swarm daemon start",
     } satisfies CommandError;
   }
 }

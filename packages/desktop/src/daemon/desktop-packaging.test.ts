@@ -74,6 +74,55 @@ function createFakeMacBundle(options: { includeHelper: boolean }): {
 }
 
 describe("desktop packaging", () => {
+  it.skipIf(process.platform === "win32")("installs the Swarm macOS bundle through Nix", () => {
+    const root = mkdtempSync(join(tmpdir(), "swarm-nix-macos-"));
+    try {
+      const config = load(readFileSync(join(packageRoot, "electron-builder.yml"), "utf8"));
+      const nix = readFileSync(join(packageRoot, "../../nix/desktop-package.nix"), "utf8");
+      const install = nix.split("installPhase = ''")[1];
+      const darwin = install.match(
+        /lib\.optionalString stdenv\.hostPlatform\.isDarwin ''\n([\s\S]*?)\n    ''/,
+      );
+      expect(darwin).not.toBeNull();
+      const executable = join(
+        "Applications",
+        `${config.productName}.app`,
+        "Contents/MacOS",
+        config.executableName,
+      );
+      const source = join(
+        root,
+        "packages/desktop/release/mac-arm64",
+        executable.slice("Applications/".length),
+      );
+      mkdirSync(dirname(source), { recursive: true });
+      writeExecutable(source, "#!/bin/sh\necho swarm-nix-launcher\n");
+      const out = join(root, "result-desktop");
+      mkdirSync(join(out, "bin"), { recursive: true });
+      const result = spawnSync("sh", ["-eu", "-c", darwin![1]], {
+        cwd: root,
+        env: { ...process.env, out },
+        encoding: "utf8",
+      });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      const launch = spawnSync(join(out, "bin/paseo-desktop"), [], { encoding: "utf8" });
+      expect(launch.status).toBe(0);
+      expect(launch.stdout).toBe("swarm-nix-launcher\n");
+      const workflow = load(
+        readFileSync(join(packageRoot, "../../.github/workflows/nix.yml"), "utf8"),
+      );
+      const verify = workflow.jobs["build-desktop-darwin"].steps.find(
+        (step: { name?: string }) => step.name === "Verify macOS application bundle",
+      ).run;
+      expect(verify).toContain(`app="result-desktop/Applications/${config.productName}.app"`);
+      expect(verify).toContain(`test -x "$app/Contents/MacOS/${config.executableName}"`);
+      expect(verify).toContain(`= "${config.appId}"`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(["deb", "rpm"])(
     "generates a valid %s package identifier for the Swarm product",
     async (target) => {

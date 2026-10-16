@@ -5,11 +5,59 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { loadConfig, resolveBundledWebUiDistDir, resolveConfigFromPersisted } from "./config.js";
+import { generateLocalPairingOffer } from "./pairing-offer.js";
 import { loadPersistedConfig } from "./persisted-config.js";
 
 const roots: string[] = [];
 
 describe("server config", () => {
+  test("uses the fork local fallback while preserving explicit listen precedence", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "paseo-fork-listen-"));
+    roots.push(home);
+    expect(resolveConfigFromPersisted(home, {}, { env: {} }).listen).toBe("127.0.0.1:6769");
+    expect(resolveConfigFromPersisted(home, {}, { env: { PORT: "7001" } }).listen).toBe(
+      "127.0.0.1:7001",
+    );
+    const persisted = { daemon: { listen: "127.0.0.1:6767" } };
+    expect(resolveConfigFromPersisted(home, persisted, { env: { PORT: "7001" } }).listen).toBe(
+      "127.0.0.1:6767",
+    );
+    expect(
+      resolveConfigFromPersisted(home, persisted, { env: { PASEO_LISTEN: "127.0.0.1:7002" } })
+        .listen,
+    ).toBe("127.0.0.1:7002");
+    expect(
+      resolveConfigFromPersisted(home, persisted, {
+        env: { PASEO_LISTEN: "127.0.0.1:7002" },
+        cli: { listen: "127.0.0.1:7003" },
+      }).listen,
+    ).toBe("127.0.0.1:7003");
+  });
+
+  test("uses the fork Web UI while preserving configured URLs", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "swarm-app-url-"));
+    roots.push(home);
+    const defaultOffer = await generateLocalPairingOffer({ paseoHome: home, includeQr: false });
+    expect(new URL(defaultOffer.url!).origin).toBe("https://paseo.7li.moe");
+    const customOffer = await generateLocalPairingOffer({
+      paseoHome: home,
+      includeQr: false,
+      appBaseUrl: "https://custom.example",
+    });
+    expect(new URL(customOffer.url!).origin).toBe("https://custom.example");
+    expect(resolveConfigFromPersisted(home, {}, { env: {} }).appBaseUrl).toBe(
+      "https://paseo.7li.moe",
+    );
+    expect(
+      resolveConfigFromPersisted(home, { app: { baseUrl: "https://custom.example" } }, { env: {} })
+        .appBaseUrl,
+    ).toBe("https://custom.example");
+    expect(
+      resolveConfigFromPersisted(home, {}, { env: { PASEO_APP_BASE_URL: "https://env.example" } })
+        .appBaseUrl,
+    ).toBe("https://env.example");
+  });
+
   afterEach(async () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });

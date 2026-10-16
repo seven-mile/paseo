@@ -1,7 +1,43 @@
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createCli } from "./cli.js";
 
 describe("canonical CLI surface", () => {
+  it("shows the fork command and defaults while retaining onboard", () => {
+    const cli = createCli();
+    expect(cli.name()).toBe("paseo-swarm");
+    expect(cli.helpInformation()).toContain("~/.paseo-swarm");
+    const onboard = cli.commands.find((command) => command.name() === "onboard");
+    expect(onboard?.helpInformation()).toContain("default: 6769");
+  });
+  it("derives every registered command usage from the root command name", () => {
+    const visit = (command: ReturnType<typeof createCli>) => {
+      expect(command.helpInformation().split("\n")[0]).toMatch(/^Usage: paseo-swarm(?: |$)/u);
+      for (const child of command.commands) visit(child);
+    };
+    visit(createCli());
+  });
+  it("flags hardcoded upstream command hints in CLI source", () => {
+    const root = fileURLToPath(new URL(".", import.meta.url));
+    const findings: string[] = [];
+    for (const file of readdirSync(root, { recursive: true })) {
+      if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
+      const lines = readFileSync(path.join(root, file), "utf8").split("\n");
+      lines.forEach((line, index) => {
+        // This is a spelling tripwire, not a parser: comments and @paseo Hub mentions are excluded.
+        if (/^\s*(?:\/\/|\*)/u.test(line)) return;
+        if (/(?<![\w@./-])paseo\s+(?:[a-z][\w-]*|--[\w-]+)/u.test(line)) {
+          findings.push(`${file}:${index + 1}: ${line.trim()}`);
+        }
+      });
+    }
+    expect(
+      findings,
+      "Review new upstream command hints; use paseo-swarm for executable examples",
+    ).toEqual([]);
+  });
   it("offers daemon host selection as a global option", () => {
     expect(createCli().helpInformation()).toContain("--host <host>");
   });
@@ -65,12 +101,13 @@ describe("canonical CLI surface", () => {
     expect(scheduleCreate?.helpInformation()).toContain("--thinking <id>");
   });
 
-  it("offers opening an existing agent in the desktop app", () => {
+  it("keeps agent open discoverable with an unsupported Desktop description", () => {
     const agent = createCli().commands.find((command) => command.name() === "agent");
     const open = agent?.commands.find((command) => command.name() === "open");
 
     expect(open?.helpInformation()).toContain("<agent-id>");
     expect(open?.helpInformation()).toContain("--server <server-id>");
+    expect(open?.helpInformation()).toContain("Desktop launch is unsupported");
   });
 
   it("offers the complete local plugin lifecycle", () => {

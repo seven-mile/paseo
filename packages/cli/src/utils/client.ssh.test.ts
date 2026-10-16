@@ -46,6 +46,28 @@ describe("CLI SSH transport", () => {
     );
   });
 
+  it.each([
+    ["ssh://deploy@build-box:2222", 6769],
+    ["ssh://deploy@build-box:2222?daemonPort=6767", 6767],
+  ])("selects the fork default without overriding explicit ports: %s", async (host, daemonPort) => {
+    await connectToDaemon({ target: { kind: "endpoint", host } });
+    expect(mocks.createSshTunnel).toHaveBeenCalledWith({
+      host: "deploy@build-box",
+      sshPort: 2222,
+      daemonPort,
+    });
+  });
+
+  it.each(["?daemonPort=0", "?daemonPort=1&daemonPort=2"])(
+    "rejects invalid SSH ports %s",
+    async (query) => {
+      await expect(
+        connectToDaemon({ target: { kind: "endpoint", host: `ssh://deploy@build-box${query}` } }),
+      ).rejects.toThrow();
+      expect(mocks.createSshTunnel).not.toHaveBeenCalled();
+    },
+  );
+
   it("routes an SSH host through a local tunnel", async () => {
     await connectToDaemon({
       target: { kind: "endpoint", host: "ssh://deploy@build-box:2222?daemonPort=7777" },

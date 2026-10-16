@@ -3,7 +3,20 @@ import { selectDaemonTarget, describeDaemonTarget } from "./daemon-target.js";
 import { resolveDaemonCredential, resolveClientPaseoHome } from "./client.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
+
+test("fork defaults preserve endpoint and local-only environment selection", () => {
+  const expected = { kind: "instance", home: join(homedir(), ".paseo-swarm") };
+  expect(selectDaemonTarget({}, {})).toEqual(expected);
+  expect(selectDaemonTarget({}, { PASEO_HOST: "explicit:7000" })).toEqual({
+    kind: "endpoint",
+    host: "explicit:7000",
+  });
+  expect(selectDaemonTarget({}, { PASEO_HOST: "explicit:7000" }, true)).toEqual(expected);
+  expect(resolveClientPaseoHome({ kind: "endpoint", host: "explicit:7000" }, {})).toBe(
+    expected.home,
+  );
+});
 
 test("explicit selectors win over both environment selectors", () => {
   const env = { PASEO_HOME: "/tmp/a", PASEO_HOST: "unused:12345" };

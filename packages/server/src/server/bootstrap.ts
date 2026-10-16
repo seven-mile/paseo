@@ -185,7 +185,11 @@ import type {
   AgentProviderRuntimeSettingsMap,
   ProviderOverride,
 } from "./agent/provider-launch-config.js";
-import { loadPersistedConfig, type PersistedConfig } from "./persisted-config.js";
+import {
+  DEFAULT_APP_BASE_URL,
+  loadPersistedConfig,
+  type PersistedConfig,
+} from "./persisted-config.js";
 import { createServiceProxySubsystem, type ServiceProxySubsystem } from "./service-proxy.js";
 import { releaseWorkspaceServicePortPlan } from "./workspace-service-port-registry.js";
 import { ScriptHealthMonitor } from "./script-health-monitor.js";
@@ -550,7 +554,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     cors: { allowedOrigins: config.corsAllowedOrigins },
     trustedProxies: config.trustedProxies ?? ["loopback"],
     git: config.git ?? resolveGitProcessPolicy({ env: process.env }),
-    app: { baseUrl: config.appBaseUrl ?? "https://app.paseo.sh" },
+    app: { baseUrl: config.appBaseUrl ?? DEFAULT_APP_BASE_URL },
     ...(config.providerCatalogRefreshTimeoutMs !== undefined
       ? { catalogRefreshTimeoutMs: config.providerCatalogRefreshTimeoutMs }
       : {}),
@@ -684,12 +688,12 @@ export async function createPaseoDaemon(
   const scriptRuntimeStore = new WorkspaceScriptRuntimeStore();
   const workspaceSetupRuntime = new WorkspaceSetupRuntime();
   let configuredHostnames = config.hostnames ?? config.allowedHosts;
-  let appBaseUrl = config.appBaseUrl ?? "https://app.paseo.sh";
+  let appBaseUrl = config.appBaseUrl ?? DEFAULT_APP_BASE_URL;
   daemonConfigStore.onFieldChange("hostnames", (value) => {
     configuredHostnames = value as HostnamesConfig | undefined;
   });
   daemonConfigStore.onFieldChange("app.baseUrl", (value) => {
-    appBaseUrl = typeof value === "string" ? value : "https://app.paseo.sh";
+    appBaseUrl = typeof value === "string" ? value : DEFAULT_APP_BASE_URL;
   });
   let wsServer: VoiceAssistantWebSocketServer | null = null;
   let serviceProxyListenTarget: ListenTarget | null = null;
