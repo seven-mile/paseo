@@ -5,6 +5,10 @@ import {
   getSwarmCreationValidationKey,
   filterSwarmParents,
   resolveSwarmParent,
+  openSwarmPreparation,
+  reconcileSwarmCreationDraft,
+  swarmPwaSourceIdentity,
+  type SwarmCreationDraft,
   type SwarmParentChoice,
 } from "./parent-selection";
 
@@ -137,5 +141,154 @@ describe("Swarm parent selection", () => {
         (parent) => parent.name,
       ),
     ).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("prepared Swarm creation identity", () => {
+  it("reuses the same prompt/UUID after native failure and rejects a changed submission", async () => {
+    const reservation = openSwarmPreparation((id) => `Resolve ${id}`);
+    const prepared = {
+      agentId: "prepared-id",
+      systemPrompt: "fixed prompt",
+      parentAgentId: "native-parent",
+    };
+    let creates = 0;
+    const create = async () => {
+      creates += 1;
+      return prepared;
+    };
+    expect(await reservation.prepare("host/project/parent/pwa/role/name/brief", create)).toBe(
+      prepared,
+    );
+    expect(await reservation.prepare("host/project/parent/pwa/role/name/brief", create)).toBe(
+      prepared,
+    );
+    await expect(reservation.prepare("different-brief", create)).rejects.toThrow(
+      "Resolve prepared-id",
+    );
+    expect(creates).toBe(1);
+  });
+  it("shares an in-flight prepare and permits retry only when prepare itself failed", async () => {
+    const reservation = openSwarmPreparation((id) => id);
+    let resolve!: (value: { agentId: string; systemPrompt: string; parentAgentId: null }) => void;
+    let creates = 0;
+    const create = () => {
+      creates += 1;
+      return new Promise<{ agentId: string; systemPrompt: string; parentAgentId: null }>(
+        (complete) => {
+          resolve = complete;
+        },
+      );
+    };
+    const first = reservation.prepare("same", create);
+    const duplicate = reservation.prepare("same", create);
+    resolve({ agentId: "once", systemPrompt: "prompt", parentAgentId: null });
+    expect(await first).toEqual(await duplicate);
+    expect(creates).toBe(1);
+    const retryable = openSwarmPreparation((id) => id);
+    await expect(
+      retryable.prepare("same", async () => {
+        throw new Error("read failed");
+      }),
+    ).rejects.toThrow("read failed");
+    expect(
+      await retryable.prepare("same", async () => ({
+        agentId: "retry",
+        systemPrompt: "latest",
+        parentAgentId: null,
+      })),
+    ).toMatchObject({ agentId: "retry" });
+  });
+});
+
+describe("creation hydration and inherited source identity", () => {
+  it("keeps the explicit parent on first Project hydration, then resets on real Project changes", () => {
+    const initial: SwarmCreationDraft = {
+      key: "host:pending:worker",
+      serverId: "host",
+      roleClass: "worker",
+      hasProject: false,
+      hasResolvedProject: false,
+      directory: undefined,
+      role: "",
+      parent: "chosen.supervisor",
+    };
+    const hydrated = reconcileSwarmCreationDraft(initial, {
+      key: "host:project-a:worker",
+      serverId: "host",
+      roleClass: "worker",
+      hasProject: true,
+    });
+    expect(hydrated.parent).toBe("chosen.supervisor");
+    expect(
+      resolveSwarmParent(
+        [
+          { ...parents[0], name: "first.supervisor" },
+          { ...parents[1], name: "chosen.supervisor" },
+        ],
+        hydrated.parent,
+      ),
+    ).toBe("chosen.supervisor");
+    expect(reconcileSwarmCreationDraft(hydrated, hydrated)).toBe(hydrated);
+    const edited = { ...hydrated, role: "reviewer", directory: "team-a" };
+    const changed = reconcileSwarmCreationDraft(edited, {
+      key: "host:project-b:worker",
+      serverId: "host",
+      roleClass: "worker",
+      hasProject: true,
+    });
+    expect(changed).toMatchObject({
+      parent: null,
+      role: "",
+      directory: undefined,
+      hasResolvedProject: true,
+    });
+    const temporarilyMissing = reconcileSwarmCreationDraft(edited, {
+      ...initial,
+      key: "host:missing:worker",
+    });
+    expect(
+      reconcileSwarmCreationDraft(temporarilyMissing, { ...changed, key: "host:project-c:worker" })
+        .parent,
+    ).toBeNull();
+    expect(
+      reconcileSwarmCreationDraft(initial, {
+        ...initial,
+        serverId: "other",
+        key: "other:pending:worker",
+      }).parent,
+    ).toBeNull();
+  });
+
+  it("reuses child reservation after unrelated Project root changes but rejects a changed parent binding", async () => {
+    const binding = {
+      projectId: "project",
+      contentRoot: "/bound-content",
+      directory: "/bound-content/team",
+    };
+    const before = swarmPwaSourceIdentity("worker", "/discovery-a", "team", binding);
+    const after = swarmPwaSourceIdentity("worker", "/discovery-b", "other-default", binding);
+    expect(after).toBe(before);
+    const reservation = openSwarmPreparation((id) => `Resolve ${id}`);
+    const prepared = { agentId: "preserved-child", systemPrompt: "fixed", parentAgentId: "parent" };
+    const result = await reservation.prepare(before, async () => prepared);
+    expect(
+      await reservation.prepare(after, async () => {
+        throw new Error("must reuse prepared identity");
+      }),
+    ).toBe(result);
+    const moved = swarmPwaSourceIdentity("worker", "/discovery-b", "team", {
+      ...binding,
+      directory: "/bound-content/moved",
+    });
+    await expect(reservation.prepare(moved, async () => prepared)).rejects.toThrow(
+      "Resolve preserved-child",
+    );
+    expect(swarmPwaSourceIdentity("planner", "/discovery-a", "team", undefined)).not.toBe(
+      swarmPwaSourceIdentity("planner", "/discovery-b", "team", undefined),
+    );
+    expect(swarmPwaSourceIdentity("planner", "/discovery-a", "team", undefined)).not.toBe(
+      swarmPwaSourceIdentity("planner", "/discovery-a", "other-team", undefined),
+    );
   });
 });

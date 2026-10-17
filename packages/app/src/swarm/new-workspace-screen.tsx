@@ -1,24 +1,19 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  NewWorkspaceScreen,
-  type SwarmRoleChoice,
-  type SwarmWorkspaceOptions,
-} from "@/screens/new-workspace-screen";
+import { NewWorkspaceScreen, type SwarmWorkspaceOptions } from "@/screens/new-workspace-screen";
 import { usePluginInstallations } from "@/plugins/registry";
 import { swarmTaskBoardSchema } from "./task-model";
 import { type SwarmRoleClass } from "./rpc";
 import { z } from "zod";
+import { openSwarmPreparation } from "./parent-selection";
+import { pwaSourceSchema, pwaRoleSchema } from "./pwa-form-model";
 
-const rolesSchema = z.array(
-  z.object({
-    role: z.string(),
-    roleClass: z.enum(["planner", "supervisor", "worker"]),
-    title: z.string(),
-    description: z.string(),
-  }),
-);
-const preparedAgentSchema = z.object({ agentId: z.string(), systemPrompt: z.string() });
+const rolesSchema = z.array(pwaRoleSchema);
+const preparedAgentSchema = z.object({
+  agentId: z.string(),
+  systemPrompt: z.string(),
+  parentAgentId: z.string().nullable(),
+});
 
 export interface SwarmNewWorkspaceScreenProps {
   serverId: string;
@@ -41,6 +36,9 @@ export function SwarmNewWorkspaceScreen({
 }: SwarmNewWorkspaceScreenProps) {
   const { t } = useTranslation();
   const installations = usePluginInstallations("paseo-swarm");
+  const [preparation] = useState(() =>
+    openSwarmPreparation((id) => t("swarm.creation.reservationChanged", { id })),
+  );
   const options = useMemo<SwarmWorkspaceOptions>(() => {
     return {
       roleClass,
@@ -51,14 +49,11 @@ export function SwarmNewWorkspaceScreen({
         if (!installation) return undefined;
         return {
           async loadTarget(target) {
-            const [roleResponse, boardResponse] = await Promise.all([
-              installation.invoke("swarm.pwa_roles.read", {
-                roleClass,
-                projectId: target.projectId,
-              }),
+            const [sourceResponse, boardResponse] = await Promise.all([
+              installation.invoke("swarm.pwa_source.read", { projectId: target.projectId }),
               installation.invoke("swarm.board.read", {}),
             ]);
-            const roles: SwarmRoleChoice[] = rolesSchema.parse(roleResponse);
+            const source = pwaSourceSchema.parse(sourceResponse);
             const board = swarmTaskBoardSchema.parse(boardResponse);
             let parentRoleClass: "planner" | "supervisor" | null = null;
             if (roleClass === "supervisor") parentRoleClass = "planner";
@@ -72,29 +67,68 @@ export function SwarmNewWorkspaceScreen({
                 paseoAgentId: agent.paseoAgentId,
                 serverId: target.serverId,
                 workspaceId: agent.workspaceId,
+                pwaBinding: agent.pwaBinding,
               }));
-            return { roles, parents };
+            return { source, parents };
           },
-          async prepareAgent({ target, ...input }) {
-            return preparedAgentSchema.parse(
-              await installation.invoke("swarm.agent.prepare", {
-                ...input,
-                projectId: target.projectId,
+          async loadRoles({ target, directory, parentName: selectedParent }) {
+            return rolesSchema.parse(
+              await installation.invoke("swarm.pwa_roles.read", {
                 roleClass,
-                actorPaseoAgentId: null,
+                projectId: target.projectId,
+                path: selectedParent ? undefined : directory,
+                parentName: selectedParent ?? undefined,
               }),
             );
           },
-          async bindAgent({ agentId, workspaceId }) {
-            await installation.invoke("swarm.agent.bind_workspace", {
-              agentId,
-              workspaceId,
+          async bindPwa({ target, parentName: selectedParent, directory }) {
+            await installation.invoke("swarm.agent.bind_pwa", {
+              projectId: target.projectId,
+              agentName: selectedParent,
+              pwaDirectory: directory,
+              actorPaseoAgentId: null,
             });
+          },
+          async prepareAgent({ target, pwaSourceIdentity, ...input }) {
+            const key = JSON.stringify([
+              target.serverId,
+              target.projectId,
+              roleClass,
+              input.reportsTo,
+              input.pwaDirectory,
+              input.name,
+              input.role,
+              input.brief,
+              pwaSourceIdentity,
+            ]);
+            return preparation.prepare(key, async () =>
+              preparedAgentSchema.parse(
+                await installation.invoke("swarm.agent.prepare", {
+                  ...input,
+                  projectId: target.projectId,
+                  roleClass,
+                  actorPaseoAgentId: null,
+                }),
+              ),
+            );
+          },
+          async bindAgent({ agentId, workspaceId }) {
+            try {
+              await installation.invoke("swarm.agent.bind_workspace", { agentId, workspaceId });
+            } catch (error) {
+              throw new Error(
+                t("swarm.creation.preparedFailed", {
+                  id: agentId,
+                  reason: error instanceof Error ? error.message : String(error),
+                }),
+                { cause: error },
+              );
+            }
           },
         };
       },
     };
-  }, [installations, parentName, roleClass]);
+  }, [installations, parentName, roleClass, t, preparation]);
   return (
     <NewWorkspaceScreen
       serverId={serverId}

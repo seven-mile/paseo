@@ -1,11 +1,15 @@
 import type { RpcInput } from "@getpaseo/plugin";
 import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
-import { listPwaRoles, readPwa } from "./pwa";
+import { discoverPwas, listPwaRoles, readPwa, readPwaStatuses } from "./pwa";
 import { initialPrompt, messagePrompt, messageReceipt, runtimeNotification } from "./prompts";
 import { store } from "./state";
-import { readPwaSource, requirePwaSource, writePwaSource } from "./source";
+import {
+  readPwaSourceConfig,
+  resolvePwaBinding,
+  validatePwaBinding,
+  writePwaSource,
+} from "./source";
 import { resolveActivityRefs } from "./refs";
 import {
   appendActivityRpc,
@@ -21,8 +25,9 @@ import {
   pwaRolesReadRpc,
   prepareAgentRpc,
   bindPreparedAgentRpc,
+  bindPwaRpc,
 } from "../shared/swarm";
-import type { AgentRecord, Task } from "../shared/models";
+import type { AgentRecord, PwaBinding, SwarmState, Task } from "../shared/models";
 import { agentQualifiedName } from "../shared/models";
 
 const now = () => new Date().toISOString();
@@ -187,6 +192,87 @@ function assertCanCreateAgent(
   }
 }
 
+function assertNativeParent(
+  labels: Record<string, string> | undefined,
+  parent: AgentRecord | null,
+) {
+  const parentId = labels?.["paseo.parent-agent-id"] ?? null;
+  if (parentId !== (parent?.paseoAgentId ?? null)) {
+    throw new Error("Agent parent does not match its Swarm reporting relationship.");
+  }
+}
+
+function assertHierarchy(parent: AgentRecord | null, roleClass: AgentRecord["roleClass"]) {
+  const requiredParent = { planner: null, supervisor: "planner", worker: "supervisor" }[roleClass];
+  if ((parent?.roleClass ?? null) !== requiredParent)
+    throw new Error("Choose a manager with the required role class.");
+}
+
+function assertParentBinding(parent: AgentRecord | null, binding: PwaBinding) {
+  if (!parent) return;
+  const current = parent.pwaBinding;
+  if (
+    !current ||
+    current.projectId !== binding.projectId ||
+    current.contentRoot !== binding.contentRoot ||
+    current.directory !== binding.directory
+  ) {
+    throw new Error(
+      "The manager's PWA binding changed after preparation. The reserved identity and prompt are retained; resolve the binding conflict explicitly.",
+    );
+  }
+}
+
+function assertCurrentParentBinding(
+  state: SwarmState,
+  parent: AgentRecord | null,
+  binding: PwaBinding,
+) {
+  if (!parent) return;
+  const current = state.agents.find(
+    (agent) => agent.paseoAgentId === parent.paseoAgentId && !agent.retired,
+  );
+  if (!current)
+    throw new Error(
+      "The manager is no longer available. The reserved identity and prompt are retained.",
+    );
+  assertParentBinding(current, binding);
+}
+
+async function registrationBinding(
+  input: RpcInput<typeof registerAgentRpc>,
+  current: AgentRecord | undefined,
+  parent: AgentRecord | null,
+  projectId: string | undefined,
+  context: PluginHandlerContext,
+) {
+  const binding = current
+    ? current.pwaBinding
+    : await creationBinding(projectId, parent, input.pwaDirectory, context);
+  if (current && input.pwaDirectory) {
+    if (!binding)
+      throw new Error("Confirm this agent's PWA directory explicitly before creating children.");
+    const selected = resolvePwaBinding({
+      projectId,
+      directory: input.pwaDirectory,
+      contentRoot: binding.contentRoot,
+    });
+    if (selected.directory !== binding.directory)
+      throw new Error("Confirm a changed PWA directory with bind_pwa.");
+  }
+  if (binding && binding.projectId !== projectId)
+    throw new Error("Agent binding belongs to another project.");
+  if (!current && binding) {
+    validatePwaBinding(binding);
+    assertRoleClass(
+      readPwa(binding.directory, input.role, binding.contentRoot).roleClass,
+      input.roleClass,
+      input.role,
+    );
+  }
+  return binding;
+}
+
 function findTask(taskId: string): Task {
   const value = store.read().tasks.find((candidate) => candidate.id === taskId);
   if (!value) throw new Error(`Unknown Task: ${taskId}`);
@@ -196,11 +282,76 @@ function findTask(taskId: string): Task {
 function rolePrompt(
   agent: Pick<AgentRecord, "name" | "qualifiedName" | "roleClass" | "role" | "reportsTo">,
   brief: string,
-  projectId?: string,
+  binding: PwaBinding,
 ): string {
-  const pwa = readPwa(requirePwaSource(projectId), agent.role);
+  validatePwaBinding(binding);
+  const pwa = readPwa(binding.directory, agent.role, binding.contentRoot);
   assertRoleClass(pwa.roleClass, agent.roleClass, agent.role);
   return initialPrompt({ pwa, agent, brief });
+}
+
+async function sourceConfig(projectId: string | undefined, context: PluginHandlerContext) {
+  return readPwaSourceConfig(
+    projectId,
+    projectId ? await projectRoot(projectId, context) : undefined,
+  );
+}
+
+async function creationBinding(
+  projectId: string | undefined,
+  parent: AgentRecord | null,
+  directory: string | undefined,
+  context: PluginHandlerContext,
+): Promise<PwaBinding> {
+  if (parent) {
+    const binding = parent.pwaBinding;
+    if (!binding) throw new Error("Confirm the manager's PWA directory before creating a child.");
+    if (binding.projectId !== projectId)
+      throw new Error("The manager's PWA binding belongs to another project.");
+    validatePwaBinding(binding);
+    if (directory) {
+      const selected = resolvePwaBinding({
+        projectId,
+        directory,
+        contentRoot: binding.contentRoot,
+      });
+      if (selected.directory !== binding.directory)
+        throw new Error("Children inherit their manager's PWA directory.");
+    }
+    return { ...binding };
+  }
+  if (!directory) throw new Error("Choose a PWA directory explicitly.");
+  const config = await sourceConfig(projectId, context);
+  if (!config.path)
+    throw new Error("No PWA content directory configured. Choose one in Project Settings → Swarm.");
+  return resolvePwaBinding({ projectId, directory, contentRoot: config.path });
+}
+
+function teamRoot(agent: AgentRecord, agents: AgentRecord[]): AgentRecord | undefined {
+  const visited = new Set<string>();
+  let current: AgentRecord | undefined = agent;
+  while (current && !visited.has(current.paseoAgentId)) {
+    visited.add(current.paseoAgentId);
+    if (current.roleClass === "planner" && !current.reportsTo) return current;
+    current = agents.find((candidate) => agentQualifiedName(candidate) === current?.reportsTo);
+  }
+  return undefined;
+}
+
+function teamMembers(owner: AgentRecord, agents: AgentRecord[]): Set<string> {
+  const members = new Set([agentQualifiedName(owner)]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const agent of agents) {
+      const name = agentQualifiedName(agent);
+      if (agent.reportsTo && members.has(agent.reportsTo) && !members.has(name)) {
+        members.add(name);
+        changed = true;
+      }
+    }
+  }
+  return members;
 }
 
 function assertRoleClass(
@@ -217,6 +368,7 @@ async function assertCreationWorkspace(
   actor: AgentRecord | null,
   workspaceId: string | null,
   context: PluginHandlerContext,
+  ownAgentId?: string,
 ): Promise<void> {
   if (actor) {
     if (!workspaceId) throw new Error(`Caller has no workspace: ${actor.paseoAgentId}`);
@@ -231,6 +383,7 @@ async function assertCreationWorkspace(
         )
         .map((candidate) => candidate.paseoAgentId),
     );
+    if (ownAgentId) allowedIds.add(ownAgentId);
     const outsider = (await availableAgents(context)).find(
       (agent) => agent.workspaceId === workspaceId && !allowedIds.has(agent.id),
     );
@@ -246,7 +399,7 @@ function creationConfig(
   input: RpcInput<typeof createAgentRpc>,
   provisional: Parameters<typeof rolePrompt>[0],
   parent: AgentRecord | null,
-  projectId: string | undefined,
+  binding: PwaBinding,
 ) {
   return {
     config: {
@@ -254,7 +407,7 @@ function creationConfig(
       ...(input.modeId ? { modeId: input.modeId } : {}),
       ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
       ...(input.featureValues ? { featureValues: input.featureValues } : {}),
-      systemPrompt: rolePrompt(provisional, input.brief, projectId),
+      systemPrompt: rolePrompt(provisional, input.brief, binding),
     },
     title: input.title ?? input.name,
     ...(parent ? { parent: parent.paseoAgentId } : {}),
@@ -286,39 +439,163 @@ async function creationPlacement(
 }
 
 export function registerOperations(server: Pick<PluginServerContext, "handle">): void {
-  server.handle(boardReadRpc, async ({ projectId }, context) => {
+  server.handle(boardReadRpc, async ({ projectId, teamName, unassigned }, context) => {
     const availableIds = new Set((await availableAgents(context)).map((agent) => agent.id));
     const saved = store.read();
+    const agents = saved.agents.filter((agent) => !agent.retired);
+    const visibleAgents = agents.filter((agent) => availableIds.has(agent.paseoAgentId));
+    if (projectId) await projectRoot(projectId, context);
+    // Unscoped reads remain available for MCP identity and canonical Task references.
+    if (!projectId && !teamName && !unassigned) return { ...saved, agents: visibleAgents };
+    const memberships = new Map(agents.map((agent) => [agent.paseoAgentId, agent.projectId]));
+    await Promise.all(
+      agents
+        .filter((agent) => !agent.projectId && agent.workspaceId)
+        .map(async (agent) => {
+          try {
+            const workspace = await context.paseo.workspaces.ref(agent.workspaceId!).refresh();
+            memberships.set(agent.paseoAgentId, workspace?.projectId);
+          } catch {
+            // Missing legacy placement stays explicitly unassigned; never infer from its name.
+          }
+        }),
+    );
+    const projectFor = (agent: AgentRecord) => memberships.get(agent.paseoAgentId);
+    const orphaned = saved.tasks.filter((task) => {
+      const manager = agents.find((agent) => agentQualifiedName(agent) === task.managerName);
+      if (manager && projectFor(manager) && projectId && projectFor(manager) !== projectId)
+        return false;
+      const root = manager ? teamRoot(manager, agents) : undefined;
+      return (
+        !manager ||
+        (projectId && !projectFor(manager)) ||
+        !availableIds.has(manager.paseoAgentId) ||
+        !root ||
+        !availableIds.has(root.paseoAgentId)
+      );
+    });
+    if (unassigned) {
+      const ids = new Set(orphaned.map((task) => task.id));
+      return {
+        version: 1 as const,
+        agents: visibleAgents.filter((agent) => !projectId || projectFor(agent) === projectId),
+        tasks: orphaned,
+        activities: saved.activities.filter((activity) => ids.has(activity.taskId)),
+        statuses: [],
+        unassignedTaskCount: orphaned.length,
+      };
+    }
+    if (!teamName) {
+      return {
+        version: 1 as const,
+        agents: visibleAgents.filter(
+          (agent) =>
+            projectFor(agent) === projectId && agent.roleClass === "planner" && !agent.reportsTo,
+        ),
+        tasks: [],
+        activities: [],
+        statuses: [],
+        unassignedTaskCount: orphaned.length,
+      };
+    }
+    const owner = findAgent(teamName);
+    if (owner.roleClass === "worker") throw new Error("Choose a planner or supervisor team.");
+    if (projectId && projectFor(owner) !== projectId)
+      throw new Error("The team belongs to another project.");
+    const root = teamRoot(owner, agents);
+    const members = teamMembers(owner, agents);
+    const tasks = saved.tasks.filter((task) => members.has(task.managerName));
+    const ids = new Set(tasks.map((task) => task.id));
     const board = {
-      ...saved,
-      agents: saved.agents.filter((agent) => availableIds.has(agent.paseoAgentId)),
+      version: 1 as const,
+      agents: visibleAgents.filter((agent) => members.has(agentQualifiedName(agent))),
+      tasks,
+      activities: saved.activities.filter((activity) => ids.has(activity.taskId)),
+      unassignedTaskCount: orphaned.length,
     };
-    if (!projectId) return board;
-    await projectRoot(projectId, context);
-    const directory = readPwaSource(projectId);
-    if (!directory) return { ...board, statuses: [] };
-    const planner = listPwaRoles(directory).find((role) => role.roleClass === "planner");
-    if (!planner) throw new Error(`The PWA directory must contain a planner role: ${directory}`);
-    return { ...board, statuses: readPwa(directory, planner.role).statuses };
+    try {
+      if (!root?.pwaBinding) throw new Error("This planner has no confirmed PWA directory.");
+      validatePwaBinding(root.pwaBinding);
+      return {
+        ...board,
+        statuses: readPwaStatuses(root.pwaBinding.directory, root.pwaBinding.contentRoot),
+      };
+    } catch (error) {
+      return {
+        ...board,
+        statuses: [],
+        pwaError: error instanceof Error ? error.message : String(error),
+      };
+    }
   });
   server.handle(pwaSourceReadRpc, async ({ projectId }, context) => {
-    if (projectId) await projectRoot(projectId, context);
-    return { path: readPwaSource(projectId) };
+    const config = await sourceConfig(projectId, context);
+    return {
+      ...config,
+      ...(config.path ? discoverPwas(config.path) : { entries: [], complete: true, errors: [] }),
+    };
   });
-  server.handle(pwaSourceSetRpc, async ({ path, projectId }, context) => {
+  server.handle(pwaSourceSetRpc, async ({ path, projectId, defaultPwa }, context) => {
     const root = projectId ? await projectRoot(projectId, context) : undefined;
-    return { path: writePwaSource({ path, projectId, projectRoot: root }) };
+    const savedPath = writePwaSource({ path, projectId, projectRoot: root, defaultPwa });
+    return { path: savedPath, defaultPwa: readPwaSourceConfig(projectId, root).defaultPwa };
   });
-  server.handle(pwaRolesReadRpc, async ({ roleClass, path, projectId }, context) => {
-    const root = projectId ? await projectRoot(projectId, context) : process.cwd();
-    const directory = path ? resolve(root, path) : requirePwaSource(projectId);
-    const roles = listPwaRoles(directory);
-    for (const role of roles) readPwa(directory, role.role);
-    return roles.filter((role) => !roleClass || role.roleClass === roleClass);
+  server.handle(
+    pwaRolesReadRpc,
+    async ({ roleClass, path, projectId, parentName, actorPaseoAgentId }, context) => {
+      const actor = actorPaseoAgentId ? findAgentByPaseoId(actorPaseoAgentId) : undefined;
+      if (actorPaseoAgentId && !actor) throw new Error("Unknown active Swarm caller.");
+      const parent = parentName
+        ? findAgent(parentName, actor ? agentQualifiedName(actor) : undefined)
+        : (actor ?? null);
+      if (actor && roleClass) assertCanCreateAgent(actor, parent, roleClass);
+      const scopedProject = await projectScope({ projectId, parent }, context);
+      const binding = await creationBinding(scopedProject, parent, path, context);
+      const roles = listPwaRoles(binding.directory, binding.contentRoot);
+      return roles.filter((role) => !roleClass || role.roleClass === roleClass);
+    },
+  );
+  server.handle(bindPwaRpc, async (input, context) => {
+    const agent = findAgent(input.agentName);
+    if (!agent.workspaceId)
+      throw new Error("Finish binding the prepared agent before changing its PWA directory.");
+    const snapshot = (await context.paseo.agents.ref(agent.paseoAgentId).refresh())?.agent;
+    if (!snapshot || snapshot.workspaceId !== agent.workspaceId)
+      throw new Error(
+        "The native agent placement must be confirmed before changing its PWA directory.",
+      );
+    const actor = input.actorPaseoAgentId ? findAgentByPaseoId(input.actorPaseoAgentId) : null;
+    if (input.actorPaseoAgentId && actor?.paseoAgentId !== agent.paseoAgentId)
+      throw new Error("Only the agent itself can confirm its PWA binding.");
+    const parent = agent.reportsTo ? findAgent(agent.reportsTo) : null;
+    const projectId = await projectScope(
+      { projectId: input.projectId ?? agent.projectId, workspaceId: agent.workspaceId, parent },
+      context,
+    );
+    const binding = await creationBinding(projectId, parent, input.pwaDirectory, context);
+    assertRoleClass(
+      readPwa(binding.directory, agent.role, binding.contentRoot).roleClass,
+      agent.roleClass,
+      agent.role,
+    );
+    await store.update((state) => {
+      assertCurrentParentBinding(state, parent, binding);
+      agent.pwaBinding = binding;
+      agent.projectId = projectId;
+      agent.updatedAt = now();
+    });
+    return agent;
   });
 
   server.handle(registerAgentRpc, async (input: RpcInput<typeof registerAgentRpc>, context) => {
     const parent = input.reportsTo ? findAgent(input.reportsTo) : null;
+    const current = findAgentByPaseoId(input.paseoAgentId);
+    if (current && ((!current.workspaceId && current.pwaBinding) || current.creationError)) {
+      throw new Error(
+        "Finish the reserved agent through bind_workspace before registering it again.",
+      );
+    }
+    if (!current) assertHierarchy(parent, input.roleClass);
     const snapshot = (await context.paseo.agents.ref(input.paseoAgentId).refresh())?.agent;
     if (!snapshot?.workspaceId) throw new Error(`Unknown agent workspace: ${input.paseoAgentId}`);
     if (input.workspaceId && input.workspaceId !== snapshot.workspaceId)
@@ -327,15 +604,23 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       { ...input, workspaceId: snapshot.workspaceId, parent },
       context,
     );
-    assertRoleClass(
-      readPwa(requirePwaSource(projectId), input.role).roleClass,
-      input.roleClass,
-      input.role,
-    );
+    const binding = await registrationBinding(input, current, parent, projectId, context);
+    if (!current) {
+      assertNativeParent(snapshot.labels, parent);
+      await assertCreationWorkspace(parent, snapshot.workspaceId, context, input.paseoAgentId);
+      const parentSnapshot = parent
+        ? (await context.paseo.agents.ref(parent.paseoAgentId).refresh())?.agent
+        : null;
+      if (input.roleClass === "supervisor" && parentSnapshot?.workspaceId === snapshot.workspaceId)
+        throw new Error(
+          "Prepare a separate workspace for the supervisor and pass its workspaceId.",
+        );
+    }
     const timestamp = now();
     let result!: AgentRecord;
     await store.update((state) => {
       const existing = state.agents.find((agent) => agent.paseoAgentId === input.paseoAgentId);
+      if (!current && binding) assertCurrentParentBinding(state, parent, binding);
       const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
       if (!existing) ensureUniqueName(input.name, qualifiedName, parent);
       if (
@@ -358,15 +643,17 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         reportsTo: parent ? agentQualifiedName(parent) : null,
         workspaceId: snapshot.workspaceId ?? null,
         projectId,
+        pwaBinding: binding,
         retired: false,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
       if (existing)
         Object.assign(existing, {
-          ...input,
+          aliases: input.aliases,
           workspaceId: snapshot.workspaceId,
           projectId,
+          pwaBinding: binding,
           qualifiedName,
           reportsTo: parent ? agentQualifiedName(parent) : null,
           retired: false,
@@ -382,7 +669,9 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     async (input: RpcInput<typeof createAgentRpc>, context: PluginHandlerContext) => {
       const { actor, parent } = parentForCreate(input);
       assertCanCreateAgent(actor, parent, input.roleClass);
+      assertHierarchy(parent, input.roleClass);
       const projectId = await projectScope({ ...input, parent }, context);
+      const binding = await creationBinding(projectId, parent, input.pwaDirectory, context);
       const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
       ensureUniqueName(input.name, qualifiedName, parent);
       const { workspaceId, cwd } = await creationPlacement(
@@ -410,14 +699,16 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         roleClass: input.roleClass,
         role: input.role,
         reportsTo: parent ? agentQualifiedName(parent) : null,
-        workspaceId,
+        workspaceId: null,
         projectId,
+        pwaBinding: binding,
         retired: false,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
-      const createConfig = creationConfig(input, provisional, parent, projectId);
+      const createConfig = creationConfig(input, provisional, parent, binding);
       await store.update((state) => {
+        assertCurrentParentBinding(state, parent, binding);
         state.agents.push(reservedAgent);
       });
       let created;
@@ -439,30 +730,43 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
               agentId: paseoAgentId,
               cwd,
             });
+        const snapshot = (await created.refresh())?.agent;
+        if (!snapshot?.workspaceId || (workspaceId && snapshot.workspaceId !== workspaceId))
+          throw new Error("Created agent workspace does not match its placement.");
+        assertNativeParent(snapshot.labels, parent);
+        assertParentBinding(parent, binding);
+        await projectScope({ projectId, workspaceId: snapshot.workspaceId, parent }, context);
+        let result = reservedAgent;
+        await store.update((state) => {
+          assertCurrentParentBinding(state, parent, binding);
+          const current = state.agents.find((agent) => agent.paseoAgentId === paseoAgentId);
+          if (!current) throw new Error(`Reserved Swarm agent disappeared: ${paseoAgentId}`);
+          current.workspaceId = snapshot?.workspaceId ?? current.workspaceId;
+          current.updatedAt = now();
+          result = current;
+        });
+        await created.send(input.brief);
+        return result;
       } catch (error) {
         await store.update((state) => {
-          state.agents = state.agents.filter((agent) => agent.paseoAgentId !== paseoAgentId);
+          const reservation = state.agents.find((agent) => agent.paseoAgentId === paseoAgentId);
+          if (reservation)
+            reservation.creationError = error instanceof Error ? error.message : String(error);
         });
-        throw error;
+        throw new Error(
+          `Agent creation failed. Reservation ${paseoAgentId} is retained for inspection; do not create a duplicate.`,
+          { cause: error },
+        );
       }
-      const snapshot = (await created.refresh())?.agent;
-      let result = reservedAgent;
-      await store.update((state) => {
-        const current = state.agents.find((agent) => agent.paseoAgentId === paseoAgentId);
-        if (!current) throw new Error(`Reserved Swarm agent disappeared: ${paseoAgentId}`);
-        current.workspaceId = snapshot?.workspaceId ?? current.workspaceId;
-        current.updatedAt = now();
-        result = current;
-      });
-      await created.send(input.brief);
-      return result;
     },
   );
 
   server.handle(prepareAgentRpc, async (input: RpcInput<typeof prepareAgentRpc>, context) => {
     const { actor, parent } = parentForCreate(input);
     assertCanCreateAgent(actor, parent, input.roleClass);
+    assertHierarchy(parent, input.roleClass);
     const projectId = await projectScope({ ...input, parent }, context);
+    const binding = await creationBinding(projectId, parent, input.pwaDirectory, context);
     const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
     ensureUniqueName(input.name, qualifiedName, parent);
     const provisional = {
@@ -484,15 +788,22 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       reportsTo: parent ? agentQualifiedName(parent) : null,
       workspaceId: null,
       projectId,
+      pwaBinding: binding,
       retired: false,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    const systemPrompt = rolePrompt(provisional, input.brief, projectId);
+    const systemPrompt = rolePrompt(provisional, input.brief, binding);
     await store.update((state) => {
+      assertCurrentParentBinding(state, parent, binding);
       state.agents.push(agent);
     });
-    return { agentId: agent.paseoAgentId, systemPrompt, agent };
+    return {
+      agentId: agent.paseoAgentId,
+      systemPrompt,
+      parentAgentId: parent?.paseoAgentId ?? null,
+      agent,
+    };
   });
 
   server.handle(
@@ -510,19 +821,37 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         { projectId: prepared.projectId, workspaceId: input.workspaceId, parent },
         context,
       );
-      if (!prepared.projectId && projectId && readPwaSource(projectId) !== readPwaSource()) {
+      if (prepared.projectId !== projectId || prepared.pwaBinding?.projectId !== projectId) {
         throw new Error(
           "Prepare this agent with the selected project before binding its PWA directory.",
         );
       }
+      if (!prepared.pwaBinding) throw new Error("Prepared PWA binding is missing.");
+      const preparedBinding = prepared.pwaBinding;
+      validatePwaBinding(preparedBinding);
+      assertNativeParent(snapshot.labels, parent);
+      assertParentBinding(parent, preparedBinding);
+      // Files may have changed since prepare. Never regenerate the prepared prompt here.
+      const actor = parent;
+      await assertCreationWorkspace(actor, input.workspaceId, context);
+      if (prepared.roleClass === "supervisor" && parent?.roleClass === "planner") {
+        const parentSnapshot = (await context.paseo.agents.ref(parent.paseoAgentId).refresh())
+          ?.agent;
+        if (parentSnapshot?.workspaceId === input.workspaceId)
+          throw new Error(
+            "Prepare a separate workspace for the supervisor and pass its workspaceId.",
+          );
+      }
       let result!: AgentRecord;
       await store.update((state) => {
+        assertCurrentParentBinding(state, parent, preparedBinding);
         const agent = state.agents.find(
           (candidate) => candidate.paseoAgentId === input.agentId && !candidate.retired,
         );
         if (!agent) throw new Error(`Unknown prepared agent: ${input.agentId}`);
         agent.workspaceId = input.workspaceId;
         agent.projectId = projectId;
+        delete agent.creationError;
         agent.updatedAt = now();
         result = agent;
       });

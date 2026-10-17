@@ -1,6 +1,6 @@
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useRpc } from "@getpaseo/plugin/client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Pressable,
   ScrollView,
@@ -14,7 +14,12 @@ import { appendHumanActivityRpc, boardReadRpc } from "../shared/swarm";
 import type { Activity, ResponseProfile, SwarmState, Task } from "../shared/models";
 import { splitMarkdownParts, type ActivityRef } from "../shared/refs";
 
-const empty: SwarmState = { version: 1, agents: [], tasks: [], activities: [] };
+type TeamBoard = SwarmState & {
+  statuses?: string[];
+  pwaError?: string;
+  unassignedTaskCount?: number;
+};
+const empty: TeamBoard = { version: 1, agents: [], tasks: [], activities: [] };
 
 interface ActionOption {
   id: string;
@@ -629,24 +634,49 @@ function TaskDetail({
 export function BoardSurface({ theme, layout, navigation, host }: PluginSurfaceProps) {
   const styles = useBoardStyles(theme, layout.compact);
   const readBoard = useRpc(boardReadRpc);
-  const [board, setBoard] = useState<SwarmState>(empty);
+  const [board, setBoard] = useState<TeamBoard>(empty);
+  const [team, setTeam] = useState<string | null>(null);
+  const [boardError, setBoardError] = useState<string | null>(null);
+  const generation = useRef(0);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
   const refresh = useCallback(async (): Promise<void> => {
-    setBoard(await readBoard({}));
-  }, [readBoard]);
+    const version = ++generation.current;
+    try {
+      let input: { unassigned?: boolean; teamName?: string } = {};
+      if (team === "") input = { unassigned: true };
+      else if (team) input = { teamName: team };
+      const value = await readBoard(input);
+      if (generation.current === version) {
+        setBoard(value);
+        setBoardError(null);
+      }
+    } catch (error) {
+      if (generation.current === version)
+        setBoardError(error instanceof Error ? error.message : String(error));
+    }
+  }, [readBoard, team]);
 
   useEffect(() => {
-    let active = true;
-    void readBoard({}).then((value) => {
-      if (active) setBoard(value);
-      return;
-    });
+    setBoard(empty);
+    setSelectedTaskId(null);
+    void refresh();
     return () => {
-      active = false;
+      generation.current += 1;
     };
-  }, [readBoard]);
-
+  }, [refresh]);
+  const chooseTeam = useCallback((name: string): void => {
+    generation.current += 1;
+    setBoard(empty);
+    setSelectedTaskId(null);
+    setTeam(name);
+  }, []);
+  const projectHome = useCallback((): void => {
+    generation.current += 1;
+    setBoard(empty);
+    setSelectedTaskId(null);
+    setTeam(null);
+  }, []);
   const back = useCallback((): void => {
     setSelectedTaskId(null);
   }, []);
@@ -679,8 +709,16 @@ export function BoardSurface({ theme, layout, navigation, host }: PluginSurfaceP
     );
   }
 
-  const statuses = [...new Set(board.tasks.map((task) => task.status))];
-  const activeAgents = board.agents.filter((agent) => !agent.retired);
+  const declaredStatuses = [...new Set(board.statuses ?? [])];
+  const statuses = [
+    ...declaredStatuses,
+    ...[...new Set(board.tasks.map((task) => task.status))].filter(
+      (status) => !declaredStatuses.includes(status),
+    ),
+  ];
+  const activeAgents = board.agents.filter(
+    (agent) => !agent.retired && (team !== null || agent.roleClass === "planner"),
+  );
   const attentionCount = board.activities.filter(
     (activity) => activity.actorKind === "human",
   ).length;
@@ -688,7 +726,24 @@ export function BoardSurface({ theme, layout, navigation, host }: PluginSurfaceP
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.boardHeader}>
         <View style={styles.intro}>
-          <Text style={styles.boardTitle}>Swarm</Text>
+          <Text style={styles.boardTitle}>
+            {team === null ? "Swarm" : team || "Unattributed Tasks"}
+          </Text>
+          {team !== null ? (
+            <Pressable onPress={projectHome}>
+              <Text style={styles.back}>Back to planners</Text>
+            </Pressable>
+          ) : null}
+          {boardError ? (
+            <Text style={styles.muted} accessibilityRole="alert">
+              {boardError}
+            </Text>
+          ) : null}
+          {board.pwaError ? (
+            <Text style={styles.muted} accessibilityRole="alert">
+              Team PWA unavailable: {board.pwaError}
+            </Text>
+          ) : null}
           <Text style={styles.description}>
             Coordinate planners, agents, Tasks, and human decisions from one place.
           </Text>
@@ -702,24 +757,24 @@ export function BoardSurface({ theme, layout, navigation, host }: PluginSurfaceP
           <Text style={styles.mutedLabel}>Refresh</Text>
         </Pressable>
       </View>
-      <View style={styles.stats}>
-        {[
-          { label: "Agents", value: activeAgents.length },
-          { label: "Tasks", value: board.tasks.length },
-          { label: "Human notes", value: attentionCount },
-        ].map((item) => (
-          <View key={item.label} style={styles.stat}>
-            <Text style={styles.statValue}>{item.value}</Text>
-            <Text style={styles.replyMetadata}>{item.label}</Text>
-          </View>
-        ))}
-      </View>
+      {team !== null ? (
+        <View style={styles.stats}>
+          {[
+            { label: "Agents", value: activeAgents.length },
+            { label: "Tasks", value: board.tasks.length },
+            { label: "Human notes", value: attentionCount },
+          ].map((item) => (
+            <View key={item.label} style={styles.stat}>
+              <Text style={styles.statValue}>{item.value}</Text>
+              <Text style={styles.replyMetadata}>{item.label}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
       <View style={styles.agents}>
         <View style={styles.agentHeader}>
-          <Text style={styles.heading}>Agents</Text>
-          <Text style={styles.metadata}>
-            {board.agents.filter((agent) => !agent.retired).length}
-          </Text>
+          <Text style={styles.heading}>{team === null ? "Planners" : "Agents"}</Text>
+          <Text style={styles.metadata}>{activeAgents.length}</Text>
         </View>
         {activeAgents.length === 0 ? (
           <Text style={styles.muted}>Create a planner to start a Swarm workspace.</Text>
@@ -727,8 +782,8 @@ export function BoardSurface({ theme, layout, navigation, host }: PluginSurfaceP
           activeAgents.map((agent) => (
             <ValuePressable
               key={agent.paseoAgentId}
-              value={agent.paseoAgentId}
-              onValuePress={openBoardAgent}
+              value={team === null ? (agent.qualifiedName ?? agent.name) : agent.paseoAgentId}
+              onValuePress={team === null ? chooseTeam : openBoardAgent}
               style={styles.agentRow}
             >
               <View style={agent.roleClass === "planner" ? styles.plannerDot : styles.agentDot} />
@@ -744,35 +799,49 @@ export function BoardSurface({ theme, layout, navigation, host }: PluginSurfaceP
           ))
         )}
       </View>
-      <Text style={styles.tasksHeading}>Tasks</Text>
-      {statuses.length === 0 ? (
-        <Text style={styles.muted}>No Tasks yet.</Text>
-      ) : (
-        statuses.map((status) => (
-          <View key={status} style={styles.statusGroup}>
-            <Text style={styles.statusHeading}>{status}</Text>
-            {board.tasks
-              .filter((task) => task.status === status)
-              .map((task) => (
-                <ValuePressable
-                  key={task.id}
-                  value={task.id}
-                  onValuePress={setSelectedTaskId}
-                  style={styles.taskCard}
-                >
-                  <Text style={styles.label}>{task.title}</Text>
-                  <Text style={styles.taskIdentity}>
-                    {task.id} · {task.managerName} · {task.workerNames.join(", ") || "unassigned"}
-                  </Text>
-                  <Text style={styles.mutedBelow}>
-                    {board.activities.filter((activity) => activity.taskId === task.id).length}{" "}
-                    activities
-                  </Text>
-                </ValuePressable>
-              ))}
-          </View>
-        ))
-      )}
+      {team === null ? (
+        <ValuePressable value="" onValuePress={chooseTeam}>
+          <Text style={styles.back}>Unattributed Tasks</Text>
+        </ValuePressable>
+      ) : null}
+      {team !== null ? (
+        <>
+          <Text style={styles.tasksHeading}>Tasks</Text>
+          {statuses.length === 0 ? (
+            <Text style={styles.muted}>No Tasks yet.</Text>
+          ) : (
+            statuses.map((status) => (
+              <View key={status} style={styles.statusGroup}>
+                <Text style={styles.statusHeading}>
+                  {declaredStatuses.length && !declaredStatuses.includes(status)
+                    ? `Undeclared status · ${status}`
+                    : status}
+                </Text>
+                {board.tasks
+                  .filter((task) => task.status === status)
+                  .map((task) => (
+                    <ValuePressable
+                      key={task.id}
+                      value={task.id}
+                      onValuePress={setSelectedTaskId}
+                      style={styles.taskCard}
+                    >
+                      <Text style={styles.label}>{task.title}</Text>
+                      <Text style={styles.taskIdentity}>
+                        {task.id} · {task.managerName} ·{" "}
+                        {task.workerNames.join(", ") || "unassigned"}
+                      </Text>
+                      <Text style={styles.mutedBelow}>
+                        {board.activities.filter((activity) => activity.taskId === task.id).length}{" "}
+                        activities
+                      </Text>
+                    </ValuePressable>
+                  ))}
+              </View>
+            ))
+          )}
+        </>
+      ) : null}
     </ScrollView>
   );
 }

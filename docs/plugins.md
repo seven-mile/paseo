@@ -107,6 +107,14 @@ the checkout source, while packaged reloads recompile the shipped entry. Changes
 raw Swarm server modules require rebuilding that packaged entry before reload. The embedded
 PWA directory is content only and does not configure a runtime source.
 
+Configure Swarm with a Project's PWA content parent directory. Each discovered `PWA.md` owns its
+directory and explicitly maps role aliases to relative files; shared role files may live elsewhere
+inside that content root. A planner selects one directory, and children inherit their actual
+manager's binding. Defaults only preselect new planners. Moving a directory requires explicit
+reselection; changing a default or editing files never rewrites existing prompts or Task statuses.
+Team boards use the bound planner's current status columns and retain old values in an undeclared
+status section. An unreadable PWA preserves the Tasks and reports the source error.
+
 Swarm planners must prepare a separate workspace and pass its `workspaceId` when creating
 a supervisor. This keeps supervisor execution out of the planner's workspace; omitting placement
 does not bypass the separation. Supervisor-created workers still default to the supervisor's
