@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { resolveCliInstallSourcePath } from "./path";
+import { afterEach, describe, expect, it } from "vitest";
+import { mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { installCliTarget, isOwnedCliTarget, resolveCliInstallSourcePath } from "./path";
 
 describe("cli-install-path", () => {
   it("uses the bundled shim for packaged macOS installs", () => {
@@ -54,5 +57,46 @@ describe("cli-install-path", () => {
         shimPath: "/opt/Paseo/resources/bin/paseo",
       }),
     ).toBe("/opt/Paseo/resources/bin/paseo");
+  });
+});
+
+const roots: string[] = [];
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+describe("CLI entry ownership", () => {
+  it.each(process.platform === "win32" ? (["win32"] as const) : (["linux", "win32"] as const))(
+    "installs idempotently and rejects foreign entries on %s",
+    async (platform) => {
+      const root = await mkdtemp(join(tmpdir(), "swarm-cli-install-"));
+      roots.push(root);
+      const target = join(root, "paseo-swarm");
+      const source = join(root, "desktop-shim");
+      expect(await isOwnedCliTarget(target, source, platform)).toBe(false);
+      await installCliTarget(target, source, platform);
+      await installCliTarget(target, source, platform);
+      expect(await isOwnedCliTarget(target, source, platform)).toBe(true);
+      await rm(target);
+      await writeFile(target, "npm-owned");
+      expect(await isOwnedCliTarget(target, source, platform)).toBe(false);
+      await expect(installCliTarget(target, source, platform)).rejects.toThrow(
+        "Refusing to replace",
+      );
+      expect(await readFile(target, "utf8")).toBe("npm-owned");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("preserves foreign and dangling npm links", async () => {
+    const root = await mkdtemp(join(tmpdir(), "swarm-cli-links-"));
+    roots.push(root);
+    const target = join(root, "paseo-swarm");
+    const foreign = join(root, "missing-npm-bin");
+    await symlink(foreign, target);
+    expect(await isOwnedCliTarget(target, join(root, "desktop-shim"), "linux")).toBe(false);
+    await expect(installCliTarget(target, join(root, "desktop-shim"), "linux")).rejects.toThrow(
+      "Refusing to replace",
+    );
+    expect(await readlink(target)).toBe(foreign);
   });
 });

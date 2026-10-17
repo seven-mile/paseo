@@ -1,10 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { delimiter, join, relative } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isPlatform } from "../../../test-utils/platform.js";
-import { buildTerminalEnvironment } from "../../terminal.js";
+import {
+  buildTerminalEnvironment,
+  resolvePaseoCliExecutablePath,
+  resolveWorkspaceCliBin,
+  resolvePaseoCliShim,
+} from "../../terminal.js";
 import { buildAgentHookShellCommand } from "../agent-hook-installer.js";
 import {
   AGENT_HOOK_PROVIDERS,
@@ -15,6 +21,7 @@ import {
 
 const temporaryDirs: string[] = [];
 afterEach(() => {
+  vi.unstubAllEnvs();
   while (temporaryDirs.length > 0) {
     const dir = temporaryDirs.pop();
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -64,6 +71,39 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+describe("CLI resolution", () => {
+  it("uses the workspace CLI rather than an inherited upstream hook path", () => {
+    vi.stubEnv("PASEO_CLI", "");
+    vi.stubEnv("PASEO_HOOK_CLI", "/foreign/paseo");
+    expect(realpathSync(resolvePaseoCliExecutablePath()!)).toBe(
+      realpathSync(fileURLToPath(new URL("../../../../../cli/bin/paseo", import.meta.url))),
+    );
+  });
+  it("resolves both source and compiled workspace layouts", () => {
+    const expected = fileURLToPath(new URL("../../../../../cli/bin/paseo", import.meta.url));
+    expect(resolveWorkspaceCliBin(import.meta.url)).toBe(expected);
+    expect(
+      resolveWorkspaceCliBin(
+        new URL("../../../../dist/server/terminal/terminal.js", import.meta.url).href,
+      ),
+    ).toBe(expected);
+  });
+  it("accepts only Windows npm shims pointing at this CLI", () => {
+    const binDir = createTempDir("swarm-cli-win-shim-");
+    const cliEntry = join(binDir, "node_modules", "@paseo-swarm", "cli", "bin", "paseo");
+    const shim = join(binDir, "paseo-swarm.cmd");
+    writeFileSync(shim, '@echo off\r\nnode "%dp0%/node_modules/@getpaseo/cli/bin/paseo" %*');
+    expect(resolvePaseoCliShim(binDir, cliEntry, "win32")).toBeNull();
+    writeFileSync(shim, `@echo off\r\nnode "%dp0%/${relative(binDir, cliEntry)}" %*`);
+    expect(resolvePaseoCliShim(binDir, cliEntry, "win32")).toBe(shim);
+  });
+  it("preserves an explicit CLI override", () => {
+    const wrapper = join(createTempDir("swarm-cli-override-"), "cli-wrapper");
+    vi.stubEnv("PASEO_CLI", wrapper);
+    expect(resolvePaseoCliExecutablePath()).toBe(wrapper);
+  });
+});
+
 describe("Claude terminal agent hooks", () => {
   it("installs registered provider hooks idempotently", () => {
     const configDir = createTempDir("paseo-claude-config-");
@@ -80,7 +120,7 @@ describe("Claude terminal agent hooks", () => {
       );
       expect(paseoCommands).toHaveLength(1);
       expect(paseoCommands[0]).toBe(
-        `if [ -n "$PASEO_TERMINAL_ID" ]; then "\${PASEO_HOOK_CLI:-paseo}" hooks ${provider.id} ${event.event}; fi`,
+        `if [ -n "$PASEO_TERMINAL_ID" ]; then "\${PASEO_HOOK_CLI:-paseo-swarm}" hooks ${provider.id} ${event.event}; fi`,
       );
     }
     expect(registeredAgentHooksAreInstalled({ configDir })).toBe(true);
@@ -145,7 +185,7 @@ describe("Claude terminal agent hooks", () => {
     const command = buildAgentHookShellCommand(provider, provider.events[0]);
 
     expect(command).toBe(
-      'if [ -n "$PASEO_TERMINAL_ID" ]; then "${PASEO_HOOK_CLI:-paseo}" hooks claude UserPromptSubmit; fi',
+      'if [ -n "$PASEO_TERMINAL_ID" ]; then "${PASEO_HOOK_CLI:-paseo-swarm}" hooks claude UserPromptSubmit; fi',
     );
   });
 

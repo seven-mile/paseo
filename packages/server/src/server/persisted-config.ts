@@ -342,20 +342,22 @@ export type PersistedConfig = Omit<PersistedConfigSchemaOutput, "agents"> & {
   };
 };
 
+export const DEFAULT_APP_BASE_URL = "https://paseo.7li.moe";
+
 const CONFIG_FILENAME = "config.json";
 const DEFAULT_PERSISTED_CONFIG = PersistedConfigSchema.parse({
   version: 1,
   daemon: {
-    listen: "127.0.0.1:6767",
+    listen: "127.0.0.1:6769",
     cors: {
-      allowedOrigins: ["https://app.paseo.sh"],
+      allowedOrigins: [DEFAULT_APP_BASE_URL],
     },
     relay: {
       enabled: false,
     },
   },
   app: {
-    baseUrl: "https://app.paseo.sh",
+    baseUrl: DEFAULT_APP_BASE_URL,
   },
 }) as PersistedConfig;
 

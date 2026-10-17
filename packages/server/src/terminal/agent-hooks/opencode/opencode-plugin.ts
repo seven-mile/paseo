@@ -35,7 +35,7 @@ export const OPENCODE_PLUGIN_SOURCE = [
   "  if (!process.env.PASEO_TERMINAL_ID) return;",
   "  pendingHook = pendingHook.then(async () => {",
   "    try {",
-  '      const child = Bun.spawn(["paseo", "hooks", "opencode", event], {',
+  '      const child = Bun.spawn([process.env.PASEO_HOOK_CLI || "paseo-swarm", "hooks", "opencode", event], {',
   '        stdin: "ignore",',
   '        stdout: "ignore",',
   '        stderr: "ignore",',

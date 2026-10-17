@@ -5,7 +5,7 @@ import { z } from "zod";
 
 interface ResolvePackageVersionParams {
   moduleUrl?: string;
-  packageName: string;
+  packageName: string | readonly string[];
 }
 
 export const packageJsonSchema = z.object({
@@ -29,7 +29,7 @@ export class PackageVersionResolutionError extends Error {
 
 function readMatchingPackageVersion(
   packageJsonPath: string,
-  packageName: string,
+  packageNames: readonly string[],
   moduleUrl: string,
 ): string | null {
   let packageJson: PackageJson;
@@ -40,23 +40,25 @@ function readMatchingPackageVersion(
   } catch {
     return null;
   }
-  if (packageJson.name !== packageName) {
+  if (!packageNames.includes(packageJson.name ?? "")) {
     return null;
   }
   if (typeof packageJson.version === "string" && packageJson.version.trim().length > 0) {
     return packageJson.version.trim();
   }
-  throw new PackageVersionResolutionError({ moduleUrl, packageName });
+  throw new PackageVersionResolutionError({ moduleUrl, packageName: packageNames.join(" or ") });
 }
 
 export function resolvePackageVersion(params: ResolvePackageVersionParams): string {
   const moduleUrl = params.moduleUrl ?? import.meta.url;
+  const packageNames =
+    typeof params.packageName === "string" ? [params.packageName] : params.packageName;
   let currentDir = path.dirname(fileURLToPath(moduleUrl));
 
   while (true) {
     const packageJsonPath = path.join(currentDir, "package.json");
     if (existsSync(packageJsonPath)) {
-      const version = readMatchingPackageVersion(packageJsonPath, params.packageName, moduleUrl);
+      const version = readMatchingPackageVersion(packageJsonPath, packageNames, moduleUrl);
       if (version !== null) {
         return version;
       }
@@ -71,6 +73,6 @@ export function resolvePackageVersion(params: ResolvePackageVersionParams): stri
 
   throw new PackageVersionResolutionError({
     moduleUrl,
-    packageName: params.packageName,
+    packageName: packageNames.join(" or "),
   });
 }

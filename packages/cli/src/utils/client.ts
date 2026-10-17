@@ -69,7 +69,7 @@ function describeConnectionRemedy(code: string, target: DaemonTarget): string {
   if (code === "AUTH_FAILED")
     return "The daemon rejected the password. Check PASEO_PASSWORD and retry.";
   if (target.kind === "instance")
-    return `Start with: paseo daemon start --home ${JSON.stringify(target.home)}`;
+    return `Start with: paseo-swarm daemon start --home ${JSON.stringify(target.home)}`;
   return "Check the selected endpoint and credentials. SSH transport does not install or start the daemon.";
 }
 
@@ -313,7 +313,9 @@ async function connectSelectedDaemon(options: ConnectOptions): Promise<DaemonCli
   const nodeWebSocketFactory = createNodeWebSocketFactory();
 
   if (explicitHost?.trim().startsWith("ssh://")) {
+    const uri = new URL(explicitHost.trim());
     const target = parseSshTransportUri(explicitHost.trim());
+    if (!uri.searchParams.has("daemonPort")) target.daemonPort = 6769;
     const tunnel = await createSshTunnel(target);
     const password = resolveDaemonPassword(explicitHost);
     const result = await tryConnectHost(
