@@ -6,8 +6,13 @@ import {
   filterSwarmParents,
   resolveSwarmParent,
   openSwarmPreparation,
+  openSwarmCreationFormDraft,
+  resolveSwarmCheckoutSelection,
+  changeSwarmCreationParent,
+  swarmPreparedAgentSchema,
   reconcileSwarmCreationDraft,
   swarmPwaSourceIdentity,
+  resolveSwarmPwaSelection,
   type SwarmCreationDraft,
   type SwarmParentChoice,
 } from "./parent-selection";
@@ -145,6 +150,22 @@ describe("Swarm parent selection", () => {
 });
 
 describe("prepared Swarm creation identity", () => {
+  it("retains a legacy prepared UUID/prompt when parentAgentId is absent", async () => {
+    const preparation = openSwarmPreparation((id) => id);
+    let calls = 0;
+    const create = async () => {
+      calls += 1;
+      return swarmPreparedAgentSchema.parse({ agentId: "reserved-old", systemPrompt: "unchanged" });
+    };
+    const original = await preparation.prepare("legacy", create);
+    expect(original).toEqual({
+      agentId: "reserved-old",
+      systemPrompt: "unchanged",
+      parentAgentId: null,
+    });
+    expect(await preparation.prepare("legacy", create)).toBe(original);
+    expect(calls).toBe(1);
+  });
   it("reuses the same prompt/UUID after native failure and rejects a changed submission", async () => {
     const reservation = openSwarmPreparation((id) => `Resolve ${id}`);
     const prepared = {
@@ -291,4 +312,172 @@ describe("creation hydration and inherited source identity", () => {
       swarmPwaSourceIdentity("planner", "/discovery-a", "other-team", undefined),
     );
   });
+});
+
+describe("effective inherited PWA selection", () => {
+  const root = {
+    path: "/root",
+    defaultPwa: "team",
+    discoveryAvailable: true,
+    complete: true,
+    errors: [],
+    entries: [
+      { directory: ".", title: "Legacy root", roles: [], statuses: [] },
+      { directory: "team", title: "Team", roles: [], statuses: [] },
+    ],
+  };
+  it("uses only the valid root for an unbound parent, never a default or first team", () => {
+    expect(resolveSwarmPwaSelection(root, "worker", parents[0], "team")).toMatchObject({
+      canReadRoles: true,
+      inheritedDirectory: "/root",
+    });
+    expect(
+      resolveSwarmPwaSelection(
+        { ...root, entries: root.entries.slice(1) },
+        "worker",
+        parents[0],
+        "team",
+      ),
+    ).toMatchObject({ canReadRoles: false, inheritedDirectory: undefined, needsBinding: true });
+    expect(
+      resolveSwarmPwaSelection(
+        { ...root, entries: [], discoveryAvailable: false },
+        "worker",
+        parents[0],
+        "",
+      ),
+    ).toMatchObject({ canReadRoles: true, inheritedDirectory: "/root" });
+    expect(
+      resolveSwarmPwaSelection(
+        { ...root, entries: [], rootError: "Read failed" },
+        "worker",
+        parents[0],
+        "",
+      ),
+    ).toMatchObject({ canReadRoles: false, needsBinding: false });
+  });
+  it("keeps a complete explicit binding ahead of unrelated Project root/default changes", () => {
+    const parent = {
+      ...parents[0],
+      pwaBinding: { projectId: "p", contentRoot: "/bound", directory: "/bound/team" },
+    };
+    expect(resolveSwarmPwaSelection(root, "worker", parent, "team")).toMatchObject({
+      inheritedDirectory: "/bound/team",
+      canReadRoles: true,
+      needsBinding: false,
+    });
+    expect(swarmPwaSourceIdentity("worker", "/a", "team", undefined)).not.toBe(
+      swarmPwaSourceIdentity("worker", "/b", "team", undefined),
+    );
+  });
+});
+
+it("does not infer missing root binding from a partial discovery budget failure", () => {
+  const partial = {
+    path: "/root",
+    defaultPwa: "team",
+    discoveryAvailable: true,
+    complete: false,
+    errors: [{ directory: "unvisited", error: "Discovery budget exceeded" }],
+    entries: [{ directory: "team", title: "Team", roles: [], statuses: [] }],
+  };
+  expect(resolveSwarmPwaSelection(partial, "worker", parents[0], "team")).toMatchObject({
+    canReadRoles: false,
+    needsBinding: false,
+  });
+  expect(
+    resolveSwarmPwaSelection({ ...partial, complete: true }, "worker", parents[0], "team"),
+  ).toMatchObject({ canReadRoles: false, needsBinding: true });
+  const root = { directory: ".", title: "Root", roles: [], statuses: [] };
+  expect(
+    resolveSwarmPwaSelection(
+      { ...partial, entries: [root, ...partial.entries] },
+      "worker",
+      parents[0],
+      "team",
+    ),
+  ).toMatchObject({ canReadRoles: true, needsBinding: false });
+  expect(
+    resolveSwarmPwaSelection(
+      { ...partial, entries: [{ ...root, error: "Unreadable root PWA" }, ...partial.entries] },
+      "worker",
+      parents[0],
+      "team",
+    ),
+  ).toMatchObject({ canReadRoles: false, needsBinding: true });
+});
+
+describe("Swarm wizard draft remount lifetime", () => {
+  it("keeps explicit edits across subscribers and preserves role on the same parent only", () => {
+    const form = openSwarmCreationFormDraft("supervisor");
+    const selection: SwarmCreationDraft = {
+      key: "host:project:supervisor",
+      serverId: "host",
+      roleClass: "supervisor",
+      hasProject: true,
+      hasResolvedProject: true,
+      directory: "team-a",
+      role: "legacy-supervisor",
+      parent: "qa-planner",
+    };
+    let publications = 0;
+    const unsubscribe = form.subscribe(() => {
+      publications += 1;
+    });
+    form.setName("qa-created-supervisor");
+    form.setSelection(selection);
+    unsubscribe();
+    const remounted = form.getSnapshot();
+    expect(remounted).toEqual({
+      name: "qa-created-supervisor",
+      selection,
+      manualHost: null,
+      projectSelection: null,
+      isolation: null,
+      checkout: null,
+    });
+    expect(publications).toBe(2);
+    const sameParent = changeSwarmCreationParent(remounted.selection!, "qa-planner");
+    expect(sameParent).toBe(selection);
+    form.setSelection(sameParent);
+    expect(form.getSnapshot()).toBe(remounted);
+    form.setSelection(changeSwarmCreationParent(selection, "other-planner"));
+    expect(form.getSnapshot()).toMatchObject({
+      name: "qa-created-supervisor",
+      selection: { parent: "other-planner", role: "", directory: "team-a" },
+    });
+    expect(openSwarmCreationFormDraft("supervisor").getSnapshot()).toEqual({
+      name: "supervisor",
+      selection: null,
+      manualHost: null,
+      projectSelection: null,
+      isolation: null,
+      checkout: null,
+    });
+  });
+});
+
+it("retains isolation and checkout only for the real creation target", () => {
+  const form = openSwarmCreationFormDraft("worker");
+  const targetB = JSON.stringify(["other-host", "/work/b"]);
+  const targetA = JSON.stringify(["host", "/work/a"]);
+  const branch = {
+    kind: "branch",
+    name: "feature",
+    refName: "refs/heads/feature",
+    accessibilityLabel: "feature",
+  } as const;
+  form.setHost({ routeServerId: "host", serverId: "other-host" });
+  form.setIsolation("worktree");
+  form.dispatchCheckout(targetB, { type: "picker-selected", item: branch });
+  const remounted = form.getSnapshot();
+  expect(remounted.manualHost).toEqual({ routeServerId: "host", serverId: "other-host" });
+  expect(remounted.isolation).toBe("worktree");
+  expect(resolveSwarmCheckoutSelection(remounted.checkout, targetB).selectedItem).toBe(branch);
+  expect(resolveSwarmCheckoutSelection(remounted.checkout, targetA).selectedItem).toBeNull();
+  form.dispatchCheckout(targetB, { type: "target-changed" });
+  expect(
+    resolveSwarmCheckoutSelection(form.getSnapshot().checkout, targetB).selectedItem,
+  ).toBeNull();
+  expect(openSwarmCreationFormDraft("worker").getSnapshot().checkout).toBeNull();
 });

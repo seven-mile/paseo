@@ -5,6 +5,7 @@ import {
   lstatSync,
   opendirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   statSync,
 } from "node:fs";
@@ -161,6 +162,20 @@ function readHeader(directory: string, contentRoot: string): Header {
 
 function readEntry(directory: string, contentRoot: string): Entry {
   const header = readHeader(directory, contentRoot);
+  // Schema v1 supports roles/<slug>.md discovery when the optional alias map is absent.
+  if (header.data.roles === undefined) {
+    const canonical = resolvePwaDirectory(directory, contentRoot);
+    const rolesDirectory = realpathSync(join(canonical, "roles"));
+    assertWithin(realpathSync(contentRoot), rolesDirectory);
+    const roles: Record<string, string> = {};
+    for (const entry of readdirSync(rolesDirectory, { withFileTypes: true })) {
+      if ((!entry.isFile() && !entry.isSymbolicLink()) || !entry.name.endsWith(".md")) continue;
+      const role = entry.name.slice(0, -3);
+      validateRole(role);
+      roles[role] = join("roles", entry.name);
+    }
+    return { ...header, roles };
+  }
   const declared = record(header.data.roles, "PWA.md roles");
   const roles: Record<string, string> = {};
   for (const [alias, value] of Object.entries(declared)) {

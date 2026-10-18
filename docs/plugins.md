@@ -108,12 +108,15 @@ raw Swarm server modules require rebuilding that packaged entry before reload. T
 PWA directory is content only and does not configure a runtime source.
 
 Configure Swarm with a Project's PWA content parent directory. Each discovered `PWA.md` owns its
-directory and explicitly maps role aliases to relative files; shared role files may live elsewhere
-inside that content root. A planner selects one directory, and children inherit their actual
-manager's binding. Defaults only preselect new planners. Moving a directory requires explicit
+directory and may map role aliases to relative files; without a map, `roles/<slug>.md` remains
+supported. Shared role files must stay inside the content root. A planner selects one directory,
+and children inherit their actual manager's binding. A legacy source pointing at a PWA itself
+can still supply that workflow without saving a binding on read. Defaults only preselect new planners. Moving a directory requires explicit
 reselection; changing a default or editing files never rewrites existing prompts or Task statuses.
 Team boards use the bound planner's current status columns and retain old values in an undeclared
-status section. An unreadable PWA preserves the Tasks and reports the source error.
+status section. An unreadable PWA preserves the Tasks and reports the source error. Project board
+reads retain the full record arrays for clients that filter locally; `teamScopes` advertises scoped
+workflow reads. Source previews are read-only and never save a default or change a binding.
 
 Swarm planners must prepare a separate workspace and pass its `workspaceId` when creating
 a supervisor. This keeps supervisor execution out of the planner's workspace; omitting placement

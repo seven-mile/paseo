@@ -14,6 +14,7 @@ import {
   reconcileProjectSelection,
   resolveInitialProjectSelectionSource,
   resolveProjectSelection,
+  resolveProjectPickerSelection,
   type ProjectSelection,
   type ProjectSelectionContext,
 } from "./project-selection";
@@ -27,6 +28,8 @@ interface NewWorkspaceProjectPickerInput {
   routeProjectContextViewKey: string | null;
   lastActiveProject: HostProjectListItem | null;
   allowAllProjects: boolean;
+  retainedSelection?: ProjectSelection | null;
+  onRetainSelection?: (selection: ProjectSelection) => void;
 }
 
 interface NewWorkspaceProjectPickerState {
@@ -88,6 +91,8 @@ export function useNewWorkspaceProjectPicker({
   routeProjectContextViewKey,
   lastActiveProject,
   allowAllProjects,
+  retainedSelection,
+  onRetainSelection,
 }: NewWorkspaceProjectPickerInput): NewWorkspaceProjectPickerState {
   const selectableProjects = useMemo(
     () =>
@@ -157,7 +162,11 @@ export function useNewWorkspaceProjectPicker({
     setProjectSelection((current) => reconcileProjectSelection(current, selectionContext));
   }, [selectionContext]);
 
-  const activeSelection = reconcileProjectSelection(projectSelection, selectionContext);
+  const activeSelection = resolveProjectPickerSelection(
+    projectSelection,
+    retainedSelection,
+    selectionContext,
+  );
   const selectedProject = resolveProjectSelection(activeSelection, selectionContext);
   const { options: projectPickerOptions, projectByOptionId } = useMemo(
     () => computeProjectOptionData(selectableProjects),
@@ -172,14 +181,16 @@ export function useNewWorkspaceProjectPicker({
         !project.hosts.some((host) => host.worktreeSupport !== "unsupported")
       )
         return;
-      setProjectSelection({
+      const selection: ProjectSelection = {
         contextKey: manualSelectionContextKey,
         project,
         originProject: project,
         source: "manual",
-      });
+      };
+      setProjectSelection(selection);
+      onRetainSelection?.(selection);
     },
-    [allowAllProjects, manualSelectionContextKey, projectByOptionId],
+    [allowAllProjects, manualSelectionContextKey, onRetainSelection, projectByOptionId],
   );
 
   return {

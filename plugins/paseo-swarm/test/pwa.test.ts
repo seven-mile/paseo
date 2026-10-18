@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { test } from "node:test";
 import { initialPrompt } from "../server/prompts";
 import { discoverPwas, listPwaRoles, readPwa, readPwaStatuses } from "../server/pwa";
@@ -53,6 +53,29 @@ test("listPwaRoles returns validated role metadata", () => {
     );
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy roles directories remain discoverable without a roles map and retain containment", () => {
+  const directory = fixture();
+  const outside = fixture();
+  try {
+    const entry = readFileSync(join(directory, "PWA.md"), "utf8");
+    writeFileSync(join(directory, "PWA.md"), entry.replace(/roles:\n(?:  .*\n)+/, ""));
+    assert.deepEqual(
+      listPwaRoles(directory).map((role) => role.role),
+      ["developer", "supervisor"],
+    );
+    assert.equal(readPwa(directory, "developer").roleBody, "Developer guidance.");
+    symlinkSync(join(outside, "roles", "developer.md"), join(directory, "roles", "escape.md"));
+    assert.throws(() => readPwa(directory, "escape"), /outside content root/);
+    rmSync(join(directory, "roles", "escape.md"));
+    writeFileSync(join(directory, "PWA.md"), entry.replace(/roles:\n(?:  .*\n)+/, "roles: {}\n"));
+    assert.deepEqual(listPwaRoles(directory), []);
+    assert.throws(() => readPwa(directory, "developer"), /Missing role/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });
 
@@ -403,6 +426,8 @@ test("canonical bindings survive default and parent configuration changes, but n
       "planner",
     );
     const configPath = getConfigPath();
+    writeFileSync(configPath, JSON.stringify({ pwaRoot: relative(process.cwd(), root) }));
+    assert.deepEqual(readPwaSourceConfig("project", home), { path: root, defaultPwa: null });
     writeFileSync(configPath, JSON.stringify({ projectSources: { project: "content" } }));
     assert.throws(() => readPwaSourceConfig("project"), /Missing project root/);
     assert.deepEqual(readPwaSourceConfig("project", home), { path: root, defaultPwa: null });

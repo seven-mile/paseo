@@ -757,20 +757,18 @@ export function BoardSurface({ theme, layout, navigation, host }: PluginSurfaceP
           <Text style={styles.mutedLabel}>Refresh</Text>
         </Pressable>
       </View>
-      {team !== null ? (
-        <View style={styles.stats}>
-          {[
-            { label: "Agents", value: activeAgents.length },
-            { label: "Tasks", value: board.tasks.length },
-            { label: "Human notes", value: attentionCount },
-          ].map((item) => (
-            <View key={item.label} style={styles.stat}>
-              <Text style={styles.statValue}>{item.value}</Text>
-              <Text style={styles.replyMetadata}>{item.label}</Text>
-            </View>
-          ))}
-        </View>
-      ) : null}
+      <View style={styles.stats}>
+        {[
+          { label: "Agents", value: activeAgents.length },
+          { label: "Tasks", value: board.tasks.length },
+          { label: "Human notes", value: attentionCount },
+        ].map((item) => (
+          <View key={item.label} style={styles.stat}>
+            <Text style={styles.statValue}>{item.value}</Text>
+            <Text style={styles.replyMetadata}>{item.label}</Text>
+          </View>
+        ))}
+      </View>
       <View style={styles.agents}>
         <View style={styles.agentHeader}>
           <Text style={styles.heading}>{team === null ? "Planners" : "Agents"}</Text>
@@ -804,44 +802,41 @@ export function BoardSurface({ theme, layout, navigation, host }: PluginSurfaceP
           <Text style={styles.back}>Unattributed Tasks</Text>
         </ValuePressable>
       ) : null}
-      {team !== null ? (
-        <>
-          <Text style={styles.tasksHeading}>Tasks</Text>
-          {statuses.length === 0 ? (
-            <Text style={styles.muted}>No Tasks yet.</Text>
-          ) : (
-            statuses.map((status) => (
-              <View key={status} style={styles.statusGroup}>
-                <Text style={styles.statusHeading}>
-                  {declaredStatuses.length && !declaredStatuses.includes(status)
-                    ? `Undeclared status · ${status}`
-                    : status}
-                </Text>
-                {board.tasks
-                  .filter((task) => task.status === status)
-                  .map((task) => (
-                    <ValuePressable
-                      key={task.id}
-                      value={task.id}
-                      onValuePress={setSelectedTaskId}
-                      style={styles.taskCard}
-                    >
-                      <Text style={styles.label}>{task.title}</Text>
-                      <Text style={styles.taskIdentity}>
-                        {task.id} · {task.managerName} ·{" "}
-                        {task.workerNames.join(", ") || "unassigned"}
-                      </Text>
-                      <Text style={styles.mutedBelow}>
-                        {board.activities.filter((activity) => activity.taskId === task.id).length}{" "}
-                        activities
-                      </Text>
-                    </ValuePressable>
-                  ))}
-              </View>
-            ))
-          )}
-        </>
-      ) : null}
+      <>
+        <Text style={styles.tasksHeading}>Tasks</Text>
+        {statuses.length === 0 ? (
+          <Text style={styles.muted}>No Tasks yet.</Text>
+        ) : (
+          statuses.map((status) => (
+            <View key={status} style={styles.statusGroup}>
+              <Text style={styles.statusHeading}>
+                {declaredStatuses.length && !declaredStatuses.includes(status)
+                  ? `Undeclared status · ${status}`
+                  : status}
+              </Text>
+              {board.tasks
+                .filter((task) => task.status === status)
+                .map((task) => (
+                  <ValuePressable
+                    key={task.id}
+                    value={task.id}
+                    onValuePress={setSelectedTaskId}
+                    style={styles.taskCard}
+                  >
+                    <Text style={styles.label}>{task.title}</Text>
+                    <Text style={styles.taskIdentity}>
+                      {task.id} · {task.managerName} · {task.workerNames.join(", ") || "unassigned"}
+                    </Text>
+                    <Text style={styles.mutedBelow}>
+                      {board.activities.filter((activity) => activity.taskId === task.id).length}{" "}
+                      activities
+                    </Text>
+                  </ValuePressable>
+                ))}
+            </View>
+          ))
+        )}
+      </>
     </ScrollView>
   );
 }

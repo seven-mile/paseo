@@ -69,6 +69,7 @@ const agentSchema = z.object({
   roleClass: z.enum(["planner", "supervisor", "worker"]),
   reportsTo: z.string().nullable(),
   workspaceId: z.string().nullable(),
+  projectId: z.string().optional(),
   retired: z.boolean(),
   pwaBinding: z
     .object({ projectId: z.string().optional(), contentRoot: z.string(), directory: z.string() })
@@ -105,6 +106,7 @@ export const swarmTaskBoardSchema = z.object({
   statuses: z.array(z.string()).optional(),
   pwaError: z.string().optional(),
   unassignedTaskCount: z.number().optional(),
+  teamScopes: z.boolean().optional(),
   agents: z.array(agentSchema),
   tasks: z.array(taskSchema),
   activities: z.array(activitySchema),
@@ -113,6 +115,7 @@ export type SwarmTaskBoard = z.infer<typeof swarmTaskBoardSchema>;
 export type SwarmTask = SwarmTaskBoard["tasks"][number];
 export type SwarmActivity = SwarmTaskBoard["activities"][number];
 export type SwarmTaskAgent = SwarmTaskBoard["agents"][number];
+export const SWARM_UNASSIGNED_SCOPE = "@unassigned";
 
 export function defaultSwarmTaskScope(
   board: SwarmTaskBoard,
@@ -143,8 +146,10 @@ export function swarmBoardTarget(
     workspaceId: string;
     defaultAgentId?: string;
     explorer?: boolean;
+    unassigned?: boolean;
   },
 ) {
+  if (selection.unassigned) return { teamName: undefined, unassigned: true };
   let name = selection.agentName ?? selection.plannerName;
   if (name === "") return { teamName: undefined, unassigned: false };
   if (!name && selection.taskId) {
@@ -272,26 +277,30 @@ function agentScope(
 ) {
   const agentIds = new Set<string>();
   let workspaceId: string | null = null;
+  let projectId: string | undefined;
   let agent = findSwarmTaskAgent(agents, reference);
   while (agent && !agentIds.has(agent.paseoAgentId)) {
     agentIds.add(agent.paseoAgentId);
+    if (!workspaceId) projectId ??= agent.projectId;
     if (!workspaceId && agent.workspaceId && knownWorkspaces.has(agent.workspaceId))
       workspaceId = agent.workspaceId;
     agent = agent.reportsTo ? findSwarmTaskAgent(agents, agent.reportsTo) : undefined;
   }
-  return { agentIds, workspaceId };
+  return { agentIds, workspaceId, projectId };
 }
 
 export function swarmTaskScopeOptions(
   board: SwarmTaskBoard,
   projectWorkspaceIds: readonly string[],
   knownWorkspaceIds: readonly string[],
+  projectId?: string,
 ) {
   const project = new Set(projectWorkspaceIds);
   const known = new Set(knownWorkspaceIds);
   const agents = board.agents.filter((agent) => {
     if (agent.retired || agent.roleClass === "worker") return false;
     const ownership = agentScope(board.agents, agent.qualifiedName ?? agent.name, known);
+    if (projectId && ownership.projectId) return ownership.projectId === projectId;
     return ownership.workspaceId !== null && project.has(ownership.workspaceId);
   });
   return [
@@ -303,6 +312,9 @@ export function swarmTaskScopeOptions(
         { name: agent.qualifiedName ?? agent.name },
       ),
     })),
+    ...(board.teamScopes === true && board.unassignedTaskCount
+      ? [{ value: SWARM_UNASSIGNED_SCOPE, label: i18n.t("swarm.tasks.unassigned") }]
+      : []),
   ];
 }
 
@@ -311,6 +323,7 @@ export function scopedSwarmTasks(
   scope: {
     projectWorkspaceIds: readonly string[];
     knownWorkspaceIds?: readonly string[];
+    projectId?: string;
     plannerName?: string;
     agentName?: string;
   },
@@ -326,9 +339,12 @@ export function scopedSwarmTasks(
     .filter((task) => {
       // A manager's own known workspace wins before its ancestors' projects.
       const ownership = agentScope(board.agents, task.managerName, knownWorkspaces);
+      const inProject =
+        scope.projectId && ownership.projectId
+          ? ownership.projectId === scope.projectId
+          : ownership.workspaceId !== null && projectWorkspaces.has(ownership.workspaceId);
       return (
-        ownership.workspaceId !== null &&
-        projectWorkspaces.has(ownership.workspaceId) &&
+        inProject &&
         rootAgents.every(
           (root) =>
             root &&
@@ -532,6 +548,7 @@ export function openSwarmTaskSurfaceState() {
   >();
   return {
     isClosed: () => closed,
+    statusFilters: new Map<string, string[]>(),
     view: {
       selectedTaskId: null as string | null,
       visitedTaskIds: [] as string[],

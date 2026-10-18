@@ -50,6 +50,8 @@ export const zhCN: TranslationResources = {
       confirmRequired: "创建子智能体前，请确认父智能体的 PWA 目录。",
       confirmBinding: "确认父智能体 PWA 绑定",
       teamUnavailable: "团队 PWA 不可用：{{reason}}",
+      teamUnavailableTitle: "团队 PWA 不可用",
+      teamUnavailableDescription: "请检查此项目的 PWA 来源。仍可查看任务和活动。",
       contentRoot: "PWA 内容根目录",
     },
     tasks: {

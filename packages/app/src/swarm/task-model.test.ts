@@ -10,6 +10,8 @@ import {
   resolveSwarmTaskReference,
   scopedSwarmTasks,
   swarmTaskScopeOptions,
+  swarmTaskBoardSchema,
+  SWARM_UNASSIGNED_SCOPE,
   swarmTaskColumns,
   swarmBoardTarget,
   swarmHumanActivityReceiptSchema,
@@ -191,6 +193,79 @@ describe("Swarm Task scope", () => {
         ["planner-workspace", "manager-workspace", "other-workspace", "other-manager-workspace"],
       ).map((option) => option.value),
     ).toEqual(["", "planner", "planner.manager"]);
+  });
+  it("accepts an old host's full board and keeps Project/team filtering local", () => {
+    const value = swarmTaskBoardSchema.parse(board());
+    expect(value.teamScopes).toBeUndefined();
+    const placement = {
+      projectWorkspaceIds: ["planner-workspace", "manager-workspace"],
+      knownWorkspaceIds: [
+        "planner-workspace",
+        "manager-workspace",
+        "other-workspace",
+        "other-manager-workspace",
+      ],
+    };
+    expect(scopedSwarmTasks(value, placement).map(taskIdOf)).toEqual(["planner.manager"]);
+    expect(scopedSwarmTasks(value, { ...placement, agentName: "other" })).toEqual([]);
+    expect(
+      scopedSwarmTasks(value, { ...placement, agentName: "planner.manager" }).map(taskIdOf),
+    ).toEqual(["planner.manager"]);
+    // Applying a Task filter must not replace the roster backing the scope picker.
+    expect(
+      swarmTaskScopeOptions(value, placement.projectWorkspaceIds, placement.knownWorkspaceIds).map(
+        (option) => option.value,
+      ),
+    ).toEqual(["", "planner", "planner.manager"]);
+    expect(value.tasks).toHaveLength(2);
+  });
+  it("uses explicit project ownership when a valid team has no known workspace", () => {
+    const value = board();
+    value.agents[0].projectId = "project-a";
+    value.agents[1].workspaceId = null;
+    value.agents[2].projectId = "project-b";
+    value.agents[3].projectId = "project-b";
+    const placement = { projectId: "project-a", projectWorkspaceIds: [], knownWorkspaceIds: [] };
+    expect(scopedSwarmTasks(value, placement).map(taskIdOf)).toEqual(["planner.manager"]);
+    expect(swarmTaskScopeOptions(value, [], [], "project-a").map((option) => option.value)).toEqual(
+      ["", "planner", "planner.manager"],
+    );
+    // The manager's own placement wins even when its parent belongs to another Project.
+    value.agents[1].projectId = "project-b";
+    expect(scopedSwarmTasks(value, placement)).toEqual([]);
+  });
+  it("keeps an old manager's known workspace ahead of a newer ancestor's project", () => {
+    const value = board();
+    value.agents[0].projectId = "project-a";
+    const known = ["planner-workspace", "manager-workspace"];
+    const inProject = (projectId: string, projectWorkspaceIds: string[]) =>
+      scopedSwarmTasks(value, { projectId, projectWorkspaceIds, knownWorkspaceIds: known });
+    expect(inProject("project-a", ["planner-workspace"])).toEqual([]);
+    expect(inProject("project-b", ["manager-workspace"]).map(taskIdOf)).toEqual([
+      "planner.manager",
+    ]);
+    expect(
+      swarmTaskScopeOptions(value, ["planner-workspace"], known, "project-a").map(
+        (option) => option.value,
+      ),
+    ).toEqual(["", "planner"]);
+    expect(
+      swarmTaskScopeOptions(value, ["manager-workspace"], known, "project-b").map(
+        (option) => option.value,
+      ),
+    ).toEqual(["", "planner.manager"]);
+  });
+  it("offers unattributed records only with an explicit host capability and preserves selection", () => {
+    const value = board();
+    value.unassignedTaskCount = 2;
+    const options = () =>
+      swarmTaskScopeOptions(value, ["planner-workspace"], ["planner-workspace"]);
+    expect(options().some((option) => option.value === SWARM_UNASSIGNED_SCOPE)).toBe(false);
+    value.teamScopes = true;
+    expect(options().at(-1)?.value).toBe(SWARM_UNASSIGNED_SCOPE);
+    expect(swarmBoardTarget(value, { workspaceId: "planner-workspace", unassigned: true })).toEqual(
+      { teamName: undefined, unassigned: true },
+    );
   });
   it("selects project tasks through manager ancestry across workspaces", () => {
     expect(
@@ -645,7 +720,7 @@ describe("Tasks responsive shell state", () => {
 });
 
 describe("team board request identity", () => {
-  it("keeps Project as planner entries and resolves explicit Tasks by manager, never createdBy", () => {
+  it("keeps Project as an aggregate board and resolves explicit Tasks by manager, never createdBy", () => {
     const value = board();
     expect(swarmBoardTarget(value, { workspaceId: "planner-workspace" })).toEqual({
       teamName: undefined,

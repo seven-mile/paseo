@@ -58,6 +58,7 @@ import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspac
 import { useSessionStore, type Agent as SessionAgent } from "@/stores/session-store";
 import { deriveSidebarStateBucket, type SidebarStateBucket } from "@/utils/sidebar-agent-state";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
+import { generateDraftId } from "@/stores/draft-keys";
 import {
   applyStoredOrdering,
   areSidebarWorkspaceSessionsEqual,
@@ -155,7 +156,10 @@ export function SwarmCreatePlannerNavRow({ onBeforeNavigate }: { onBeforeNavigat
     const serverId = selection?.serverId ?? installation?.serverId;
     if (!serverId) return;
     onBeforeNavigate?.();
-    router.push({ pathname: "/new", params: { serverId, swarmRoleClass: "supervisor" } });
+    router.push({
+      pathname: "/new",
+      params: { serverId, swarmRoleClass: "supervisor", draftId: generateDraftId() },
+    });
   }, [installation?.serverId, onBeforeNavigate, selection?.serverId]);
   return (
     <SidebarHeaderRow
@@ -179,7 +183,7 @@ export function useOpenSwarmPlanner() {
     if (!serverId) return;
     router.push({
       pathname: "/new",
-      params: { serverId, swarmRoleClass: "planner" },
+      params: { serverId, swarmRoleClass: "planner", draftId: generateDraftId() },
     });
   }, [installation?.serverId, selection?.serverId]);
 }
@@ -921,6 +925,7 @@ function HostRoster({
           pathname: "/new",
           params: {
             serverId: plugin.serverId,
+            draftId: generateDraftId(),
             swarmRoleClass: surfaceId === "native-create-supervisor" ? "supervisor" : "worker",
             ...(params.parent ? { swarmParent: params.parent } : {}),
           },

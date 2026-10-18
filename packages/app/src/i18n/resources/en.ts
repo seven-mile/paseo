@@ -48,6 +48,9 @@ export const en = {
       confirmRequired: "Confirm a PWA directory for this parent before creating a child.",
       confirmBinding: "Confirm parent PWA binding",
       teamUnavailable: "Team PWA unavailable: {{reason}}",
+      teamUnavailableTitle: "Team PWA unavailable",
+      teamUnavailableDescription:
+        "Review this Project's PWA source. Tasks and Activity remain available.",
       contentRoot: "PWA content root",
     },
     tasks: {

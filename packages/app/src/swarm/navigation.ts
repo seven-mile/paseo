@@ -28,6 +28,7 @@ export interface SwarmTaskSelection {
   agentName?: string;
   taskId?: string;
   defaultAgentId?: string;
+  unassigned?: boolean;
 }
 
 const selectionSchema = z.object({
@@ -35,6 +36,7 @@ const selectionSchema = z.object({
   agentName: z.string().optional(),
   taskId: z.string().optional(),
   defaultAgentId: z.string().optional(),
+  unassigned: z.boolean().optional(),
 });
 
 export function readSwarmTaskSelection(state: unknown): SwarmTaskSelection {
@@ -47,11 +49,12 @@ export function setSwarmTaskSelection(
   tabId: string,
   selection: SwarmTaskSelection,
 ): void {
-  const state: Record<string, string> = {};
+  const state: Record<string, string | boolean> = {};
   if (selection.plannerName !== undefined) state.plannerName = selection.plannerName;
   if (selection.agentName !== undefined) state.agentName = selection.agentName;
   if (selection.taskId) state.taskId = selection.taskId;
   if (selection.defaultAgentId) state.defaultAgentId = selection.defaultAgentId;
+  if (selection.unassigned) state.unassigned = true;
   useWorkspaceLayoutStore.getState().setTabState(workspaceKey, tabId, state);
 }
 
@@ -255,6 +258,7 @@ export function openSwarmTasks(
     setSwarmTaskSelection(workspaceKey, tabId, {
       plannerName: input.plannerName,
       agentName: input.agentName,
+      unassigned: input.unassigned,
       taskId: input.taskId,
       defaultAgentId,
     });
@@ -276,7 +280,7 @@ export function openSwarmReference(input: {
   reference: SwarmTaskReference;
   isCompact?: boolean;
   host?: "main" | "explorer";
-  selection?: Pick<SwarmTaskSelection, "plannerName" | "agentName">;
+  selection?: Pick<SwarmTaskSelection, "plannerName" | "agentName" | "unassigned">;
 }): void {
   const { serverId, reference } = input;
   if (input.isCompact) usePanelStore.getState().showMobileAgent();

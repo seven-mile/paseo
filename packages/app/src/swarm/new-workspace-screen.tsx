@@ -1,19 +1,21 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigation } from "expo-router";
+import { createNameId } from "mnemonic-id";
+import { useWorkspaceDraftSubmissionStore } from "@/stores/workspace-draft-submission-store";
 import { useTranslation } from "react-i18next";
 import { NewWorkspaceScreen, type SwarmWorkspaceOptions } from "@/screens/new-workspace-screen";
 import { usePluginInstallations } from "@/plugins/registry";
 import { swarmTaskBoardSchema } from "./task-model";
 import { type SwarmRoleClass } from "./rpc";
 import { z } from "zod";
-import { openSwarmPreparation } from "./parent-selection";
+import {
+  openSwarmCreationFormDraft,
+  openSwarmPreparation,
+  swarmPreparedAgentSchema,
+} from "./parent-selection";
 import { pwaSourceSchema, pwaRoleSchema } from "./pwa-form-model";
 
 const rolesSchema = z.array(pwaRoleSchema);
-const preparedAgentSchema = z.object({
-  agentId: z.string(),
-  systemPrompt: z.string(),
-  parentAgentId: z.string().nullable(),
-});
 
 export interface SwarmNewWorkspaceScreenProps {
   serverId: string;
@@ -36,14 +38,33 @@ export function SwarmNewWorkspaceScreen({
 }: SwarmNewWorkspaceScreenProps) {
   const { t } = useTranslation();
   const installations = usePluginInstallations("paseo-swarm");
-  const [preparation] = useState(() =>
-    openSwarmPreparation((id) => t("swarm.creation.reservationChanged", { id })),
+  const navigation = useNavigation();
+  const [draft] = useState(() => {
+    const create = () => ({
+      form: openSwarmCreationFormDraft(roleClass),
+      preparation: openSwarmPreparation((id) => t("swarm.creation.reservationChanged", { id })),
+      worktreeSlug: createNameId(),
+    });
+    return draftId
+      ? useWorkspaceDraftSubmissionStore.getState().retainSwarmDraft({ draftId, create })
+      : create();
+  });
+  // Unmount also means a responsive remount. Only an explicit route removal abandons this draft.
+  useEffect(
+    () =>
+      navigation.addListener("beforeRemove", () => {
+        if (draftId) useWorkspaceDraftSubmissionStore.getState().clearSwarmDraft({ draftId });
+      }),
+    [draftId, navigation],
   );
+  const { preparation } = draft;
   const options = useMemo<SwarmWorkspaceOptions>(() => {
     return {
       roleClass,
       initialParent: parentName,
       initialName: roleClass,
+      draft: draft.form,
+      worktreeSlug: draft.worktreeSlug,
       forServer(targetServerId) {
         const installation = installations.find((plugin) => plugin.serverId === targetServerId);
         if (!installation) return undefined;
@@ -102,7 +123,7 @@ export function SwarmNewWorkspaceScreen({
               pwaSourceIdentity,
             ]);
             return preparation.prepare(key, async () =>
-              preparedAgentSchema.parse(
+              swarmPreparedAgentSchema.parse(
                 await installation.invoke("swarm.agent.prepare", {
                   ...input,
                   projectId: target.projectId,
@@ -128,7 +149,7 @@ export function SwarmNewWorkspaceScreen({
         };
       },
     };
-  }, [installations, parentName, roleClass, t, preparation]);
+  }, [installations, parentName, roleClass, t, preparation, draft]);
   return (
     <NewWorkspaceScreen
       serverId={serverId}

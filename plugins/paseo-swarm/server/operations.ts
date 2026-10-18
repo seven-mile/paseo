@@ -1,12 +1,15 @@
 import type { RpcInput } from "@getpaseo/plugin";
 import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { discoverPwas, listPwaRoles, readPwa, readPwaStatuses } from "./pwa";
 import { initialPrompt, messagePrompt, messageReceipt, runtimeNotification } from "./prompts";
 import { store } from "./state";
 import {
   readPwaSourceConfig,
   resolvePwaBinding,
+  resolveLegacyPwaBinding,
   validatePwaBinding,
   writePwaSource,
 } from "./source";
@@ -208,9 +211,19 @@ function assertHierarchy(parent: AgentRecord | null, roleClass: AgentRecord["rol
     throw new Error("Choose a manager with the required role class.");
 }
 
-function assertParentBinding(parent: AgentRecord | null, binding: PwaBinding) {
+function assertParentBinding(
+  parent: AgentRecord | null,
+  binding: PwaBinding,
+  effective?: PwaBinding,
+) {
   if (!parent) return;
-  const current = parent.pwaBinding;
+  const current =
+    parent.pwaBinding ?? teamRoot(parent, store.read().agents)?.pwaBinding ?? effective;
+  if (!current && binding.directory === binding.contentRoot) {
+    // The async creation/bind boundary has resolved the current legacy root already.
+    validatePwaBinding(binding);
+    return;
+  }
   if (
     !current ||
     current.projectId !== binding.projectId ||
@@ -297,6 +310,20 @@ async function sourceConfig(projectId: string | undefined, context: PluginHandle
   );
 }
 
+async function effectiveBinding(
+  agent: AgentRecord,
+  projectId: string | undefined,
+  context: PluginHandlerContext,
+): Promise<PwaBinding> {
+  const root = teamRoot(agent, store.read().agents);
+  const binding = agent.pwaBinding ?? root?.pwaBinding;
+  if (binding) return validatePwaBinding(binding);
+  return resolveLegacyPwaBinding(
+    projectId,
+    projectId ? await projectRoot(projectId, context) : undefined,
+  );
+}
+
 async function creationBinding(
   projectId: string | undefined,
   parent: AgentRecord | null,
@@ -304,8 +331,14 @@ async function creationBinding(
   context: PluginHandlerContext,
 ): Promise<PwaBinding> {
   if (parent) {
-    const binding = parent.pwaBinding;
-    if (!binding) throw new Error("Confirm the manager's PWA directory before creating a child.");
+    let binding: PwaBinding;
+    try {
+      binding = await effectiveBinding(parent, projectId, context);
+    } catch (error) {
+      throw new Error("Confirm the manager's PWA directory before creating a child.", {
+        cause: error,
+      });
+    }
     if (binding.projectId !== projectId)
       throw new Error("The manager's PWA binding belongs to another project.");
     validatePwaBinding(binding);
@@ -320,7 +353,16 @@ async function creationBinding(
     }
     return { ...binding };
   }
-  if (!directory) throw new Error("Choose a PWA directory explicitly.");
+  if (!directory) {
+    try {
+      return resolveLegacyPwaBinding(
+        projectId,
+        projectId ? await projectRoot(projectId, context) : undefined,
+      );
+    } catch (error) {
+      throw new Error("Choose a PWA directory explicitly.", { cause: error });
+    }
+  }
   const config = await sourceConfig(projectId, context);
   if (!config.path)
     throw new Error("No PWA content directory configured. Choose one in Project Settings → Swarm.");
@@ -438,15 +480,126 @@ async function creationPlacement(
   return { workspaceId, cwd };
 }
 
+function configuredRootStatuses(directory: string): string[] {
+  if (!statSync(directory).isDirectory())
+    throw new Error(`Not a PWA content directory: ${directory}`);
+  try {
+    return readPwaStatuses(directory);
+  } catch (error) {
+    // A content parent need not contain a PWA; malformed present entries still report errors.
+    if (
+      !(
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOENT" &&
+        "path" in error &&
+        error.path === join(directory, "PWA.md")
+      )
+    )
+      throw error;
+    return [];
+  }
+}
+
+async function projectBoardStatuses(
+  agents: AgentRecord[],
+  projectFor: (agent: AgentRecord) => string | undefined,
+  projectId: string | undefined,
+  context: PluginHandlerContext,
+) {
+  const statuses = new Set<string>();
+  const errors: string[] = [];
+  const directories = new Set<string>();
+  const addStatuses = (binding: PwaBinding) => {
+    if (directories.has(binding.directory)) return;
+    directories.add(binding.directory);
+    for (const status of readPwaStatuses(binding.directory, binding.contentRoot))
+      statuses.add(status);
+  };
+  for (const agent of agents.filter(
+    (candidate) =>
+      candidate.roleClass === "planner" &&
+      !candidate.reportsTo &&
+      (!projectId || projectFor(candidate) === projectId),
+  )) {
+    try {
+      addStatuses(await effectiveBinding(agent, projectId ?? projectFor(agent), context));
+    } catch (error) {
+      errors.push(
+        `${agentQualifiedName(agent)}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  // A legacy Project workflow also declares columns when all its agents are unavailable.
+  try {
+    const config = await sourceConfig(projectId, context);
+    if (config.path) {
+      for (const status of configuredRootStatuses(config.path)) statuses.add(status);
+    }
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+  return {
+    statuses: [...statuses],
+    ...(errors.length ? { pwaError: [...new Set(errors)].join("\n") } : {}),
+  };
+}
+
+function assertRegistrationAvailable(current: AgentRecord | undefined) {
+  if (current && ((!current.workspaceId && current.pwaBinding) || current.creationError)) {
+    throw new Error(
+      "Finish the reserved agent through bind_workspace before registering it again.",
+    );
+  }
+}
+
+async function assertPreparedPwaCompatibility(
+  prepared: AgentRecord,
+  parent: AgentRecord | null,
+  projectId: string | undefined,
+  labels: Record<string, string> | undefined,
+  context: PluginHandlerContext,
+) {
+  const preparedBinding = prepared.pwaBinding;
+  if (
+    (prepared.projectId !== undefined && prepared.projectId !== projectId) ||
+    (preparedBinding && preparedBinding.projectId !== projectId)
+  ) {
+    throw new Error(
+      "Prepare this agent with the selected project before binding its PWA directory.",
+    );
+  }
+  // COMPAT(legacy-prepared-binding): added in v0.11.0-beta.4, remove after 2027-04-17
+  // once the supported client floor includes parent labels and all older reservations settle.
+  // Missing labels establish only the saved Swarm parent, not native ancestry.
+  if (labels?.["paseo.parent-agent-id"] !== undefined) assertNativeParent(labels, parent);
+  if (preparedBinding) {
+    validatePwaBinding(preparedBinding);
+  } else {
+    // Old reservations also omitted PWA bindings; never infer one from the current source.
+    if (
+      !prepared.projectId &&
+      projectId &&
+      (await sourceConfig(projectId, context)).path !==
+        (await sourceConfig(undefined, context)).path
+    ) {
+      throw new Error(
+        "Prepare this agent with the selected project before binding its PWA directory.",
+      );
+    }
+  }
+}
+
 export function registerOperations(server: Pick<PluginServerContext, "handle">): void {
   server.handle(boardReadRpc, async ({ projectId, teamName, unassigned }, context) => {
     const availableIds = new Set((await availableAgents(context)).map((agent) => agent.id));
     const saved = store.read();
     const agents = saved.agents.filter((agent) => !agent.retired);
-    const visibleAgents = agents.filter((agent) => availableIds.has(agent.paseoAgentId));
+    const visibleAgents = saved.agents.filter((agent) => availableIds.has(agent.paseoAgentId));
     if (projectId) await projectRoot(projectId, context);
     // Unscoped reads remain available for MCP identity and canonical Task references.
-    if (!projectId && !teamName && !unassigned) return { ...saved, agents: visibleAgents };
+    if (!projectId && !teamName && !unassigned)
+      return { ...saved, agents: visibleAgents, teamScopes: true };
     const memberships = new Map(agents.map((agent) => [agent.paseoAgentId, agent.projectId]));
     await Promise.all(
       agents
@@ -478,6 +631,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       const ids = new Set(orphaned.map((task) => task.id));
       return {
         version: 1 as const,
+        teamScopes: true,
         agents: visibleAgents.filter((agent) => !projectId || projectFor(agent) === projectId),
         tasks: orphaned,
         activities: saved.activities.filter((activity) => ids.has(activity.taskId)),
@@ -486,15 +640,12 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       };
     }
     if (!teamName) {
+      // Project reads retain full arrays for local filtering; scoped reads are explicit.
       return {
-        version: 1 as const,
-        agents: visibleAgents.filter(
-          (agent) =>
-            projectFor(agent) === projectId && agent.roleClass === "planner" && !agent.reportsTo,
-        ),
-        tasks: [],
-        activities: [],
-        statuses: [],
+        ...saved,
+        agents: visibleAgents,
+        teamScopes: true,
+        ...(await projectBoardStatuses(agents, projectFor, projectId, context)),
         unassignedTaskCount: orphaned.length,
       };
     }
@@ -508,17 +659,18 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     const ids = new Set(tasks.map((task) => task.id));
     const board = {
       version: 1 as const,
+      teamScopes: true,
       agents: visibleAgents.filter((agent) => members.has(agentQualifiedName(agent))),
       tasks,
       activities: saved.activities.filter((activity) => ids.has(activity.taskId)),
       unassignedTaskCount: orphaned.length,
     };
     try {
-      if (!root?.pwaBinding) throw new Error("This planner has no confirmed PWA directory.");
-      validatePwaBinding(root.pwaBinding);
+      if (!root) throw new Error("This team has no planner.");
+      const binding = await effectiveBinding(root, projectId ?? projectFor(root), context);
       return {
         ...board,
-        statuses: readPwaStatuses(root.pwaBinding.directory, root.pwaBinding.contentRoot),
+        statuses: readPwaStatuses(binding.directory, binding.contentRoot),
       };
     } catch (error) {
       return {
@@ -528,11 +680,25 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       };
     }
   });
-  server.handle(pwaSourceReadRpc, async ({ projectId }, context) => {
+  server.handle(pwaSourceReadRpc, async ({ projectId, path }, context) => {
     const config = await sourceConfig(projectId, context);
+    let previewPath = config.path;
+    if (path !== undefined) {
+      previewPath = resolve(
+        projectId ? await projectRoot(projectId, context) : process.cwd(),
+        path,
+      );
+      try {
+        previewPath = realpathSync(previewPath);
+      } catch {
+        // Discovery returns the precise unreadable-root error, including for previews.
+      }
+    }
     return {
-      ...config,
-      ...(config.path ? discoverPwas(config.path) : { entries: [], complete: true, errors: [] }),
+      path: previewPath,
+      sourcePreview: true,
+      defaultPwa: previewPath === config.path ? config.defaultPwa : null,
+      ...(previewPath ? discoverPwas(previewPath) : { entries: [], complete: true, errors: [] }),
     };
   });
   server.handle(pwaSourceSetRpc, async ({ path, projectId, defaultPwa }, context) => {
@@ -590,11 +756,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   server.handle(registerAgentRpc, async (input: RpcInput<typeof registerAgentRpc>, context) => {
     const parent = input.reportsTo ? findAgent(input.reportsTo) : null;
     const current = findAgentByPaseoId(input.paseoAgentId);
-    if (current && ((!current.workspaceId && current.pwaBinding) || current.creationError)) {
-      throw new Error(
-        "Finish the reserved agent through bind_workspace before registering it again.",
-      );
-    }
+    assertRegistrationAvailable(current);
     if (!current) assertHierarchy(parent, input.roleClass);
     const snapshot = (await context.paseo.agents.ref(input.paseoAgentId).refresh())?.agent;
     if (!snapshot?.workspaceId) throw new Error(`Unknown agent workspace: ${input.paseoAgentId}`);
@@ -616,6 +778,12 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
           "Prepare a separate workspace for the supervisor and pass its workspaceId.",
         );
     }
+    if (!current && binding)
+      assertParentBinding(
+        parent,
+        binding,
+        parent ? await effectiveBinding(parent, projectId, context) : undefined,
+      );
     const timestamp = now();
     let result!: AgentRecord;
     await store.update((state) => {
@@ -734,8 +902,12 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         if (!snapshot?.workspaceId || (workspaceId && snapshot.workspaceId !== workspaceId))
           throw new Error("Created agent workspace does not match its placement.");
         assertNativeParent(snapshot.labels, parent);
-        assertParentBinding(parent, binding);
         await projectScope({ projectId, workspaceId: snapshot.workspaceId, parent }, context);
+        assertParentBinding(
+          parent,
+          binding,
+          parent ? await effectiveBinding(parent, projectId, context) : undefined,
+        );
         let result = reservedAgent;
         await store.update((state) => {
           assertCurrentParentBinding(state, parent, binding);
@@ -821,16 +993,8 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         { projectId: prepared.projectId, workspaceId: input.workspaceId, parent },
         context,
       );
-      if (prepared.projectId !== projectId || prepared.pwaBinding?.projectId !== projectId) {
-        throw new Error(
-          "Prepare this agent with the selected project before binding its PWA directory.",
-        );
-      }
-      if (!prepared.pwaBinding) throw new Error("Prepared PWA binding is missing.");
       const preparedBinding = prepared.pwaBinding;
-      validatePwaBinding(preparedBinding);
-      assertNativeParent(snapshot.labels, parent);
-      assertParentBinding(parent, preparedBinding);
+      await assertPreparedPwaCompatibility(prepared, parent, projectId, snapshot.labels, context);
       // Files may have changed since prepare. Never regenerate the prepared prompt here.
       const actor = parent;
       await assertCreationWorkspace(actor, input.workspaceId, context);
@@ -842,9 +1006,15 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
             "Prepare a separate workspace for the supervisor and pass its workspaceId.",
           );
       }
+      if (preparedBinding)
+        assertParentBinding(
+          parent,
+          preparedBinding,
+          parent ? await effectiveBinding(parent, projectId, context) : undefined,
+        );
       let result!: AgentRecord;
       await store.update((state) => {
-        assertCurrentParentBinding(state, parent, preparedBinding);
+        if (preparedBinding) assertCurrentParentBinding(state, parent, preparedBinding);
         const agent = state.agents.find(
           (candidate) => candidate.paseoAgentId === input.agentId && !candidate.retired,
         );

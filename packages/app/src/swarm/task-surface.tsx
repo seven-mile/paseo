@@ -11,7 +11,7 @@ import {
 } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft } from "lucide-react-native";
+import { ArrowLeft, ChevronDown, ChevronRight } from "lucide-react-native";
 import { i18n } from "@/i18n/i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import Animated from "react-native-reanimated";
@@ -25,6 +25,8 @@ import type { Theme } from "@/styles/theme";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
+import { openProjectSettings } from "@/navigation/settings-navigation";
 import { SurfaceCard } from "@/components/ui/scrollable-code-surface";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { DropdownTrigger } from "@/components/ui/dropdown-trigger";
@@ -59,6 +61,7 @@ import {
   swarmTaskScopeOptions,
   swarmTaskColumns,
   swarmBoardTarget,
+  SWARM_UNASSIGNED_SCOPE,
   unansweredChoices,
   type SwarmActivity,
   type SwarmTask,
@@ -73,17 +76,23 @@ export interface SwarmTaskSurfaceProps {
   retainedState?: SwarmTaskSurfaceState;
   plannerName?: string;
   agentName?: string;
+  unassigned?: boolean;
   taskId?: string;
   isActive?: boolean;
   keyboardInsetHandled?: boolean;
   presentation?: "main" | "explorer";
   defaultAgentId?: string;
   onOpenTask?: (taskId: string | undefined) => void;
-  onScopeChange?: (scope: { plannerName?: string; agentName?: string }) => void;
+  onScopeChange?: (scope: {
+    plannerName?: string;
+    agentName?: string;
+    unassigned?: boolean;
+  }) => void;
   onOpenReference?: (reference: SwarmTaskReference) => void;
 }
 
 const FLEX_STYLE = { flex: 1 };
+const NO_STATUSES: string[] = [];
 const TaskMarkdown = memo(MarkdownRenderer);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const spinnerMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
@@ -104,7 +113,12 @@ function TaskSelect({
   const compact = useIsCompactFormFactor();
   return (
     <DropdownMenu compactMode="sheet">
-      <DropdownTrigger size={compact ? "md" : "sm"} accessibilityLabel={label} disabled={disabled}>
+      <DropdownTrigger
+        size={compact ? "md" : "sm"}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        disabled={disabled}
+      >
         {options.find((option) => option.value === value)?.label ?? value}
       </DropdownTrigger>
       <DropdownMenuContent sheetTitle={label}>
@@ -162,6 +176,7 @@ function TaskStatusFilter({
     <DropdownMenu compactMode="sheet">
       <DropdownTrigger
         size={compact ? "md" : "sm"}
+        accessibilityRole="button"
         accessibilityLabel={`${t("swarm.tasks.status")}: ${statuses.length ? statuses.join(", ") : label}`}
         testID="swarm-task-status-filter"
       >
@@ -196,7 +211,13 @@ interface SwarmTeamChoice {
 
 type SwarmTeamSelection = Pick<
   SwarmTaskSurfaceProps,
-  "plannerName" | "agentName" | "taskId" | "presentation" | "defaultAgentId" | "onScopeChange"
+  | "plannerName"
+  | "agentName"
+  | "unassigned"
+  | "taskId"
+  | "presentation"
+  | "defaultAgentId"
+  | "onScopeChange"
 >;
 
 function resolveSwarmTeamChoice(
@@ -247,7 +268,8 @@ function useSwarmTaskBoard({
   const index = useFetchQuery(
     {
       queryKey: ["swarm", "task-team-index", serverId, projectId],
-      queryFn: async () => swarmTaskBoardSchema.parse(await invoke("swarm.board.read", {})),
+      queryFn: async () =>
+        swarmTaskBoardSchema.parse(await invoke("swarm.board.read", { projectId })),
       enabled,
       dataShape: "value",
       staleTimeMs: 2500,
@@ -257,7 +279,13 @@ function useSwarmTaskBoard({
   );
   useEffect(() => {
     setTeamChoice(null);
-  }, [projectId, selection.plannerName, selection.agentName, selection.taskId]);
+  }, [
+    projectId,
+    selection.plannerName,
+    selection.agentName,
+    selection.unassigned,
+    selection.taskId,
+  ]);
   const { teamName, unassigned } = resolveSwarmTeamChoice(
     index.data,
     selection,
@@ -266,23 +294,19 @@ function useSwarmTaskBoard({
     teamChoice,
   );
   const changeScope = useCallback(
-    (value: { plannerName?: string; agentName?: string }) => {
+    (value: { plannerName?: string; agentName?: string; unassigned?: boolean }) => {
       setTeamChoice({
         projectId,
         teamName: value.agentName ?? value.plannerName,
-        unassigned: false,
+        unassigned: value.unassigned === true,
       });
       selection.onScopeChange?.(value);
     },
     [projectId, selection],
   );
-  const chooseTeam = useCallback(
-    (value: string) => {
-      setTeamChoice({ projectId, teamName: value || undefined, unassigned: !value });
-      if (value) selection.onScopeChange?.({ plannerName: value });
-    },
-    [projectId, selection],
-  );
+  // COMPAT(swarmTeamScopes): added in v0.11.0-beta.4, remove after 2027-04-17 once the
+  // plugin floor supports teamScopes. Older hosts retain the full-board/local-filter contract.
+  const scoped = index.data?.teamScopes === true && Boolean(teamName || unassigned);
   const query = useFetchQuery(
     {
       queryKey: ["swarm", "task-board", serverId, projectId, teamName, unassigned],
@@ -294,7 +318,7 @@ function useSwarmTaskBoard({
             unassigned,
           }),
         ),
-      enabled: enabled && Boolean(index.data),
+      enabled: enabled && scoped,
       dataShape: "value",
       staleTimeMs: 2500,
       refetchInterval: active ? 3000 : false,
@@ -305,16 +329,17 @@ function useSwarmTaskBoard({
   const refresh = useCallback(() => {
     if (online && active) {
       void index.refetch();
-      void refetch();
+      if (scoped) void refetch();
     }
-  }, [refetch, online, active, index]);
+  }, [refetch, online, active, index, scoped]);
+  const boardQuery = scoped ? query : index;
   return {
-    query,
-    contentQuery: index.isError && !index.data ? index : query,
+    query: boardQuery,
+    contentQuery: index.isError && !index.data ? index : boardQuery,
+    scopeBoard: index.data,
     teamName,
     unassigned,
     changeScope,
-    chooseTeam,
     refresh,
   };
 }
@@ -356,7 +381,7 @@ function TaskSurface({
     [structure, serverId],
   );
   const online = connection === "online";
-  const { query, contentQuery, teamName, unassigned, changeScope, chooseTeam, refresh } =
+  const { query, contentQuery, scopeBoard, teamName, unassigned, changeScope, refresh } =
     useSwarmTaskBoard({
       rpc,
       serverId,
@@ -389,84 +414,38 @@ function TaskSurface({
           disabled={!plugin || !online || !active}
           onRefresh={refresh}
         />
-        {!teamName && !unassigned && query.data ? (
-          <ProjectTeams board={query.data} onChoose={chooseTeam} />
-        ) : (
-          <TaskLoadContent
-            retainedState={retainedState}
-            query={contentQuery}
-            unavailable={unavailable}
-            hydrated={hydrated}
-            connecting={connection === "connecting" || connection === "idle"}
-            online={online}
-            active={active}
-            workspaceId={workspaceId}
-            projectWorkspaceIds={projectWorkspaceIds}
-            knownWorkspaceIds={knownWorkspaceIds}
-            compact={compact}
-            invoke={invoke}
-            onRefresh={refresh}
-            {...selection}
-            agentName={teamName}
-            onScopeChange={changeScope}
-            serverScoped
-          />
-        )}
+        <TaskLoadContent
+          serverId={serverId}
+          retainedState={retainedState}
+          query={contentQuery}
+          unavailable={unavailable}
+          hydrated={hydrated}
+          connecting={connection === "connecting" || connection === "idle"}
+          online={online}
+          active={active}
+          workspaceId={workspaceId}
+          projectWorkspaceIds={projectWorkspaceIds}
+          knownWorkspaceIds={knownWorkspaceIds}
+          projectId={projectId ?? undefined}
+          scopeBoard={scopeBoard}
+          compact={compact}
+          invoke={invoke}
+          onRefresh={refresh}
+          {...selection}
+          agentName={teamName}
+          unassigned={unassigned && scopeBoard?.teamScopes === true}
+          onScopeChange={changeScope}
+        />
       </Animated.View>
     </View>
   );
 }
 
-function ProjectTeams({
-  board,
-  onChoose,
-}: {
-  board: SwarmTaskBoard;
-  onChoose(name: string): void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <ScrollView style={styles.detail} testID="swarm-project-teams">
-      <Text style={styles.title}>{t("swarm.sidebar.planners")}</Text>
-      {board.agents
-        .filter((agent) => agent.roleClass === "planner" && !agent.retired)
-        .map((agent) => (
-          <TeamEntry
-            key={agent.paseoAgentId}
-            name={agent.qualifiedName ?? agent.name}
-            onChoose={onChoose}
-          />
-        ))}
-      {!board.agents.length ? (
-        <Text style={styles.meta}>{t("swarm.sidebar.noPlanners")}</Text>
-      ) : null}
-      {board.unassignedTaskCount ? (
-        <TeamEntry name="" label={t("swarm.tasks.unassigned")} onChoose={onChoose} />
-      ) : null}
-    </ScrollView>
-  );
-}
-
-function TeamEntry({
-  name,
-  label,
-  onChoose,
-}: {
-  name: string;
-  label?: string;
-  onChoose(name: string): void;
-}) {
-  const select = useCallback(() => onChoose(name), [name, onChoose]);
-  return (
-    <Button variant="outline" onPress={select}>
-      {label ?? name}
-    </Button>
-  );
-}
-
 type LoadedTasksProps = {
   retainedState: SwarmTaskSurfaceState;
-  serverScoped?: boolean;
+  scopeBoard?: SwarmTaskBoard;
+  projectId?: string;
+  unassigned?: boolean;
   board: SwarmTaskBoard;
   workspaceId: string;
   projectWorkspaceIds: readonly string[];
@@ -488,6 +467,7 @@ type LoadedTasksProps = {
 >;
 
 function TaskLoadContent({
+  serverId,
   query,
   unavailable,
   hydrated,
@@ -496,6 +476,7 @@ function TaskLoadContent({
   active,
   ...props
 }: Omit<LoadedTasksProps, "board"> & {
+  serverId: string;
   query: UseQueryResult<SwarmTaskBoard, Error>;
   unavailable: string | null;
   hydrated: boolean;
@@ -503,26 +484,38 @@ function TaskLoadContent({
   active: boolean;
 }) {
   const { t } = useTranslation();
+  const data = useMemo(
+    () =>
+      query.data ??
+      (props.scopeBoard
+        ? {
+            ...props.scopeBoard,
+            tasks: props.unassigned ? [] : props.scopeBoard.tasks,
+            statuses: undefined,
+          }
+        : undefined),
+    [query.data, props.scopeBoard, props.unassigned],
+  );
   if (unavailable)
     return (
       <Text style={styles.error} accessibilityRole="alert">
         {unavailable}
       </Text>
     );
-  if (!online && !query.data)
+  if (!online && !data)
     return (
       <TaskPlaceholder
         message={connecting ? t("swarm.tasks.connecting") : t("swarm.tasks.offline")}
       />
     );
-  if (query.isPending || !hydrated)
+  if ((query.isPending && !data) || !hydrated)
     return (
       <View style={styles.center}>
         <ThemedLoadingSpinner uniProps={spinnerMapping} />
         <Text style={styles.meta}>{t("swarm.tasks.loading")}</Text>
       </View>
     );
-  if (query.isError && !query.data)
+  if (query.isError && !data)
     return (
       <View style={styles.center}>
         <Text style={styles.error} accessibilityRole="alert">
@@ -533,7 +526,7 @@ function TaskLoadContent({
         </Button>
       </View>
     );
-  if (!query.data) return null;
+  if (!data) return null;
   return (
     <>
       {!online ? (
@@ -546,13 +539,86 @@ function TaskLoadContent({
           {query.error.message}
         </Text>
       ) : null}
-      {query.data.pwaError ? (
-        <Text style={styles.error} accessibilityRole="alert">
-          {t("swarm.pwa.teamUnavailable", { reason: query.data.pwaError })}
-        </Text>
+      {data.pwaError ? (
+        <TaskPwaRecovery
+          key={data.pwaError}
+          serverId={serverId}
+          projectId={props.projectId}
+          compact={props.compact}
+          diagnostic={data.pwaError}
+        />
       ) : null}
-      <LoadedTasks board={query.data} online={online && active} {...props} />
+      <LoadedTasks board={data} online={online && active} {...props} />
     </>
+  );
+}
+
+interface TaskPwaRecoveryProps {
+  serverId: string;
+  projectId?: string;
+  compact: boolean;
+  diagnostic: string;
+}
+
+function TaskPwaRecovery({ serverId, projectId, compact, diagnostic }: TaskPwaRecoveryProps) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const size = compact ? "md" : "sm";
+  const expandedState = useMemo(() => ({ expanded }), [expanded]);
+  const toggleDetails = useCallback(() => setExpanded((value) => !value), []);
+  const openSettings = useCallback(() => {
+    if (projectId) openProjectSettings(serverId, projectId);
+  }, [serverId, projectId]);
+
+  return (
+    <View style={styles.pwaRecovery}>
+      <Alert
+        variant="warning"
+        size={size}
+        title={t("swarm.pwa.teamUnavailableTitle")}
+        description={t("swarm.pwa.teamUnavailableDescription")}
+        testID="swarm-pwa-recovery"
+      >
+        <View style={styles.pwaRecoveryContent}>
+          <View style={styles.pwaRecoveryActions}>
+            {projectId ? (
+              <Button
+                variant="outline"
+                size={size}
+                style={styles.pwaRecoveryAction}
+                onPress={openSettings}
+                testID="swarm-pwa-recovery-settings"
+              >
+                {t("sidebar.project.actions.openSettings")}
+              </Button>
+            ) : null}
+            <Button
+              variant="ghost"
+              size={size}
+              style={styles.pwaRecoveryAction}
+              leftIcon={expanded ? ChevronDown : ChevronRight}
+              onPress={toggleDetails}
+              accessibilityState={expandedState}
+              aria-expanded={expanded}
+              testID="swarm-pwa-recovery-details-toggle"
+            >
+              {t("rootError.details")}
+            </Button>
+          </View>
+          {expanded ? (
+            <ScrollView
+              nestedScrollEnabled
+              style={styles.pwaRecoveryDetails}
+              testID="swarm-pwa-recovery-details"
+            >
+              <Text selectable style={styles.pwaDiagnostic} testID="swarm-pwa-recovery-diagnostic">
+                {diagnostic}
+              </Text>
+            </ScrollView>
+          ) : null}
+        </View>
+      </Alert>
+    </View>
   );
 }
 
@@ -644,7 +710,10 @@ function TaskBackHeader({ onBack }: { onBack: () => void }) {
 
 function LoadedTasks({
   retainedState,
-  board,
+  board: scopedBoard,
+  scopeBoard,
+  projectId,
+  unassigned,
   workspaceId,
   projectWorkspaceIds,
   knownWorkspaceIds,
@@ -660,17 +729,21 @@ function LoadedTasks({
   onScopeChange,
   presentation = "main",
   defaultAgentId,
-  serverScoped,
 }: LoadedTasksProps) {
   const { t } = useTranslation();
-  const initialScope = initialTaskScope(
-    board,
-    workspaceId,
-    presentation,
-    plannerName,
-    agentName,
-    defaultAgentId,
+  // The complete index owns scope choices and mounted detail roots. A team's
+  // response supplies its workflow, never the lifetime of another team's editor.
+  const board = useMemo(
+    () => ({
+      ...(scopeBoard ?? scopedBoard),
+      statuses: scopedBoard.statuses,
+      pwaError: scopedBoard.pwaError,
+    }),
+    [scopeBoard, scopedBoard],
   );
+  const initialScope = unassigned
+    ? SWARM_UNASSIGNED_SCOPE
+    : initialTaskScope(board, workspaceId, presentation, plannerName, agentName, defaultAgentId);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(
     taskId ?? retainedState.view.selectedTaskId,
   );
@@ -680,11 +753,17 @@ function LoadedTasks({
     return taskId && !ids.includes(taskId) ? [...ids, taskId] : ids;
   });
   const [scope, setScope] = useState(retainedState.view.scope ?? initialScope);
-  const [statuses, setStatuses] = useState<string[]>(retainedState.view.statuses);
+  const [statusFilters, setStatusFilters] = useState(() =>
+    retainedState.statusFilters.size
+      ? new Map(retainedState.statusFilters)
+      : new Map([[retainedState.view.scope ?? initialScope, retainedState.view.statuses]]),
+  );
+  const statuses = statusFilters.get(scope) ?? NO_STATUSES;
   const [search, setSearch] = useState(retainedState.view.search);
   useLayoutEffect(() => {
     retainedState.view = { selectedTaskId, visitedTaskIds, scope, statuses, search };
-  }, [retainedState, selectedTaskId, visitedTaskIds, scope, statuses, search]);
+    retainedState.statusFilters = statusFilters;
+  }, [retainedState, selectedTaskId, visitedTaskIds, scope, statuses, statusFilters, search]);
   const { onLayout, isBelow } = useContainerWidthBelow(SETTINGS_DESKTOP_SPLIT_MIN_WIDTH);
   const wide = !isBelow;
   const split = wide && Boolean(selectedTaskId);
@@ -739,28 +818,54 @@ function LoadedTasks({
   );
   const tasks = useMemo(
     () =>
-      serverScoped
-        ? board.tasks
-        : scopedSwarmTasks(board, {
-            projectWorkspaceIds,
-            knownWorkspaceIds,
-            agentName: scope || undefined,
-          }),
-    [board, projectWorkspaceIds, knownWorkspaceIds, scope, serverScoped],
+      unassigned
+        ? scopedBoard.tasks
+        : scopedSwarmTasks(
+            { ...scopedBoard, agents: board.agents },
+            {
+              projectWorkspaceIds,
+              knownWorkspaceIds,
+              projectId,
+              agentName: scope || undefined,
+            },
+          ),
+    [
+      board.agents,
+      scopedBoard,
+      projectWorkspaceIds,
+      knownWorkspaceIds,
+      projectId,
+      scope,
+      unassigned,
+    ],
   );
   const filtered = useMemo(
     () => filterSwarmTasks(tasks, statuses, search),
     [tasks, statuses, search],
   );
-  const toggleStatus = useCallback((value: string) => {
-    setStatuses((current) => {
-      if (!value) return [];
-      if (current.includes(value)) return current.filter((status) => status !== value);
-      return [...current, value];
-    });
-  }, []);
+  const toggleStatus = useCallback(
+    (value: string) => {
+      setStatusFilters((current) => {
+        const selected = current.get(scope) ?? [];
+        let next: string[] = [];
+        if (value)
+          next = selected.includes(value)
+            ? selected.filter((status) => status !== value)
+            : [...selected, value];
+        return new Map(current).set(scope, next);
+      });
+    },
+    [scope],
+  );
   const selected = tasks.find((task) => task.id === selectedTaskId);
-  const scopeOptions = swarmTaskScopeOptions(board, projectWorkspaceIds, knownWorkspaceIds);
+  const scopeOptions = swarmTaskScopeOptions(
+    board,
+    projectWorkspaceIds,
+    knownWorkspaceIds,
+    projectId,
+  );
+  if (unassigned && !scopeOptions.some((option) => option.value === SWARM_UNASSIGNED_SCOPE))
+    scopeOptions.push({ value: SWARM_UNASSIGNED_SCOPE, label: t("swarm.tasks.unassigned") });
   const statusOptions = useMemo(
     () => [
       { value: "", label: t("swarm.tasks.allStatuses") },
@@ -879,6 +984,7 @@ function initialTaskScope(
 }
 
 function taskScopeSelection(board: SwarmTaskBoard, value: string) {
+  if (value === SWARM_UNASSIGNED_SCOPE) return { unassigned: true };
   return findSwarmTaskAgent(board.agents, value)?.roleClass === "planner"
     ? { plannerName: value }
     : { agentName: value };
@@ -1545,6 +1651,25 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.destructive,
     fontSize: theme.fontSize.sm,
     padding: theme.spacing[3],
+  },
+  pwaRecovery: {
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[2],
+    flexShrink: 0,
+  },
+  pwaRecoveryContent: { flex: 1, minWidth: 0, gap: theme.spacing[2] },
+  pwaRecoveryActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  pwaRecoveryAction: { maxWidth: "100%" },
+  pwaRecoveryDetails: { maxHeight: theme.spacing[24], minHeight: 0 },
+  pwaDiagnostic: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.code,
+    fontFamily: theme.fontFamily.mono,
   },
   center: {
     flex: 1,

@@ -39,7 +39,8 @@ export function readPwaSourceConfig(projectId?: string, projectRoot?: string) {
   if (projectSource && !isAbsolute(projectSource) && !projectRoot) {
     throw new Error(`Missing project root: ${projectId}`);
   }
-  const path = source ? resolve(projectRoot ?? process.cwd(), source) : null;
+  const base = projectSource && projectRoot ? projectRoot : process.cwd();
+  const path = source ? resolve(base, source) : null;
   const defaultPwa =
     projectSource && projectId ? config.projectDefaults?.[projectId] : config.defaultPwa;
   return { path, defaultPwa: defaultPwa ?? null };
@@ -115,6 +116,17 @@ export function resolvePwaBinding({
     throw new Error(`PWA must declare a planner role: ${path}`);
   }
   return { ...(projectId ? { projectId } : {}), contentRoot: root, directory: path };
+}
+
+// Schema v1 supports a configured root that is itself a PWA.
+// Defaults and discovered descendants never choose a legacy team's workflow.
+export function resolveLegacyPwaBinding(projectId?: string, projectRoot?: string): PwaBinding {
+  const contentRoot = realpathSync(requirePwaSource(projectId, projectRoot));
+  return validatePwaBinding({
+    ...(projectId ? { projectId } : {}),
+    contentRoot,
+    directory: contentRoot,
+  });
 }
 
 export function validatePwaBinding(binding: PwaBinding): PwaBinding {

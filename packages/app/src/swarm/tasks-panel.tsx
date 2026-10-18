@@ -186,13 +186,14 @@ export function SwarmTasksContent({
     [liveWorkspaceAgentKey],
   );
   const firstFocusedSessionAgent = useRef(focusedSessionAgent).current;
-  const inheritedScope = useMemo<Pick<SwarmTaskSelection, "plannerName" | "agentName">>(() => {
-    if (
-      presentation !== "explorer" ||
-      selection.plannerName !== undefined ||
-      selection.agentName !== undefined
-    )
-      return {};
+  const hasExplicitScope =
+    selection.plannerName !== undefined ||
+    selection.agentName !== undefined ||
+    Boolean(selection.unassigned);
+  const inheritedScope = useMemo<
+    Pick<SwarmTaskSelection, "plannerName" | "agentName" | "unassigned">
+  >(() => {
+    if (presentation !== "explorer" || hasExplicitScope) return {};
     const focusedTab = layout ? getFocusedOrdinaryTab(workspaceKey, layout) : undefined;
     if (
       focusedTab?.target.kind !== "swarm_tasks" ||
@@ -200,18 +201,17 @@ export function SwarmTasksContent({
     )
       return {};
     const mainSelection = readSwarmTaskSelection(focusedTab.state);
+    if (mainSelection.unassigned) return { unassigned: true };
     if (mainSelection.agentName !== undefined) return { agentName: mainSelection.agentName };
     if (mainSelection.plannerName !== undefined) return { plannerName: mainSelection.plannerName };
     return {};
-  }, [layout, presentation, selection.agentName, selection.plannerName, workspaceKey]);
+  }, [layout, presentation, hasExplicitScope, workspaceKey]);
+  const hasInheritedScope =
+    inheritedScope.plannerName !== undefined ||
+    inheritedScope.agentName !== undefined ||
+    Boolean(inheritedScope.unassigned);
   const defaultAgentId = useMemo(() => {
-    if (
-      selection.plannerName !== undefined ||
-      selection.agentName !== undefined ||
-      inheritedScope.plannerName !== undefined ||
-      inheritedScope.agentName !== undefined
-    )
-      return undefined;
+    if (hasExplicitScope || hasInheritedScope) return undefined;
     if (selection.defaultAgentId && liveWorkspaceAgentIds.has(selection.defaultAgentId)) {
       return selection.defaultAgentId;
     }
@@ -236,16 +236,14 @@ export function SwarmTasksContent({
       : undefined;
   }, [
     firstFocusedSessionAgent,
-    inheritedScope,
+    hasExplicitScope,
+    hasInheritedScope,
     layout,
     liveWorkspaceAgentIds,
     presentation,
     selection.defaultAgentId,
-    selection.agentName,
-    selection.plannerName,
     workspaceKey,
   ]);
-  const hasExplicitScope = selection.plannerName !== undefined || selection.agentName !== undefined;
   const isCompact = useIsCompactFormFactor();
   const isActive = useRetainedPanelActive();
   useEffect(() => {
@@ -253,7 +251,12 @@ export function SwarmTasksContent({
   }, [isActive, tabId, workspaceKey]);
   useEffect(() => {
     const inheritedName = inheritedScope.plannerName ?? inheritedScope.agentName;
-    if (presentation !== "explorer" || hasExplicitScope || inheritedName === undefined) return;
+    if (
+      presentation !== "explorer" ||
+      hasExplicitScope ||
+      (inheritedName === undefined && !inheritedScope.unassigned)
+    )
+      return;
     const currentTabId = tabId ?? ensureSwarmTasksTab(workspaceKey, "explorer");
     if (!currentTabId) return;
     const currentTabLayout = useWorkspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
@@ -261,7 +264,11 @@ export function SwarmTasksContent({
       currentTabLayout &&
       collectAllTabs(currentTabLayout.root).find((tab) => tab.tabId === currentTabId);
     const currentSelection = readSwarmTaskSelection(currentTab?.state);
-    if (currentSelection.plannerName !== undefined || currentSelection.agentName !== undefined)
+    if (
+      currentSelection.plannerName !== undefined ||
+      currentSelection.agentName !== undefined ||
+      currentSelection.unassigned
+    )
       return;
     setSwarmTaskSelection(workspaceKey, currentTabId, {
       ...inheritedScope,
@@ -275,6 +282,7 @@ export function SwarmTasksContent({
       hasExplicitScope ||
       inheritedScope.plannerName !== undefined ||
       inheritedScope.agentName !== undefined ||
+      inheritedScope.unassigned ||
       selection.defaultAgentId === defaultAgentId
     )
       return;
@@ -308,7 +316,7 @@ export function SwarmTasksContent({
     [tabId, workspaceKey],
   );
   const onScopeChange = useCallback(
-    (scope: Pick<SwarmTaskSelection, "plannerName" | "agentName">) => {
+    (scope: Pick<SwarmTaskSelection, "plannerName" | "agentName" | "unassigned">) => {
       const currentTabId = tabId ?? ensureSwarmTasksTab(workspaceKey, "explorer");
       if (!currentTabId) return;
       const currentTabLayout = useWorkspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
@@ -351,6 +359,7 @@ export function SwarmTasksContent({
       {...selection}
       plannerName={inheritedScope.plannerName ?? selection.plannerName}
       agentName={inheritedScope.agentName ?? selection.agentName}
+      unassigned={inheritedScope.unassigned ?? selection.unassigned}
       retainedState={retainedState}
       defaultAgentId={defaultAgentId}
       isActive={isActive}

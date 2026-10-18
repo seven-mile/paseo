@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { openSwarmCreationFormDraft, reconcileSwarmCreationDraft } from "@/swarm/parent-selection";
 import { filterWorkspaceProjectsForHost, type HostProjectListItem } from "@/projects/host-projects";
 import {
   createManualProjectSelectionContextKey,
@@ -7,6 +8,7 @@ import {
   reconcileProjectSelection,
   resolveInitialProjectSelectionSource,
   resolveProjectSelection,
+  resolveProjectPickerSelection,
   type ProjectSelection,
   type ProjectSelectionContext,
 } from "./project-selection";
@@ -675,5 +677,132 @@ describe("reconcileProjectSelection", () => {
     });
 
     expect(resolveProjectSelection(current, selectionContext)).toEqual(manual);
+  });
+});
+
+describe("retained Swarm Project picker adapter", () => {
+  it("restores manual B on the chosen host before role reconciliation, using fresh live Projects", () => {
+    const form = openSwarmCreationFormDraft("supervisor");
+    const a = project("a", "other-host");
+    const b = project("b", "other-host");
+    const selectionContext = context({
+      initialProject: a,
+      projects: [a, b],
+      selectedServerId: "other-host",
+    });
+    // These are the same manual values published by the actual host/project picker callbacks.
+    form.setHost({ routeServerId: "host", serverId: "other-host" });
+    form.setProjectSelection({
+      contextKey: selectionContext.manualContextKey,
+      source: "manual",
+      project: b,
+      originProject: b,
+    });
+    form.setName("qa-created-supervisor");
+    form.setSelection({
+      key: "other-host:b:supervisor",
+      serverId: "other-host",
+      roleClass: "supervisor",
+      hasProject: true,
+      hasResolvedProject: true,
+      parent: "b-planner",
+      role: "legacy-supervisor",
+      directory: ".",
+    });
+    const remountedSnapshot = form.getSnapshot();
+    const freshB = { ...b, projectName: "Fresh B" };
+    const remountedContext = { ...selectionContext, projects: [a, freshB] };
+    // New component-local state initializes to A; the optional adapter takes the retained B intent.
+    const local = createProjectSelection(remountedContext);
+    const active = resolveProjectPickerSelection(
+      local,
+      remountedSnapshot.projectSelection,
+      remountedContext,
+    );
+    expect(resolveProjectSelection(active, remountedContext)).toBe(freshB);
+    expect(form.getSnapshot()).toBe(remountedSnapshot);
+    expect(remountedSnapshot).toMatchObject({
+      name: "qa-created-supervisor",
+      manualHost: { serverId: "other-host" },
+      selection: { parent: "b-planner", role: "legacy-supervisor", directory: "." },
+    });
+    expect(
+      reconcileSwarmCreationDraft(remountedSnapshot.selection!, {
+        key: "other-host:b:supervisor",
+        serverId: "other-host",
+        roleClass: "supervisor",
+        hasProject: true,
+      }),
+    ).toBe(remountedSnapshot.selection);
+    const newIntent = openSwarmCreationFormDraft("supervisor");
+    expect(
+      resolveProjectSelection(
+        resolveProjectPickerSelection(
+          local,
+          newIntent.getSnapshot().projectSelection,
+          remountedContext,
+        ),
+        remountedContext,
+      ),
+    ).toBe(a);
+    // Explicitly choosing A still invalidates B's dependent role/parent through the existing guard.
+    form.setProjectSelection({
+      contextKey: selectionContext.manualContextKey,
+      source: "manual",
+      project: a,
+      originProject: a,
+    });
+    expect(
+      resolveProjectSelection(
+        resolveProjectPickerSelection(local, form.getSnapshot().projectSelection, remountedContext),
+        remountedContext,
+      ),
+    ).toBe(a);
+    expect(
+      reconcileSwarmCreationDraft(remountedSnapshot.selection!, {
+        key: "other-host:a:supervisor",
+        serverId: "other-host",
+        roleClass: "supervisor",
+        hasProject: true,
+      }),
+    ).toMatchObject({ parent: null, role: "", directory: undefined });
+  });
+
+  it("waits for missing manual B rather than using cached B or automatic A, and retains normal route reset", () => {
+    const a = project("a");
+    const b = project("b");
+    const selectionContext = context({ initialProject: a, projects: [a] });
+    const retained: ProjectSelection = {
+      contextKey: selectionContext.manualContextKey,
+      source: "manual",
+      project: b,
+      originProject: b,
+    };
+    const local = createProjectSelection(selectionContext);
+    const waiting = resolveProjectPickerSelection(local, retained, selectionContext);
+    expect(waiting).toBe(retained);
+    expect(resolveProjectSelection(waiting, selectionContext)).toBeNull();
+    const hydrated = { ...selectionContext, projects: [a, b] };
+    expect(
+      resolveProjectSelection(resolveProjectPickerSelection(local, retained, hydrated), hydrated),
+    ).toBe(b);
+    const otherRoute = {
+      ...selectionContext,
+      manualContextKey: "new-route",
+      contextKey: "host:new-route",
+    };
+    expect(
+      resolveProjectSelection(
+        resolveProjectPickerSelection(local, retained, otherRoute),
+        otherRoute,
+      ),
+    ).toBe(a);
+    // Ordinary creation has no adapter and keeps its previous fallback behavior.
+    expect(
+      resolveProjectSelection(
+        resolveProjectPickerSelection(local, undefined, selectionContext),
+        selectionContext,
+      ),
+    ).toBe(a);
   });
 });

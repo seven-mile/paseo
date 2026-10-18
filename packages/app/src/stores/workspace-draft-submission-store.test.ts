@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { transformFileSync } from "@babel/core";
 import { expect, test } from "vitest";
+import { openSwarmCreationFormDraft, openSwarmPreparation } from "@/swarm/parent-selection";
 import type { useWorkspaceDraftSubmissionStore } from "./workspace-draft-submission-store";
 
 // Exercise the emitted app code: plain TypeScript execution misses Expo's omit bug.
@@ -68,4 +69,82 @@ test("consuming draft presentation retains its running creation through remount 
   expect(store.getState().creationByDraftId[submission.draftId]).toBe(creation);
   store.getState().clearDraftSetup({ draftId: submission.draftId });
   expect(store.getState().creationByDraftId[submission.draftId]).toBeUndefined();
+});
+
+test("a wizard draft retains its form and reserved identity through remount, with separate new intents", async () => {
+  const store = loadProductionStore();
+  let opens = 0;
+  const create = () => {
+    opens += 1;
+    return {
+      form: openSwarmCreationFormDraft("supervisor"),
+      preparation: openSwarmPreparation((id) => `Resolve ${id}`),
+      worktreeSlug: `worktree-${opens}`,
+    };
+  };
+  const first = store.getState().retainSwarmDraft({ draftId: "wizard-one", create });
+  first.form.setName("qa-created-supervisor");
+  first.form.setSelection({
+    key: "host:project:supervisor",
+    serverId: "host",
+    roleClass: "supervisor",
+    hasProject: true,
+    hasResolvedProject: true,
+    parent: "qa-planner",
+    directory: ".",
+    role: "legacy-supervisor",
+  });
+  first.form.setHost({ routeServerId: "host", serverId: "other-host" });
+  first.form.setIsolation("worktree");
+  first.form.dispatchCheckout("other-host:/work/b", {
+    type: "picker-selected",
+    item: {
+      kind: "branch",
+      name: "feature",
+      refName: "refs/heads/feature",
+      accessibilityLabel: "feature",
+    },
+  });
+  let reservations = 0;
+  const prepared = await first.preparation.prepare("source-and-user-input", async () => {
+    reservations += 1;
+    return { agentId: "reserved-uuid", systemPrompt: "fixed prompt", parentAgentId: "parent-uuid" };
+  });
+  const remounted = store.getState().retainSwarmDraft({ draftId: "wizard-one", create });
+  expect(remounted).toBe(first);
+  expect(remounted.form.getSnapshot()).toMatchObject({
+    name: "qa-created-supervisor",
+    selection: { parent: "qa-planner", directory: ".", role: "legacy-supervisor" },
+    manualHost: { routeServerId: "host", serverId: "other-host" },
+    isolation: "worktree",
+    checkout: {
+      targetKey: "other-host:/work/b",
+      picker: { selectedItem: { refName: "refs/heads/feature" } },
+    },
+  });
+  expect(
+    await remounted.preparation.prepare("source-and-user-input", async () => {
+      throw new Error("must retain the reserved identity and prompt");
+    }),
+  ).toBe(prepared);
+  await expect(
+    remounted.preparation.prepare("changed-source", async () => prepared),
+  ).rejects.toThrow("Resolve reserved-uuid");
+  const other = store.getState().retainSwarmDraft({ draftId: "wizard-two", create });
+  expect(other).not.toBe(first);
+  expect(other.form.getSnapshot()).toEqual({
+    name: "supervisor",
+    selection: null,
+    manualHost: null,
+    projectSelection: null,
+    isolation: null,
+    checkout: null,
+  });
+  expect(reservations).toBe(1);
+  expect(opens).toBe(2);
+  store.getState().clearSwarmDraft({ draftId: "wizard-one" });
+  expect(store.getState().swarmByDraftId["wizard-one"]).toBeUndefined();
+  expect(store.getState().swarmByDraftId["wizard-two"]).toBe(other);
+  store.getState().clearDraftSetup({ draftId: "wizard-two" });
+  expect(store.getState().swarmByDraftId).toEqual({});
 });

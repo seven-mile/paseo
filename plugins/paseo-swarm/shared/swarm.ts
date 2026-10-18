@@ -21,6 +21,7 @@ export const boardReadRpc = defineRpc({
     agents: z.array(agentRecordSchema),
     tasks: z.array(taskSchema),
     activities: z.array(activitySchema),
+    teamScopes: z.boolean().optional(),
     statuses: z.array(z.string()).optional(),
     pwaError: z.string().optional(),
     unassignedTaskCount: z.number().optional(),
@@ -36,21 +37,24 @@ const pwaRoleSchema = z.object({
 
 export const pwaSourceReadRpc = defineRpc({
   name: "swarm.pwa_source.read",
-  input: z.object({ projectId: z.string().min(1).optional() }),
+  input: z.object({ projectId: z.string().min(1).optional(), path: z.string().min(1).optional() }),
   output: z.object({
     path: z.string().nullable(),
-    defaultPwa: z.string().nullable(),
-    entries: z.array(
-      z.object({
-        directory: z.string(),
-        title: z.string(),
-        roles: z.array(pwaRoleSchema),
-        statuses: z.array(z.string()),
-        error: z.string().optional(),
-      }),
-    ),
-    complete: z.boolean(),
-    errors: z.array(z.object({ directory: z.string(), error: z.string() })),
+    sourcePreview: z.boolean().optional(),
+    defaultPwa: z.string().nullable().optional(),
+    entries: z
+      .array(
+        z.object({
+          directory: z.string(),
+          title: z.string(),
+          roles: z.array(pwaRoleSchema),
+          statuses: z.array(z.string()),
+          error: z.string().optional(),
+        }),
+      )
+      .optional(),
+    complete: z.boolean().optional(),
+    errors: z.array(z.object({ directory: z.string(), error: z.string() })).optional(),
     rootError: z.string().optional(),
   }),
 });
@@ -62,7 +66,7 @@ export const pwaSourceSetRpc = defineRpc({
     projectId: z.string().min(1).optional(),
     defaultPwa: z.string().nullable().optional(),
   }),
-  output: z.object({ path: z.string(), defaultPwa: z.string().nullable() }),
+  output: z.object({ path: z.string(), defaultPwa: z.string().nullable().optional() }),
 });
 
 export const pwaRolesReadRpc = defineRpc({
@@ -142,7 +146,7 @@ export const prepareAgentRpc = defineRpc({
   output: z.object({
     agentId: z.string(),
     systemPrompt: z.string(),
-    parentAgentId: z.string().nullable(),
+    parentAgentId: z.string().nullable().optional(),
     agent: agentRecordSchema,
   }),
 });
