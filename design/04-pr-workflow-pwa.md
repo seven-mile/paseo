@@ -68,7 +68,9 @@ Review worker 不直接改变 Task 的最终状态，也不追加 Activity。它
 
 ### MR preparation
 
-PR/MR 的读者是只有 diff、关联 issue 和仓库的 reviewer，看不到 Task、Activity、看板链接或 agent 对话。Supervisor 从 Activities 中提炼一份固定输入：base/head ref、Task 目标与验收标准、reviewer facts（变更前问题如何出现、实际运行的检查及结果、手动验证的平台、未验证的部分、已知风险、回滚方式）、关联 issue 和公开证据链接，交给一个在该 Task 上没有先前轮次的 preparer。Preparer 只依据这份输入和 diff 撰写标题与正文，遵循目标仓库的 PR/MR 模板，并在返回前运行角色文件中的文本检查。Supervisor 把修改意见退回 preparer，不自行改写，获得授权后发布 preparer 返回的文本。中间 hash、本地路径、看板链接和尝试历史留在 Activity 中。
+Supervisor 掌握变更背后的理由，因此由它撰写 PR/MR 标题和正文。理由来自开发过程中记录的设计决定（候选方案、选择及原因），这些记录也能在上下文压缩后保留。写作指导放在 `refs/mr-body-writing.md`：PR/MR 正文的用途、写法和示例，只在这一步读取，不占用其他步骤的系统提示。
+
+随后由一个在该 Task 上没有先前轮次的 `pr-checker` 像上游 reviewer 一样检查整个交付：标题、正文和 diff。它先写下自己对变更原因和做法的理解，再区分阻塞问题与建议。Supervisor 修改或说明理由后交回同一个 checker；第二轮只确认阻塞问题是否解决、修改是否引入新问题。两轮后由 supervisor 决定剩余问题并记录在 Activity 中。
 
 是否创建或更新 PR/MR、是否 undraft，以及是否需要特殊 GitLab gate，由 PWA 和人类授权路径决定。plugin 只提供 Task/Activity 记录和 Paseo/Git 工具接线，不预设 PR/MR 状态机。
 
