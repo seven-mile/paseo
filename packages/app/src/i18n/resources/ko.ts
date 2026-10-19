@@ -37,19 +37,12 @@ export const ko: TranslationResources = {
       save: "저장",
       directoryLabel: "디렉터리",
       saved: "PWA 디렉터리가 저장되었습니다",
-      defaultDirectory: "Default PWA directory (optional)",
-      defaultHint:
-        "Directory relative to the content root. Use . for its PWA; leave blank to require a selection.",
-      defaultValue: "Default: {{directory}}",
-      noDefault: "No default PWA",
       discovered: "{{count}} PWA directories found",
       partial: "Discovery is incomplete. Refresh to retry unreadable directories.",
       empty: "No PWA directories found.",
       choose: "Choose a PWA directory",
       selectionUnavailable: "The selected PWA directory is unavailable. Choose another or refresh.",
       inherited: "Inherited PWA · {{directory}}",
-      confirmRequired: "Confirm a PWA directory for this parent before creating a child.",
-      confirmBinding: "Confirm parent PWA binding",
       teamUnavailable: "Team PWA unavailable: {{reason}}",
       teamUnavailableTitle: "Team PWA unavailable",
       teamUnavailableDescription:
@@ -116,6 +109,11 @@ export const ko: TranslationResources = {
       undeclaredStatus: "Undeclared status · {{status}}",
     },
     creation: {
+      updateHost: "Update this host to create Swarm agents with PWA selection.",
+      registrationFailed:
+        "Native agent {{id}} was created and may already be running, but Swarm registration failed: {{reason}}. Retry registers this same agent; it does not create another.",
+      registrationMessageChanged:
+        "Native agent {{id}} already exists with the original message. Your edited brief or attachments have not been sent and are preserved. Restore the original message to retry registration; another agent will not be created.",
       notInstalled: "선택한 호스트에 Swarm이 설치되지 않았습니다.",
       chooseProject: "이 호스트의 프로젝트를 선택하세요.",
       noRoles: "이 프로젝트의 PWA에 역할이 설정되지 않았습니다.",
@@ -133,9 +131,6 @@ export const ko: TranslationResources = {
       supervisorHint: "이 작업자가 보고할 관리자를 선택하세요.",
       agentName: "에이전트 이름",
       nameHint: "팀에서 부를 짧은 이름을 지정하세요. 예: code-review.",
-      reservationChanged:
-        "Prepared agent {{id}} is reserved for the previous submission. Restore that submission or ask a human to resolve the reservation.",
-      preparedFailed: "Prepared agent {{id}}: {{reason}}",
     },
   },
   paneFind: {

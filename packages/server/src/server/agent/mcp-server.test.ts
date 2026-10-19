@@ -883,7 +883,7 @@ describe("Swarm MCP coordination", () => {
           paseoAgentId: "nested",
           name: "nested",
           qualifiedName: "non-prefix-descendant",
-          roleClass: "worker",
+          roleClass: "supervisor",
           reportsTo: "non-prefix-manager",
         },
         {
@@ -977,9 +977,15 @@ describe("Swarm MCP coordination", () => {
         ...task("explicit-worker", "another"),
         workerNames: [actor.qualifiedName],
       });
+      board.tasks.push(task("descendant-task", "non-prefix-descendant"));
       expect(await read("swarm_board_read", {})).toMatchObject({
-        totalTasks: 3,
-        tasks: [{ id: "alpha" }, { id: "beta" }, { id: "explicit-worker" }],
+        totalTasks: 4,
+        tasks: [
+          { id: "alpha" },
+          { id: "beta" },
+          { id: "descendant-task" },
+          { id: "explicit-worker" },
+        ],
       });
       await expect(read("swarm_task_read", { taskId: "missing" })).rejects.toThrow("Unknown Task");
       await expect(read("swarm_board_read", { taskCursor: "missing" })).rejects.toThrow(

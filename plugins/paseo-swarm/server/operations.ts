@@ -27,8 +27,8 @@ import {
   pwaSourceSetRpc,
   pwaRolesReadRpc,
   prepareAgentRpc,
+  resolveAgentConfigRpc,
   bindPreparedAgentRpc,
-  bindPwaRpc,
 } from "../shared/swarm";
 import type { AgentRecord, PwaBinding, SwarmState, Task } from "../shared/models";
 import { agentQualifiedName } from "../shared/models";
@@ -231,7 +231,7 @@ function assertParentBinding(
     current.directory !== binding.directory
   ) {
     throw new Error(
-      "The manager's PWA binding changed after preparation. The reserved identity and prompt are retained; resolve the binding conflict explicitly.",
+      "The manager's PWA binding changed after preparation. Existing team sources cannot be rebound; create a new team with the intended PWA.",
     );
   }
 }
@@ -247,9 +247,17 @@ function assertCurrentParentBinding(
   );
   if (!current)
     throw new Error(
-      "The manager is no longer available. The reserved identity and prompt are retained.",
+      "The manager is no longer available. Choose an available manager or create a new team.",
     );
   assertParentBinding(current, binding);
+}
+
+function sameBinding(left: PwaBinding | undefined, right: PwaBinding | undefined) {
+  return (
+    left?.projectId === right?.projectId &&
+    left?.contentRoot === right?.contentRoot &&
+    left?.directory === right?.directory
+  );
 }
 
 async function registrationBinding(
@@ -259,20 +267,29 @@ async function registrationBinding(
   projectId: string | undefined,
   context: PluginHandlerContext,
 ) {
+  if (current && input.pwaBinding && !sameBinding(current.pwaBinding, input.pwaBinding))
+    throw new Error(
+      "An existing agent cannot be rebound to another PWA. Create a new team with the intended source.",
+    );
+  // A captured source stays valid if Project Settings changes while native creation is in flight.
   const binding = current
     ? current.pwaBinding
-    : await creationBinding(projectId, parent, input.pwaDirectory, context);
-  if (current && input.pwaDirectory) {
-    if (!binding)
-      throw new Error("Confirm this agent's PWA directory explicitly before creating children.");
+    : (input.pwaBinding ?? (await creationBinding(projectId, parent, input.pwaDirectory, context)));
+  if (input.pwaDirectory && binding) {
     const selected = resolvePwaBinding({
       projectId,
       directory: input.pwaDirectory,
       contentRoot: binding.contentRoot,
     });
     if (selected.directory !== binding.directory)
-      throw new Error("Confirm a changed PWA directory with bind_pwa.");
+      throw new Error(
+        "An existing agent cannot be rebound to another PWA. Create a new team with the intended source.",
+      );
   }
+  if (current && input.pwaDirectory && !binding)
+    throw new Error(
+      "This agent has no saved PWA source. Restore its configured root PWA or create a new team with an explicit PWA.",
+    );
   if (binding && binding.projectId !== projectId)
     throw new Error("Agent binding belongs to another project.");
   if (!current && binding) {
@@ -335,9 +352,12 @@ async function creationBinding(
     try {
       binding = await effectiveBinding(parent, projectId, context);
     } catch (error) {
-      throw new Error("Confirm the manager's PWA directory before creating a child.", {
-        cause: error,
-      });
+      throw new Error(
+        "The manager's PWA source is unavailable. Restore its configured root PWA or create a new team with an explicit PWA.",
+        {
+          cause: error,
+        },
+      );
     }
     if (binding.projectId !== projectId)
       throw new Error("The manager's PWA binding belongs to another project.");
@@ -501,48 +521,14 @@ function configuredRootStatuses(directory: string): string[] {
   }
 }
 
-async function projectBoardStatuses(
-  agents: AgentRecord[],
-  projectFor: (agent: AgentRecord) => string | undefined,
-  projectId: string | undefined,
-  context: PluginHandlerContext,
-) {
-  const statuses = new Set<string>();
-  const errors: string[] = [];
-  const directories = new Set<string>();
-  const addStatuses = (binding: PwaBinding) => {
-    if (directories.has(binding.directory)) return;
-    directories.add(binding.directory);
-    for (const status of readPwaStatuses(binding.directory, binding.contentRoot))
-      statuses.add(status);
-  };
-  for (const agent of agents.filter(
-    (candidate) =>
-      candidate.roleClass === "planner" &&
-      !candidate.reportsTo &&
-      (!projectId || projectFor(candidate) === projectId),
-  )) {
-    try {
-      addStatuses(await effectiveBinding(agent, projectId ?? projectFor(agent), context));
-    } catch (error) {
-      errors.push(
-        `${agentQualifiedName(agent)}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
-  // A legacy Project workflow also declares columns when all its agents are unavailable.
+async function projectBoardStatuses(projectId: string | undefined, context: PluginHandlerContext) {
+  // Preserve the legacy configured-root workflow; team workflows are read only for team requests.
   try {
     const config = await sourceConfig(projectId, context);
-    if (config.path) {
-      for (const status of configuredRootStatuses(config.path)) statuses.add(status);
-    }
+    return { statuses: config.path ? configuredRootStatuses(config.path) : [] };
   } catch (error) {
-    errors.push(error instanceof Error ? error.message : String(error));
+    return { statuses: [], pwaError: error instanceof Error ? error.message : String(error) };
   }
-  return {
-    statuses: [...statuses],
-    ...(errors.length ? { pwaError: [...new Set(errors)].join("\n") } : {}),
-  };
 }
 
 function assertRegistrationAvailable(current: AgentRecord | undefined) {
@@ -645,7 +631,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         ...saved,
         agents: visibleAgents,
         teamScopes: true,
-        ...(await projectBoardStatuses(agents, projectFor, projectId, context)),
+        ...(await projectBoardStatuses(projectId, context)),
         unassignedTaskCount: orphaned.length,
       };
     }
@@ -697,14 +683,14 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     return {
       path: previewPath,
       sourcePreview: true,
-      defaultPwa: previewPath === config.path ? config.defaultPwa : null,
+      agentConfigRead: true,
       ...(previewPath ? discoverPwas(previewPath) : { entries: [], complete: true, errors: [] }),
     };
   });
-  server.handle(pwaSourceSetRpc, async ({ path, projectId, defaultPwa }, context) => {
+  server.handle(pwaSourceSetRpc, async ({ path, projectId }, context) => {
     const root = projectId ? await projectRoot(projectId, context) : undefined;
-    const savedPath = writePwaSource({ path, projectId, projectRoot: root, defaultPwa });
-    return { path: savedPath, defaultPwa: readPwaSourceConfig(projectId, root).defaultPwa };
+    const savedPath = writePwaSource({ path, projectId, projectRoot: root });
+    return { path: savedPath };
   });
   server.handle(
     pwaRolesReadRpc,
@@ -721,38 +707,6 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       return roles.filter((role) => !roleClass || role.roleClass === roleClass);
     },
   );
-  server.handle(bindPwaRpc, async (input, context) => {
-    const agent = findAgent(input.agentName);
-    if (!agent.workspaceId)
-      throw new Error("Finish binding the prepared agent before changing its PWA directory.");
-    const snapshot = (await context.paseo.agents.ref(agent.paseoAgentId).refresh())?.agent;
-    if (!snapshot || snapshot.workspaceId !== agent.workspaceId)
-      throw new Error(
-        "The native agent placement must be confirmed before changing its PWA directory.",
-      );
-    const actor = input.actorPaseoAgentId ? findAgentByPaseoId(input.actorPaseoAgentId) : null;
-    if (input.actorPaseoAgentId && actor?.paseoAgentId !== agent.paseoAgentId)
-      throw new Error("Only the agent itself can confirm its PWA binding.");
-    const parent = agent.reportsTo ? findAgent(agent.reportsTo) : null;
-    const projectId = await projectScope(
-      { projectId: input.projectId ?? agent.projectId, workspaceId: agent.workspaceId, parent },
-      context,
-    );
-    const binding = await creationBinding(projectId, parent, input.pwaDirectory, context);
-    assertRoleClass(
-      readPwa(binding.directory, agent.role, binding.contentRoot).roleClass,
-      agent.roleClass,
-      agent.role,
-    );
-    await store.update((state) => {
-      assertCurrentParentBinding(state, parent, binding);
-      agent.pwaBinding = binding;
-      agent.projectId = projectId;
-      agent.updatedAt = now();
-    });
-    return agent;
-  });
-
   server.handle(registerAgentRpc, async (input: RpcInput<typeof registerAgentRpc>, context) => {
     const parent = input.reportsTo ? findAgent(input.reportsTo) : null;
     const current = findAgentByPaseoId(input.paseoAgentId);
@@ -767,8 +721,8 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       context,
     );
     const binding = await registrationBinding(input, current, parent, projectId, context);
+    assertNativeParent(snapshot.labels, parent);
     if (!current) {
-      assertNativeParent(snapshot.labels, parent);
       await assertCreationWorkspace(parent, snapshot.workspaceId, context, input.paseoAgentId);
       const parentSnapshot = parent
         ? (await context.paseo.agents.ref(parent.paseoAgentId).refresh())?.agent
@@ -791,6 +745,10 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       if (!current && binding) assertCurrentParentBinding(state, parent, binding);
       const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
       if (!existing) ensureUniqueName(input.name, qualifiedName, parent);
+      if (existing && !sameBinding(existing.pwaBinding, binding))
+        throw new Error(
+          "An existing agent cannot be rebound to another PWA. Create a new team with the intended source.",
+        );
       if (
         existing &&
         (existing.name !== input.name ||
@@ -877,24 +835,41 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       const createConfig = creationConfig(input, provisional, parent, binding);
       await store.update((state) => {
         assertCurrentParentBinding(state, parent, binding);
+        ensureUniqueName(input.name, qualifiedName, parent);
         state.agents.push(reservedAgent);
       });
       let created;
+      let canReleaseReservation = true;
+      // CreationService owns existence/unknown-outcome detection; a failed refresh cannot prove absence.
+      const onEvent: NonNullable<
+        Parameters<PluginHandlerContext["paseo"]["agents"]["create"]>[0]["onEvent"]
+      > = (snapshot) => {
+        canReleaseReservation =
+          snapshot.phase === "failed" &&
+          snapshot.failedStage === "agent" &&
+          snapshot.outcomeUnknown === false &&
+          snapshot.agentId === paseoAgentId &&
+          !snapshot.agent;
+      };
       try {
         let workspace = workspaceId ? context.paseo.workspaces.ref(workspaceId) : null;
-        if (!workspace && (input.roleClass === "supervisor" || (!parent && projectId))) {
+        // Supervisors already require an explicit independent workspace in creationPlacement.
+        if (!workspace && !parent && projectId) {
           workspace = await context.paseo.workspaces.create({
             source: { kind: "directory", path: cwd, ...(projectId ? { projectId } : {}) },
             title: input.title ?? input.name,
           });
         }
+        canReleaseReservation = false;
         created = workspace
           ? await workspace.agents.create({
               ...createConfig,
+              onEvent,
               agentId: paseoAgentId,
             })
           : await context.paseo.agents.create({
               ...createConfig,
+              onEvent,
               agentId: paseoAgentId,
               cwd,
             });
@@ -920,6 +895,15 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         await created.send(input.brief);
         return result;
       } catch (error) {
+        if (!created && canReleaseReservation) {
+          await store.update((state) => {
+            state.agents = state.agents.filter((agent) => agent.paseoAgentId !== paseoAgentId);
+          });
+          throw new Error(
+            `Agent creation failed before a native agent was created. Name ${qualifiedName} is available for retry.`,
+            { cause: error },
+          );
+        }
         await store.update((state) => {
           const reservation = state.agents.find((agent) => agent.paseoAgentId === paseoAgentId);
           if (reservation)
@@ -930,6 +914,36 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
           { cause: error },
         );
       }
+    },
+  );
+
+  server.handle(
+    resolveAgentConfigRpc,
+    async (input: RpcInput<typeof resolveAgentConfigRpc>, context) => {
+      const { actor, parent } = parentForCreate(input);
+      assertCanCreateAgent(actor, parent, input.roleClass);
+      assertHierarchy(parent, input.roleClass);
+      const projectId = await projectScope({ ...input, parent }, context);
+      const pwaBinding = await creationBinding(projectId, parent, input.pwaDirectory, context);
+      const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
+      ensureUniqueName(input.name, qualifiedName, parent);
+      const systemPrompt = rolePrompt(
+        {
+          name: input.name,
+          qualifiedName,
+          roleClass: input.roleClass,
+          role: input.role,
+          reportsTo: parent ? agentQualifiedName(parent) : null,
+        },
+        input.brief,
+        pwaBinding,
+      );
+      return {
+        systemPrompt,
+        parentAgentId: parent?.paseoAgentId ?? null,
+        pwaBinding,
+        ...(projectId ? { projectId } : {}),
+      };
     },
   );
 

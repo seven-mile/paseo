@@ -1,17 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { readSwarmAgentCreationConfig } from "./pwa-form-model";
 import { i18n } from "@/i18n/i18next";
 import {
   getSwarmCreationLoadKey,
   getSwarmCreationValidationKey,
   filterSwarmParents,
   resolveSwarmParent,
-  openSwarmPreparation,
   openSwarmCreationFormDraft,
   resolveSwarmCheckoutSelection,
   changeSwarmCreationParent,
-  swarmPreparedAgentSchema,
   reconcileSwarmCreationDraft,
-  swarmPwaSourceIdentity,
   resolveSwarmPwaSelection,
   type SwarmCreationDraft,
   type SwarmParentChoice,
@@ -149,79 +147,6 @@ describe("Swarm parent selection", () => {
   });
 });
 
-describe("prepared Swarm creation identity", () => {
-  it("retains a legacy prepared UUID/prompt when parentAgentId is absent", async () => {
-    const preparation = openSwarmPreparation((id) => id);
-    let calls = 0;
-    const create = async () => {
-      calls += 1;
-      return swarmPreparedAgentSchema.parse({ agentId: "reserved-old", systemPrompt: "unchanged" });
-    };
-    const original = await preparation.prepare("legacy", create);
-    expect(original).toEqual({
-      agentId: "reserved-old",
-      systemPrompt: "unchanged",
-      parentAgentId: null,
-    });
-    expect(await preparation.prepare("legacy", create)).toBe(original);
-    expect(calls).toBe(1);
-  });
-  it("reuses the same prompt/UUID after native failure and rejects a changed submission", async () => {
-    const reservation = openSwarmPreparation((id) => `Resolve ${id}`);
-    const prepared = {
-      agentId: "prepared-id",
-      systemPrompt: "fixed prompt",
-      parentAgentId: "native-parent",
-    };
-    let creates = 0;
-    const create = async () => {
-      creates += 1;
-      return prepared;
-    };
-    expect(await reservation.prepare("host/project/parent/pwa/role/name/brief", create)).toBe(
-      prepared,
-    );
-    expect(await reservation.prepare("host/project/parent/pwa/role/name/brief", create)).toBe(
-      prepared,
-    );
-    await expect(reservation.prepare("different-brief", create)).rejects.toThrow(
-      "Resolve prepared-id",
-    );
-    expect(creates).toBe(1);
-  });
-  it("shares an in-flight prepare and permits retry only when prepare itself failed", async () => {
-    const reservation = openSwarmPreparation((id) => id);
-    let resolve!: (value: { agentId: string; systemPrompt: string; parentAgentId: null }) => void;
-    let creates = 0;
-    const create = () => {
-      creates += 1;
-      return new Promise<{ agentId: string; systemPrompt: string; parentAgentId: null }>(
-        (complete) => {
-          resolve = complete;
-        },
-      );
-    };
-    const first = reservation.prepare("same", create);
-    const duplicate = reservation.prepare("same", create);
-    resolve({ agentId: "once", systemPrompt: "prompt", parentAgentId: null });
-    expect(await first).toEqual(await duplicate);
-    expect(creates).toBe(1);
-    const retryable = openSwarmPreparation((id) => id);
-    await expect(
-      retryable.prepare("same", async () => {
-        throw new Error("read failed");
-      }),
-    ).rejects.toThrow("read failed");
-    expect(
-      await retryable.prepare("same", async () => ({
-        agentId: "retry",
-        systemPrompt: "latest",
-        parentAgentId: null,
-      })),
-    ).toMatchObject({ agentId: "retry" });
-  });
-});
-
 describe("creation hydration and inherited source identity", () => {
   it("keeps the explicit parent on first Project hydration, then resets on real Project changes", () => {
     const initial: SwarmCreationDraft = {
@@ -280,44 +205,11 @@ describe("creation hydration and inherited source identity", () => {
       }).parent,
     ).toBeNull();
   });
-
-  it("reuses child reservation after unrelated Project root changes but rejects a changed parent binding", async () => {
-    const binding = {
-      projectId: "project",
-      contentRoot: "/bound-content",
-      directory: "/bound-content/team",
-    };
-    const before = swarmPwaSourceIdentity("worker", "/discovery-a", "team", binding);
-    const after = swarmPwaSourceIdentity("worker", "/discovery-b", "other-default", binding);
-    expect(after).toBe(before);
-    const reservation = openSwarmPreparation((id) => `Resolve ${id}`);
-    const prepared = { agentId: "preserved-child", systemPrompt: "fixed", parentAgentId: "parent" };
-    const result = await reservation.prepare(before, async () => prepared);
-    expect(
-      await reservation.prepare(after, async () => {
-        throw new Error("must reuse prepared identity");
-      }),
-    ).toBe(result);
-    const moved = swarmPwaSourceIdentity("worker", "/discovery-b", "team", {
-      ...binding,
-      directory: "/bound-content/moved",
-    });
-    await expect(reservation.prepare(moved, async () => prepared)).rejects.toThrow(
-      "Resolve preserved-child",
-    );
-    expect(swarmPwaSourceIdentity("planner", "/discovery-a", "team", undefined)).not.toBe(
-      swarmPwaSourceIdentity("planner", "/discovery-b", "team", undefined),
-    );
-    expect(swarmPwaSourceIdentity("planner", "/discovery-a", "team", undefined)).not.toBe(
-      swarmPwaSourceIdentity("planner", "/discovery-a", "other-team", undefined),
-    );
-  });
 });
 
 describe("effective inherited PWA selection", () => {
   const root = {
     path: "/root",
-    defaultPwa: "team",
     discoveryAvailable: true,
     complete: true,
     errors: [],
@@ -338,7 +230,7 @@ describe("effective inherited PWA selection", () => {
         parents[0],
         "team",
       ),
-    ).toMatchObject({ canReadRoles: false, inheritedDirectory: undefined, needsBinding: true });
+    ).toMatchObject({ canReadRoles: true, inheritedDirectory: undefined });
     expect(
       resolveSwarmPwaSelection(
         { ...root, entries: [], discoveryAvailable: false },
@@ -354,7 +246,7 @@ describe("effective inherited PWA selection", () => {
         parents[0],
         "",
       ),
-    ).toMatchObject({ canReadRoles: false, needsBinding: false });
+    ).toMatchObject({ canReadRoles: true });
   });
   it("keeps a complete explicit binding ahead of unrelated Project root/default changes", () => {
     const parent = {
@@ -364,47 +256,28 @@ describe("effective inherited PWA selection", () => {
     expect(resolveSwarmPwaSelection(root, "worker", parent, "team")).toMatchObject({
       inheritedDirectory: "/bound/team",
       canReadRoles: true,
-      needsBinding: false,
     });
-    expect(swarmPwaSourceIdentity("worker", "/a", "team", undefined)).not.toBe(
-      swarmPwaSourceIdentity("worker", "/b", "team", undefined),
-    );
   });
 });
 
-it("does not infer missing root binding from a partial discovery budget failure", () => {
-  const partial = {
+it("delegates inherited source readability to the roles RPC without offering rebind", () => {
+  const source = {
     path: "/root",
-    defaultPwa: "team",
     discoveryAvailable: true,
     complete: false,
-    errors: [{ directory: "unvisited", error: "Discovery budget exceeded" }],
-    entries: [{ directory: "team", title: "Team", roles: [], statuses: [] }],
+    errors: [{ directory: "unvisited", error: "budget exceeded" }],
+    entries: [{ directory: "other", title: "Other", roles: [], statuses: [] }],
   };
-  expect(resolveSwarmPwaSelection(partial, "worker", parents[0], "team")).toMatchObject({
-    canReadRoles: false,
-    needsBinding: false,
+  const selection = resolveSwarmPwaSelection(source, "worker", parents[0], "other");
+  expect(selection).toMatchObject({
+    canReadRoles: true,
+    inherited: true,
+    inheritedDirectory: undefined,
   });
   expect(
-    resolveSwarmPwaSelection({ ...partial, complete: true }, "worker", parents[0], "team"),
-  ).toMatchObject({ canReadRoles: false, needsBinding: true });
-  const root = { directory: ".", title: "Root", roles: [], statuses: [] };
-  expect(
-    resolveSwarmPwaSelection(
-      { ...partial, entries: [root, ...partial.entries] },
-      "worker",
-      parents[0],
-      "team",
-    ),
-  ).toMatchObject({ canReadRoles: true, needsBinding: false });
-  expect(
-    resolveSwarmPwaSelection(
-      { ...partial, entries: [{ ...root, error: "Unreadable root PWA" }, ...partial.entries] },
-      "worker",
-      parents[0],
-      "team",
-    ),
-  ).toMatchObject({ canReadRoles: false, needsBinding: true });
+    resolveSwarmPwaSelection({ ...source, complete: true }, "worker", parents[0], "other"),
+  ).toEqual(selection);
+  expect(resolveSwarmPwaSelection(source, "worker", undefined, "other").canReadRoles).toBe(false);
 });
 
 describe("Swarm wizard draft remount lifetime", () => {
@@ -480,4 +353,74 @@ it("retains isolation and checkout only for the real creation target", () => {
     resolveSwarmCheckoutSelection(form.getSnapshot().checkout, targetB).selectedItem,
   ).toBeNull();
   expect(openSwarmCreationFormDraft("worker").getSnapshot().checkout).toBeNull();
+});
+
+describe("human Swarm creation configuration and registration", () => {
+  it("reads without reserving an identity and retries registration with the captured source", async () => {
+    const calls: Array<{ method: string; input: unknown }> = [];
+    let source = "/root/a";
+    let fail = true;
+    const invoke = async (method: string, input: unknown) => {
+      calls.push({ method, input });
+      if (method === "swarm.agent.config.read")
+        return {
+          systemPrompt: "original P",
+          parentAgentId: "real-parent",
+          projectId: "project",
+          pwaBinding: { projectId: "project", contentRoot: "/root", directory: source },
+        };
+      if (fail) throw new Error("registration unavailable");
+      return {};
+    };
+    const config = await readSwarmAgentCreationConfig(invoke, {
+      projectId: "project",
+      roleClass: "worker",
+      name: "reviewer",
+      role: "reviewer",
+      reportsTo: "planner.supervisor",
+      brief: "original brief",
+    });
+    expect(config.systemPrompt).toBe("original P");
+    expect(config.parentAgentId).toBe("real-parent");
+    expect(calls.map((call) => call.method)).toEqual(["swarm.agent.config.read"]);
+    const created = { agentId: "native-created-id", workspaceId: "native-workspace" };
+    await expect(config.register(created)).rejects.toThrow("registration unavailable");
+    source = "/root/b";
+    fail = false;
+    await config.register(created);
+    expect(calls.map((call) => call.method)).toEqual([
+      "swarm.agent.config.read",
+      "swarm.agent.register",
+      "swarm.agent.register",
+    ]);
+    expect(calls[1].input).toEqual(calls[2].input);
+    expect(calls[2].input).toMatchObject({
+      paseoAgentId: "native-created-id",
+      workspaceId: "native-workspace",
+      pwaBinding: { directory: "/root/a" },
+      reportsTo: "planner.supervisor",
+    });
+  });
+});
+
+it("does not attempt registration when read-only configuration fails", async () => {
+  const methods: string[] = [];
+  await expect(
+    readSwarmAgentCreationConfig(
+      async (method) => {
+        methods.push(method);
+        throw new Error("PWA unavailable");
+      },
+      {
+        projectId: "project",
+        roleClass: "planner",
+        name: "planner",
+        role: "planner",
+        reportsTo: null,
+        pwaDirectory: "second",
+        brief: "brief",
+      },
+    ),
+  ).rejects.toThrow("PWA unavailable");
+  expect(methods).toEqual(["swarm.agent.config.read"]);
 });

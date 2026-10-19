@@ -9,7 +9,6 @@ import type { BarcodeScanningResult, BarcodeSettings } from "expo-camera";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { openPairScan } from "@/hosts/pair-scan-model";
 import { buildHostRootRoute, buildSettingsHostRoute } from "@/utils/host-routes";
-import { isWeb } from "@/constants/platform";
 import { BackHeader } from "@/components/headers/back-header";
 import { PairLinkModal } from "@/components/pair-link-modal";
 import { Button } from "@/components/ui/button";
@@ -158,7 +157,6 @@ export default function PairScanScreen() {
   }, [router]);
 
   useEffect(() => {
-    if (isWeb) return;
     if (permission && permission.granted) return;
     void requestPermission().catch(() => undefined);
   }, [permission, requestPermission]);
@@ -169,7 +167,6 @@ export default function PairScanScreen() {
     [scan],
   );
 
-  const handleRouterBack = useCallback(() => router.back(), [router]);
   const savePasswordPairing = useCallback(
     ({ serverId }: { serverId: string }) => navigateToPairedHost(serverId),
     [navigateToPairedHost],
@@ -177,23 +174,6 @@ export default function PairScanScreen() {
   const handleRequestPermission = useCallback(() => {
     void requestPermission();
   }, [requestPermission]);
-
-  if (isWeb) {
-    return (
-      <View style={styles.container}>
-        <BackHeader title={t("pairing.scan.title")} onBack={handleRouterBack} />
-        <View style={styles.body(insets.bottom)}>
-          <View style={styles.permissionCard}>
-            <Text style={styles.permissionTitle}>{t("pairing.scan.webUnavailableTitle")}</Text>
-            <Text style={styles.permissionBody}>{t("pairing.scan.webUnavailableBody")}</Text>
-            <Pressable style={styles.permissionButton} onPress={closeToSource}>
-              <Text style={styles.permissionButtonText}>{t("pairing.scan.backToSettings")}</Text>
-            </Pressable>
-          </View>
-        </View>
-      </View>
-    );
-  }
 
   const granted = Boolean(permission?.granted);
 

@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   activitySchema,
   agentRecordSchema,
+  pwaBindingSchema,
   responseProfileSchema,
   roleClassSchema,
   slugNameSchema,
@@ -41,7 +42,7 @@ export const pwaSourceReadRpc = defineRpc({
   output: z.object({
     path: z.string().nullable(),
     sourcePreview: z.boolean().optional(),
-    defaultPwa: z.string().nullable().optional(),
+    agentConfigRead: z.boolean().optional(),
     entries: z
       .array(
         z.object({
@@ -64,9 +65,8 @@ export const pwaSourceSetRpc = defineRpc({
   input: z.object({
     path: z.string().min(1),
     projectId: z.string().min(1).optional(),
-    defaultPwa: z.string().nullable().optional(),
   }),
-  output: z.object({ path: z.string(), defaultPwa: z.string().nullable().optional() }),
+  output: z.object({ path: z.string() }),
 });
 
 export const pwaRolesReadRpc = defineRpc({
@@ -81,22 +81,12 @@ export const pwaRolesReadRpc = defineRpc({
   output: z.array(pwaRoleSchema),
 });
 
-export const bindPwaRpc = defineRpc({
-  name: "swarm.agent.bind_pwa",
-  input: z.object({
-    agentName: z.string().min(1),
-    projectId: z.string().min(1).optional(),
-    pwaDirectory: z.string().min(1),
-    actorPaseoAgentId: z.string().nullable().default(null),
-  }),
-  output: agentRecordSchema,
-});
-
 export const registerAgentRpc = defineRpc({
   name: "swarm.agent.register",
   input: z.object({
     projectId: z.string().min(1).optional(),
     pwaDirectory: z.string().min(1).optional(),
+    pwaBinding: pwaBindingSchema.optional(),
     paseoAgentId: z.string(),
     name: slugNameSchema,
     aliases: z.array(z.string()).default([]),
@@ -148,6 +138,18 @@ export const prepareAgentRpc = defineRpc({
     systemPrompt: z.string(),
     parentAgentId: z.string().nullable().optional(),
     agent: agentRecordSchema,
+  }),
+});
+
+// Read-only compilation; unlike prepare, this never reserves an identity or name.
+export const resolveAgentConfigRpc = defineRpc({
+  name: "swarm.agent.config.read",
+  input: prepareAgentRpc.input,
+  output: z.object({
+    systemPrompt: z.string(),
+    parentAgentId: z.string().nullable(),
+    pwaBinding: pwaBindingSchema,
+    projectId: z.string().optional(),
   }),
 });
 

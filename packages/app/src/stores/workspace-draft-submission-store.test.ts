@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { transformFileSync } from "@babel/core";
 import { expect, test } from "vitest";
-import { openSwarmCreationFormDraft, openSwarmPreparation } from "@/swarm/parent-selection";
+import { openSwarmCreationFormDraft } from "@/swarm/parent-selection";
 import type { useWorkspaceDraftSubmissionStore } from "./workspace-draft-submission-store";
 
 // Exercise the emitted app code: plain TypeScript execution misses Expo's omit bug.
@@ -71,14 +71,13 @@ test("consuming draft presentation retains its running creation through remount 
   expect(store.getState().creationByDraftId[submission.draftId]).toBeUndefined();
 });
 
-test("a wizard draft retains its form and reserved identity through remount, with separate new intents", async () => {
+test("a wizard draft retains its form values through remount, with separate new intents", () => {
   const store = loadProductionStore();
   let opens = 0;
   const create = () => {
     opens += 1;
     return {
       form: openSwarmCreationFormDraft("supervisor"),
-      preparation: openSwarmPreparation((id) => `Resolve ${id}`),
       worktreeSlug: `worktree-${opens}`,
     };
   };
@@ -105,11 +104,6 @@ test("a wizard draft retains its form and reserved identity through remount, wit
       accessibilityLabel: "feature",
     },
   });
-  let reservations = 0;
-  const prepared = await first.preparation.prepare("source-and-user-input", async () => {
-    reservations += 1;
-    return { agentId: "reserved-uuid", systemPrompt: "fixed prompt", parentAgentId: "parent-uuid" };
-  });
   const remounted = store.getState().retainSwarmDraft({ draftId: "wizard-one", create });
   expect(remounted).toBe(first);
   expect(remounted.form.getSnapshot()).toMatchObject({
@@ -122,14 +116,6 @@ test("a wizard draft retains its form and reserved identity through remount, wit
       picker: { selectedItem: { refName: "refs/heads/feature" } },
     },
   });
-  expect(
-    await remounted.preparation.prepare("source-and-user-input", async () => {
-      throw new Error("must retain the reserved identity and prompt");
-    }),
-  ).toBe(prepared);
-  await expect(
-    remounted.preparation.prepare("changed-source", async () => prepared),
-  ).rejects.toThrow("Resolve reserved-uuid");
   const other = store.getState().retainSwarmDraft({ draftId: "wizard-two", create });
   expect(other).not.toBe(first);
   expect(other.form.getSnapshot()).toEqual({
@@ -140,7 +126,6 @@ test("a wizard draft retains its form and reserved identity through remount, wit
     isolation: null,
     checkout: null,
   });
-  expect(reservations).toBe(1);
   expect(opens).toBe(2);
   store.getState().clearSwarmDraft({ draftId: "wizard-one" });
   expect(store.getState().swarmByDraftId["wizard-one"]).toBeUndefined();

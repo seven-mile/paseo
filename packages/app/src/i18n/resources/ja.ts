@@ -37,19 +37,12 @@ export const ja: TranslationResources = {
       save: "保存",
       directoryLabel: "ディレクトリ",
       saved: "PWA ディレクトリを保存しました",
-      defaultDirectory: "Default PWA directory (optional)",
-      defaultHint:
-        "Directory relative to the content root. Use . for its PWA; leave blank to require a selection.",
-      defaultValue: "Default: {{directory}}",
-      noDefault: "No default PWA",
       discovered: "{{count}} PWA directories found",
       partial: "Discovery is incomplete. Refresh to retry unreadable directories.",
       empty: "No PWA directories found.",
       choose: "Choose a PWA directory",
       selectionUnavailable: "The selected PWA directory is unavailable. Choose another or refresh.",
       inherited: "Inherited PWA · {{directory}}",
-      confirmRequired: "Confirm a PWA directory for this parent before creating a child.",
-      confirmBinding: "Confirm parent PWA binding",
       teamUnavailable: "Team PWA unavailable: {{reason}}",
       teamUnavailableTitle: "Team PWA unavailable",
       teamUnavailableDescription:
@@ -116,6 +109,11 @@ export const ja: TranslationResources = {
       undeclaredStatus: "Undeclared status · {{status}}",
     },
     creation: {
+      updateHost: "Update this host to create Swarm agents with PWA selection.",
+      registrationFailed:
+        "Native agent {{id}} was created and may already be running, but Swarm registration failed: {{reason}}. Retry registers this same agent; it does not create another.",
+      registrationMessageChanged:
+        "Native agent {{id}} already exists with the original message. Your edited brief or attachments have not been sent and are preserved. Restore the original message to retry registration; another agent will not be created.",
       notInstalled: "選択したホストに Swarm がインストールされていません。",
       chooseProject: "このホストのプロジェクトを選んでください。",
       noRoles: "このプロジェクトの PWA にロールが設定されていません。",
@@ -133,9 +131,6 @@ export const ja: TranslationResources = {
       supervisorHint: "このワーカーの報告先スーパーバイザーを選択します。",
       agentName: "エージェント名",
       nameHint: "チーム内で呼びかける短い名前を付けます。例: code-review。",
-      reservationChanged:
-        "Prepared agent {{id}} is reserved for the previous submission. Restore that submission or ask a human to resolve the reservation.",
-      preparedFailed: "Prepared agent {{id}}: {{reason}}",
     },
   },
   paneFind: {

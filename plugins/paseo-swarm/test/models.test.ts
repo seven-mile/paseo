@@ -93,12 +93,16 @@ test("source responses from older hosts remain parseable without discovery field
   assert.deepEqual(pwaSourceSetRpc.output.parse({ path: "/legacy" }), { path: "/legacy" });
   const previous = pwaSourceReadRpc.output.parse({
     path: "/content",
-    defaultPwa: null,
     entries: [],
     complete: true,
     errors: [],
   });
   assert.equal(previous.sourcePreview, undefined);
+  assert.equal(previous.agentConfigRead, undefined);
+  assert.equal(
+    pwaSourceReadRpc.output.safeParse({ path: "/content", agentConfigRead: "yes" }).success,
+    false,
+  );
   assert.equal(
     boardReadRpc.output.parse({ version: 1, agents: [], tasks: [], activities: [] }).teamScopes,
     undefined,

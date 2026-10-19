@@ -34,19 +34,12 @@ export const en = {
       save: "Save",
       directoryLabel: "Content parent directory",
       saved: "PWA settings saved",
-      defaultDirectory: "Default PWA directory (optional)",
-      defaultHint:
-        "Directory relative to the content root. Use . for its PWA; leave blank to require a selection.",
-      defaultValue: "Default: {{directory}}",
-      noDefault: "No default PWA",
       discovered: "{{count}} PWA directories found",
       partial: "Discovery is incomplete. Refresh to retry unreadable directories.",
       empty: "No PWA directories found.",
       choose: "Choose a PWA directory",
       selectionUnavailable: "The selected PWA directory is unavailable. Choose another or refresh.",
       inherited: "Inherited PWA · {{directory}}",
-      confirmRequired: "Confirm a PWA directory for this parent before creating a child.",
-      confirmBinding: "Confirm parent PWA binding",
       teamUnavailable: "Team PWA unavailable: {{reason}}",
       teamUnavailableTitle: "Team PWA unavailable",
       teamUnavailableDescription:
@@ -113,6 +106,11 @@ export const en = {
       undeclaredStatus: "Undeclared status · {{status}}",
     },
     creation: {
+      updateHost: "Update this host to create Swarm agents with PWA selection.",
+      registrationFailed:
+        "Native agent {{id}} was created and may already be running, but Swarm registration failed: {{reason}}. Retry registers this same agent; it does not create another.",
+      registrationMessageChanged:
+        "Native agent {{id}} already exists with the original message. Your edited brief or attachments have not been sent and are preserved. Restore the original message to retry registration; another agent will not be created.",
       notInstalled: "Swarm is not installed on the selected host.",
       chooseProject: "Choose a project on this host.",
       noRoles: "No roles are available in the selected PWA.",
@@ -131,9 +129,6 @@ export const en = {
       agentName: "Agent name",
       nameHint:
         "Give the agent a short name used to address it within its team, such as code-review.",
-      reservationChanged:
-        "Prepared agent {{id}} is reserved for the previous submission. Restore that submission or ask a human to resolve the reservation.",
-      preparedFailed: "Prepared agent {{id}}: {{reason}}",
     },
   },
   paneFind: {

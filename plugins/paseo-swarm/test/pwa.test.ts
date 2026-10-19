@@ -28,7 +28,7 @@ function fixture(): string {
   mkdirSync(join(directory, "roles"));
   writeFileSync(
     join(directory, "PWA.md"),
-    "---\nversion: 1\nproject: Example\nstatuses: [survey, completed]\nroles:\n  developer: roles/developer.md\n  supervisor: roles/supervisor.md\n---\n\nGlobal guidance.\n",
+    "---\nversion: 1\nproject: Example\nstatuses: [survey, completed]\n---\n\nGlobal guidance.\n",
   );
   writeFileSync(
     join(directory, "roles", "developer.md"),
@@ -56,12 +56,10 @@ test("listPwaRoles returns validated role metadata", () => {
   }
 });
 
-test("legacy roles directories remain discoverable without a roles map and retain containment", () => {
+test("flat roles directories discover files and retain containment", () => {
   const directory = fixture();
   const outside = fixture();
   try {
-    const entry = readFileSync(join(directory, "PWA.md"), "utf8");
-    writeFileSync(join(directory, "PWA.md"), entry.replace(/roles:\n(?:  .*\n)+/, ""));
     assert.deepEqual(
       listPwaRoles(directory).map((role) => role.role),
       ["developer", "supervisor"],
@@ -70,9 +68,6 @@ test("legacy roles directories remain discoverable without a roles map and retai
     symlinkSync(join(outside, "roles", "developer.md"), join(directory, "roles", "escape.md"));
     assert.throws(() => readPwa(directory, "escape"), /outside content root/);
     rmSync(join(directory, "roles", "escape.md"));
-    writeFileSync(join(directory, "PWA.md"), entry.replace(/roles:\n(?:  .*\n)+/, "roles: {}\n"));
-    assert.deepEqual(listPwaRoles(directory), []);
-    assert.throws(() => readPwa(directory, "developer"), /Missing role/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
@@ -118,11 +113,6 @@ test("readPwa rejects unsafe roles, missing roles, and invalid frontmatter", () 
   try {
     assert.throws(() => readPwa(directory, "../developer"), /Invalid role slug/);
     assert.throws(() => readPwa(directory, "missing"), /Missing role/);
-    const entry = readFileSync(join(directory, "PWA.md"), "utf8");
-    writeFileSync(
-      join(directory, "PWA.md"),
-      entry.replace("roles:\n", "roles:\n  broken: roles/broken.md\n  bad: roles/bad.md\n"),
-    );
     writeFileSync(join(directory, "roles", "broken.md"), "# no frontmatter");
     assert.throws(() => readPwa(directory, "broken"), /must have YAML frontmatter/);
     writeFileSync(
@@ -135,7 +125,7 @@ test("readPwa rejects unsafe roles, missing roles, and invalid frontmatter", () 
   }
 });
 
-test("project sources preserve legacy config and treat defaults only as preselection", () => {
+test("project sources preserve legacy config and unrelated settings", () => {
   const home = mkdtempSync(join(tmpdir(), "swarm-source-"));
   const directory = fixture();
   const other = fixture();
@@ -149,27 +139,18 @@ test("project sources preserve legacy config and treat defaults only as preselec
     const configPath = getConfigPath();
     mkdirSync(join(home, "plugin-data", "paseo-swarm"), { recursive: true });
     writeFileSync(configPath, JSON.stringify({ pwaRoot: directory, retained: { value: 1 } }));
-    assert.equal(
-      writePwaSource({ path: ".", projectId: "one", projectRoot: other, defaultPwa: "." }),
-      other,
-    );
+    assert.equal(writePwaSource({ path: ".", projectId: "one", projectRoot: other }), other);
     assert.equal(
       writePwaSource({ path: ".", projectId: "two", projectRoot: directory }),
       directory,
     );
     assert.equal(requirePwaSource("one"), other);
-    assert.deepEqual(readPwaSourceConfig("one"), { path: other, defaultPwa: "." });
-    assert.deepEqual(readPwaSourceConfig("two"), { path: directory, defaultPwa: null });
+    assert.deepEqual(readPwaSourceConfig("one"), { path: other });
+    assert.deepEqual(readPwaSourceConfig("two"), { path: directory });
     assert.equal(readPwaSource("unconfigured"), directory);
     const config = JSON.parse(readFileSync(configPath, "utf8"));
     assert.deepEqual(config.retained, { value: 1 });
     assert.deepEqual(config.projectSources, { one: other, two: directory });
-    const saved = readFileSync(configPath, "utf8");
-    assert.throws(
-      () => writePwaSource({ path: other, defaultPwa: "../escape" }),
-      /outside content root/,
-    );
-    assert.equal(readFileSync(configPath, "utf8"), saved);
     assert.throws(
       () => writePwaSource({ path: other, projectId: "three" }),
       /Missing project root/,
@@ -198,14 +179,14 @@ function agreement(directory: string, title = "Example") {
   mkdirSync(join(directory, "roles"), { recursive: true });
   writeFileSync(
     join(directory, "PWA.md"),
-    `---\nversion: 1\nproject: ${title}\nstatuses: [reading, completed]\nroles:\n  director: roles/planner.md\n  reader: roles/worker.md\n---\nAgreement.\n`,
+    `---\nversion: 1\nproject: ${title}\nstatuses: [reading, completed]\n---\nAgreement.\n`,
   );
   writeFileSync(
-    join(directory, "roles", "planner.md"),
+    join(directory, "roles", "director.md"),
     "---\nversion: 1\nroleClass: planner\ntitle: Planner\n---\nPlan.\n",
   );
   writeFileSync(
-    join(directory, "roles", "worker.md"),
+    join(directory, "roles", "reader.md"),
     "---\nversion: 1\nroleClass: worker\n---\nRead.\n",
   );
 }
@@ -236,9 +217,9 @@ test("discovery includes the root and descendants, keeps invalid entries, and sk
       result.entries[0].roles.map((role) => role.role),
       ["director", "reader"],
     );
-    assert.throws(
-      () => resolvePwaBinding({ directory: "alias/review", contentRoot: root }),
-      /symlinks are not allowed/,
+    assert.equal(
+      resolvePwaBinding({ directory: "alias/review", contentRoot: root }).directory,
+      join(root, "nested", "review"),
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -281,6 +262,12 @@ test("discovery distinguishes empty roots, root failure, and incomplete limits",
     const entries = discoverPwas(root, { maxEntries: 0 });
     assert.equal(entries.complete, false);
     assert.match(entries.errors[0].error, /limit/);
+    const roleBudget = discoverPwas(root, { maxEntries: 3, maxMilliseconds: 5000 });
+    assert.equal(roleBudget.complete, false);
+    assert.equal(
+      roleBudget.errors.some((entry) => /limit/.test(entry.error)),
+      true,
+    );
     const elapsed = discoverPwas(root, { maxMilliseconds: 0 });
     assert.equal(elapsed.complete, false);
     assert.match(elapsed.errors[0].error, /limit/);
@@ -289,49 +276,43 @@ test("discovery distinguishes empty roots, root failure, and incomplete limits",
   }
 });
 
-test("aliases load only declared files, share roles inside the content root, and reject escapes", () => {
-  const root = mkdtempSync(join(tmpdir(), "pwa-aliases-"));
+test("flat role files and directory symlinks reuse only content-root-contained files", () => {
+  const root = mkdtempSync(join(tmpdir(), "pwa-links-"));
   const outside = mkdtempSync(join(tmpdir(), "pwa-outside-"));
   const directory = join(root, "review");
   try {
     agreement(directory);
     mkdirSync(join(root, "shared"));
-    const shared = join(root, "shared", "researcher.md");
-    writeFileSync(
-      shared,
-      "---\nversion: 1\nroleClass: worker\ntitle: Shared researcher\n---\nShared guidance.\n",
-    );
-    writeFileSync(join(directory, "roles", "unlisted.md"), "invalid unlisted file");
-    const original = readFileSync(join(directory, "PWA.md"), "utf8");
-    const aliased = original.replace("reader: roles/worker.md", "reader: ../shared/researcher.md");
-    writeFileSync(join(directory, "PWA.md"), aliased);
+    const shared = join(root, "shared", "reader.md");
+    writeFileSync(shared, "---\nversion: 1\nroleClass: worker\n---\nShared guidance.\n");
+    rmSync(join(directory, "roles", "reader.md"));
+    symlinkSync("../../shared/reader.md", join(directory, "roles", "reader.md"));
     assert.equal(readPwa(directory, "reader", root).roleBody, "Shared guidance.");
     assert.deepEqual(
       listPwaRoles(directory, root).map((role) => role.role),
       ["director", "reader"],
     );
-    assert.throws(() => readPwa(directory, "unlisted", root), /Missing role/);
     const revision = readPwa(directory, "reader", root).revision;
-    writeFileSync(join(directory, "roles", "planner.md"), "invalid unrelated role");
+    writeFileSync(join(directory, "roles", "director.md"), "invalid unrelated role");
     assert.equal(readPwa(directory, "reader", root).revision, revision);
     writeFileSync(shared, readFileSync(shared, "utf8") + "\nchanged");
     assert.notEqual(readPwa(directory, "reader", root).revision, revision);
-    symlinkSync(shared, join(directory, "linked.md"));
-    writeFileSync(
-      join(directory, "PWA.md"),
-      aliased.replace("../shared/researcher.md", "linked.md"),
-    );
-    assert.equal(readPwa(directory, "reader", root).roleBody, "Shared guidance.\n\nchanged");
-    const escaped = join(outside, "worker.md");
+    const escaped = join(outside, "reader.md");
     writeFileSync(escaped, readFileSync(shared, "utf8"));
-    symlinkSync(escaped, join(directory, "escaped.md"));
-    writeFileSync(
-      join(directory, "PWA.md"),
-      aliased.replace("../shared/researcher.md", "escaped.md"),
-    );
+    rmSync(join(directory, "roles", "reader.md"));
+    symlinkSync(escaped, join(directory, "roles", "reader.md"));
     assert.throws(() => readPwa(directory, "reader", root), /outside content root/);
-    writeFileSync(join(directory, "PWA.md"), aliased.replace("../shared/researcher.md", escaped));
-    assert.throws(() => readPwa(directory, "reader", root), /relative file path/);
+    rmSync(join(directory, "roles"), { recursive: true });
+    symlinkSync("../shared", join(directory, "roles"), "dir");
+    assert.equal(readPwa(directory, "reader", root).roleBody, "Shared guidance.\n\nchanged");
+    rmSync(join(directory, "roles"));
+    symlinkSync(outside, join(directory, "roles"), "dir");
+    assert.throws(() => listPwaRoles(directory, root), /outside content root/);
+    symlinkSync(outside, join(root, "escape"), "dir");
+    assert.throws(
+      () => resolvePwaBinding({ directory: "escape", contentRoot: root }),
+      /outside content root/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
@@ -348,7 +329,7 @@ test("current statuses remain readable with broken roles and never rewrite a pre
       agent: { name: "reader", roleClass: "worker", role: "reader", reportsTo: null },
       brief: "Read",
     });
-    writeFileSync(join(directory, "roles", "worker.md"), "broken");
+    writeFileSync(join(directory, "roles", "reader.md"), "broken");
     const entry = readFileSync(join(directory, "PWA.md"), "utf8");
     writeFileSync(
       join(directory, "PWA.md"),
@@ -361,11 +342,6 @@ test("current statuses remain readable with broken roles and never rewrite a pre
     assert.equal(broken.title, "Example");
     assert.deepEqual(broken.statuses, ["new-state", "done"]);
     assert.match(broken.error ?? "", /YAML frontmatter/);
-    writeFileSync(
-      join(directory, "PWA.md"),
-      entry.replace("roles:\n", "roles: invalid\nignored:\n"),
-    );
-    assert.deepEqual(readPwaStatuses(directory), ["reading", "completed"]);
     writeFileSync(join(directory, "PWA.md"), entry.replace("[reading, completed]", "[]"));
     assert.deepEqual(readPwaStatuses(directory), []);
   } finally {
@@ -373,7 +349,7 @@ test("current statuses remain readable with broken roles and never rewrite a pre
   }
 });
 
-test("canonical bindings survive default and parent configuration changes, but not moves", () => {
+test("canonical bindings survive source configuration changes, but not moves", () => {
   const home = mkdtempSync(join(tmpdir(), "pwa-binding-"));
   const root = join(home, "content");
   const replacement = join(home, "replacement");
@@ -383,7 +359,7 @@ test("canonical bindings survive default and parent configuration changes, but n
     agreement(join(root, "one"));
     agreement(join(root, "two"));
     agreement(join(replacement, "next"));
-    writePwaSource({ path: "content", projectId: "project", projectRoot: home, defaultPwa: "one" });
+    writePwaSource({ path: "content", projectId: "project", projectRoot: home });
     symlinkSync(root, join(home, "root-alias"), "dir");
     assert.equal(
       writePwaSource({ path: join(home, "root-alias"), projectId: "project", projectRoot: home }),
@@ -400,18 +376,16 @@ test("canonical bindings survive default and parent configuration changes, but n
       path: replacement,
       projectId: "project",
       projectRoot: home,
-      defaultPwa: "next",
     });
-    assert.equal(readPwaSourceConfig("project").defaultPwa, "next");
     assert.deepEqual(validatePwaBinding(binding), binding);
-    writeFileSync(join(root, "two", "roles", "worker.md"), "broken after prepare");
+    writeFileSync(join(root, "two", "roles", "reader.md"), "broken after prepare");
     assert.deepEqual(validatePwaBinding(binding), binding);
     assert.throws(
       () => readPwa(binding.directory, "reader", binding.contentRoot),
       /YAML frontmatter/,
     );
     writeFileSync(
-      join(root, "two", "roles", "worker.md"),
+      join(root, "two", "roles", "reader.md"),
       "---\nversion: 1\nroleClass: worker\n---\nRestored.\n",
     );
     assert.throws(
@@ -427,10 +401,10 @@ test("canonical bindings survive default and parent configuration changes, but n
     );
     const configPath = getConfigPath();
     writeFileSync(configPath, JSON.stringify({ pwaRoot: relative(process.cwd(), root) }));
-    assert.deepEqual(readPwaSourceConfig("project", home), { path: root, defaultPwa: null });
+    assert.deepEqual(readPwaSourceConfig("project", home), { path: root });
     writeFileSync(configPath, JSON.stringify({ projectSources: { project: "content" } }));
     assert.throws(() => readPwaSourceConfig("project"), /Missing project root/);
-    assert.deepEqual(readPwaSourceConfig("project", home), { path: root, defaultPwa: null });
+    assert.deepEqual(readPwaSourceConfig("project", home), { path: root });
     assert.equal(
       resolvePwaBinding({ projectId: "project", projectRoot: home, directory: "one" }).directory,
       join(root, "one"),

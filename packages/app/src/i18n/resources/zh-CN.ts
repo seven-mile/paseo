@@ -37,18 +37,12 @@ export const zhCN: TranslationResources = {
       save: "保存",
       directoryLabel: "内容父目录",
       saved: "PWA 设置已保存",
-      defaultDirectory: "默认 PWA 目录（可选）",
-      defaultHint: "相对于内容根目录。用 . 表示根目录中的 PWA；留空则必须手动选择。",
-      defaultValue: "默认：{{directory}}",
-      noDefault: "未设置默认 PWA",
       discovered: "发现 {{count}} 个 PWA 目录",
       partial: "发现尚未完成，请刷新重试不可读的目录。",
       empty: "未发现 PWA 目录。",
       choose: "选择 PWA 目录",
       selectionUnavailable: "所选 PWA 目录不可用，请选择其他目录或刷新。",
       inherited: "继承的 PWA · {{directory}}",
-      confirmRequired: "创建子智能体前，请确认父智能体的 PWA 目录。",
-      confirmBinding: "确认父智能体 PWA 绑定",
       teamUnavailable: "团队 PWA 不可用：{{reason}}",
       teamUnavailableTitle: "团队 PWA 不可用",
       teamUnavailableDescription: "请检查此项目的 PWA 来源。仍可查看任务和活动。",
@@ -113,6 +107,11 @@ export const zhCN: TranslationResources = {
       undeclaredStatus: "未声明状态 · {{status}}",
     },
     creation: {
+      updateHost: "请更新此主机，以按所选 PWA 创建 Swarm 智能体。",
+      registrationFailed:
+        "原生智能体 {{id}} 已创建，可能已开始运行，但 Swarm 登记失败：{{reason}}。重试只登记同一个智能体，不会再次创建。",
+      registrationMessageChanged:
+        "原生智能体 {{id}} 已使用原始消息创建。修改后的简述或附件尚未发送，并已保留。请恢复原始消息后重试登记；不会创建另一个智能体。",
       notInstalled: "所选主机未安装 Swarm。",
       chooseProject: "请选择此主机上的项目。",
       noRoles: "所选 PWA 中没有可用角色。",
@@ -130,9 +129,6 @@ export const zhCN: TranslationResources = {
       supervisorHint: "选择此工作者汇报的主管。",
       agentName: "智能体名称",
       nameHint: "为智能体设置团队内称呼的简短名称，例如 code-review。",
-      reservationChanged:
-        "已准备的智能体 {{id}} 保留给上次提交。请恢复该提交，或由人工处理该预留。",
-      preparedFailed: "已准备的智能体 {{id}}：{{reason}}",
     },
   },
   paneFind: {

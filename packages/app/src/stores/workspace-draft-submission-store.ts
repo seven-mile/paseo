@@ -34,7 +34,6 @@ export interface PendingWorkspaceDraftSetup {
 
 export interface SwarmWorkspaceDraft {
   form: ReturnType<typeof import("@/swarm/parent-selection").openSwarmCreationFormDraft>;
-  preparation: ReturnType<typeof import("@/swarm/parent-selection").openSwarmPreparation>;
   worktreeSlug: string;
 }
 

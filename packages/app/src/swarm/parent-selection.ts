@@ -1,4 +1,3 @@
-import { z } from "zod";
 import type { ProjectSelection } from "@/screens/new-workspace/project-selection";
 import {
   initialPickerSelectionState,
@@ -88,16 +87,10 @@ function resolveInheritedPwaSelection(
 ) {
   const boundDirectory = parent?.pwaBinding?.directory;
   return {
-    canReadRoles: Boolean(parent && (boundDirectory || rootPwa)),
+    canReadRoles: Boolean(parent),
     inheritedDirectory:
       boundDirectory ?? (parent && rootPwa ? (source?.path ?? undefined) : undefined),
   };
-}
-
-function hasConfirmedMissingRootPwa(source: PwaDiscovery | undefined) {
-  const rootEntry = source?.entries.find((choice) => choice.directory === ".");
-  const rootUnavailable = source?.complete === true || Boolean(rootEntry?.error);
-  return Boolean(source?.discoveryAvailable && !source.rootError && rootUnavailable);
 }
 
 export function resolveSwarmPwaSelection(
@@ -117,10 +110,7 @@ export function resolveSwarmPwaSelection(
     canReadRoles = inheritedSelection.canReadRoles;
     inheritedDirectory = inheritedSelection.inheritedDirectory;
   }
-  const needsBinding = Boolean(
-    inherited && parent && !canReadRoles && hasConfirmedMissingRootPwa(source),
-  );
-  return { inherited, entry, canReadRoles, inheritedDirectory, needsBinding };
+  return { inherited, entry, canReadRoles, inheritedDirectory };
 }
 
 export interface SwarmCreationDraftContext {
@@ -227,65 +217,5 @@ export function reconcileSwarmCreationDraft(
     directory: undefined,
     role: "",
     parent: initialHydration ? draft.parent : null,
-  };
-}
-
-export function swarmPwaSourceIdentity(
-  roleClass: SwarmCreationDraftContext["roleClass"],
-  sourcePath: string | null | undefined,
-  directory: string,
-  parentBinding: SwarmParentChoice["pwaBinding"],
-) {
-  if (roleClass === "planner") return JSON.stringify(["planner", sourcePath, directory]);
-  if (!parentBinding) return JSON.stringify(["inherited-root", sourcePath, "."]);
-  return JSON.stringify([
-    "inherited",
-    parentBinding.projectId,
-    parentBinding.contentRoot,
-    parentBinding.directory,
-  ]);
-}
-
-// COMPAT(swarm-prepared-parent): added in v0.11, remove after 2027-04-17.
-export const swarmPreparedAgentSchema = z.object({
-  agentId: z.string(),
-  systemPrompt: z.string(),
-  parentAgentId: z.string().nullable().optional().default(null),
-});
-
-export interface SwarmPreparedAgent {
-  agentId: string;
-  systemPrompt: string;
-  parentAgentId: string | null;
-}
-
-// A failed native create/bind keeps the prepared prompt and identity for this form lifetime.
-export function openSwarmPreparation(onConflict: (agentId: string) => string) {
-  let reservation: { key: string; result: SwarmPreparedAgent } | null = null;
-  let pending: { key: string; result: Promise<SwarmPreparedAgent> } | null = null;
-  return {
-    async prepare(
-      key: string,
-      create: () => Promise<SwarmPreparedAgent>,
-    ): Promise<SwarmPreparedAgent> {
-      if (reservation) {
-        if (reservation.key === key) return reservation.result;
-        throw new Error(onConflict(reservation.result.agentId));
-      }
-      if (pending) {
-        if (pending.key === key) return pending.result;
-        const prepared = await pending.result;
-        throw new Error(onConflict(prepared.agentId));
-      }
-      const result = create();
-      pending = { key, result };
-      try {
-        const prepared = await result;
-        reservation = { key, result: prepared };
-        return prepared;
-      } finally {
-        pending = null;
-      }
-    },
   };
 }

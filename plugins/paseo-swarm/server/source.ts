@@ -6,7 +6,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { z } from "zod";
 import type { PwaBinding } from "../shared/models";
 import { getConfigPath } from "./state";
@@ -16,8 +16,6 @@ const configSchema = z
   .object({
     pwaRoot: z.string().min(1).optional(),
     projectSources: z.record(z.string(), z.string().min(1)).optional(),
-    defaultPwa: z.string().nullable().optional(),
-    projectDefaults: z.record(z.string(), z.string().nullable()).optional(),
   })
   .passthrough();
 
@@ -41,9 +39,7 @@ export function readPwaSourceConfig(projectId?: string, projectRoot?: string) {
   }
   const base = projectSource && projectRoot ? projectRoot : process.cwd();
   const path = source ? resolve(base, source) : null;
-  const defaultPwa =
-    projectSource && projectId ? config.projectDefaults?.[projectId] : config.defaultPwa;
-  return { path, defaultPwa: defaultPwa ?? null };
+  return { path };
 }
 
 export function readPwaSource(projectId?: string, projectRoot?: string): string | null {
@@ -61,31 +57,20 @@ interface SourceInput {
   path: string;
   projectId?: string;
   projectRoot?: string;
-  defaultPwa?: string | null;
 }
 
-export function writePwaSource({ path, projectId, projectRoot, defaultPwa }: SourceInput): string {
+export function writePwaSource({ path, projectId, projectRoot }: SourceInput): string {
   const trimmed = path.trim();
   if (!trimmed) throw new Error("Enter a PWA directory.");
   if (projectId && !projectRoot) throw new Error(`Missing project root: ${projectId}`);
   const directory = realpathSync(resolve(projectRoot ?? process.cwd(), trimmed));
   if (!statSync(directory).isDirectory())
     throw new Error(`Not a PWA content directory: ${directory}`);
-  let selectedDefault = defaultPwa;
-  if (defaultPwa !== undefined && defaultPwa !== null) {
-    if (!defaultPwa.trim() || isAbsolute(defaultPwa))
-      throw new Error("Default PWA must be a relative directory.");
-    const selected = resolvePwaBinding({ directory: defaultPwa, contentRoot: directory });
-    selectedDefault = relative(directory, selected.directory).split(sep).join("/") || ".";
-  }
   const config = readConfig();
   if (projectId) {
     config.projectSources = { ...config.projectSources, [projectId]: directory };
-    if (defaultPwa !== undefined)
-      config.projectDefaults = { ...config.projectDefaults, [projectId]: selectedDefault ?? null };
   } else {
     config.pwaRoot = directory;
-    if (defaultPwa !== undefined) config.defaultPwa = selectedDefault;
   }
   const configPath = getConfigPath();
   mkdirSync(dirname(configPath), { recursive: true });
@@ -119,7 +104,7 @@ export function resolvePwaBinding({
 }
 
 // Schema v1 supports a configured root that is itself a PWA.
-// Defaults and discovered descendants never choose a legacy team's workflow.
+// Discovered descendants never choose a legacy team's workflow.
 export function resolveLegacyPwaBinding(projectId?: string, projectRoot?: string): PwaBinding {
   const contentRoot = realpathSync(requirePwaSource(projectId, projectRoot));
   return validatePwaBinding({
@@ -133,7 +118,9 @@ export function validatePwaBinding(binding: PwaBinding): PwaBinding {
   const contentRoot = realpathSync(binding.contentRoot);
   const directory = resolvePwaDirectory(binding.directory, contentRoot);
   if (contentRoot !== binding.contentRoot || directory !== binding.directory) {
-    throw new Error("The bound PWA path has changed. Confirm its source explicitly.");
+    throw new Error(
+      "The bound PWA path has changed. Restore its original path or create a new team with the intended PWA.",
+    );
   }
   const entry = realpathSync(resolve(directory, "PWA.md"));
   if (resolvePwaDirectory(dirname(entry), contentRoot) !== dirname(entry)) {

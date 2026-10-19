@@ -1,14 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-  type Dir,
-  type Dirent,
-  lstatSync,
-  opendirSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  statSync,
-} from "node:fs";
+import { type Dir, type Dirent, opendirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { parse } from "yaml";
@@ -130,14 +121,6 @@ export function resolvePwaDirectory(directory: string, contentRoot: string): str
   if (!statSync(root).isDirectory()) throw new Error(`Not a PWA content directory: ${root}`);
   const path = resolve(root, directory);
   assertWithin(root, path);
-  const parts = relative(root, path).split(sep).filter(Boolean);
-  let current = root;
-  for (const part of parts) {
-    current = join(current, part);
-    if (lstatSync(current).isSymbolicLink()) {
-      throw new Error(`PWA directory symlinks are not allowed: ${current}`);
-    }
-  }
   const canonical = realpathSync(path);
   assertWithin(root, canonical);
   if (!statSync(canonical).isDirectory()) throw new Error(`Not a PWA directory: ${canonical}`);
@@ -160,29 +143,24 @@ function readHeader(directory: string, contentRoot: string): Header {
   return { data, source, body: parsed.body, project, statuses: [...statuses] };
 }
 
-function readEntry(directory: string, contentRoot: string): Entry {
+function readEntry(directory: string, contentRoot: string, visit?: () => void): Entry {
   const header = readHeader(directory, contentRoot);
-  // Schema v1 supports roles/<slug>.md discovery when the optional alias map is absent.
-  if (header.data.roles === undefined) {
-    const canonical = resolvePwaDirectory(directory, contentRoot);
-    const rolesDirectory = realpathSync(join(canonical, "roles"));
-    assertWithin(realpathSync(contentRoot), rolesDirectory);
-    const roles: Record<string, string> = {};
-    for (const entry of readdirSync(rolesDirectory, { withFileTypes: true })) {
+  const canonical = resolvePwaDirectory(directory, contentRoot);
+  const rolesDirectory = realpathSync(join(canonical, "roles"));
+  assertWithin(realpathSync(contentRoot), rolesDirectory);
+  const roles: Record<string, string> = {};
+  const stream = opendirSync(rolesDirectory);
+  try {
+    let entry: Dirent | null;
+    while ((entry = stream.readSync()) !== null) {
+      visit?.();
       if ((!entry.isFile() && !entry.isSymbolicLink()) || !entry.name.endsWith(".md")) continue;
       const role = entry.name.slice(0, -3);
       validateRole(role);
       roles[role] = join("roles", entry.name);
     }
-    return { ...header, roles };
-  }
-  const declared = record(header.data.roles, "PWA.md roles");
-  const roles: Record<string, string> = {};
-  for (const [alias, value] of Object.entries(declared)) {
-    validateRole(alias);
-    const path = requiredString(value, alias, "PWA.md roles");
-    if (isAbsolute(path)) throw new Error(`Role ${alias} must use a relative file path`);
-    roles[alias] = path;
+  } finally {
+    stream.closeSync();
   }
   return { ...header, roles };
 }
@@ -212,7 +190,8 @@ export function readPwa(directory: string, role: string, contentRoot = directory
   validateRole(role);
   const entry = readEntry(directory, contentRoot);
   const path = entry.roles[role];
-  if (!Object.hasOwn(entry.roles, role)) throw new Error(`Missing role: ${role} in PWA.md`);
+  if (!Object.hasOwn(entry.roles, role))
+    throw new Error(`Missing role: ${role} in roles directory`);
   const selected = readRole(directory, role, path, contentRoot);
   const revision = createHash("sha256")
     .update(entry.source)
@@ -231,9 +210,14 @@ export function readPwa(directory: string, role: string, contentRoot = directory
 }
 
 export function listPwaRoles(directory: string, contentRoot = directory): PwaRole[] {
-  const entry = readEntry(directory, contentRoot);
+  return readRoles(directory, contentRoot);
+}
+
+function readRoles(directory: string, contentRoot: string, visit?: () => void): PwaRole[] {
+  const entry = readEntry(directory, contentRoot, visit);
   return Object.entries(entry.roles)
     .map(([role, path]) => {
+      visit?.();
       const selected = readRole(directory, role, path, contentRoot);
       return {
         role,
@@ -282,7 +266,14 @@ export function discoverPwas(contentRoot: string, limits: DiscoveryLimits = {}):
       const entry = readHeader(path, root);
       title = entry.project;
       statuses = entry.statuses;
-      const roles = listPwaRoles(path, root);
+      const roles = readRoles(path, root, () => {
+        entries++;
+        if (entries > maxEntries || performance.now() - started >= maxMilliseconds) {
+          incomplete(directory, "PWA discovery role limit reached");
+          pending.length = 0;
+          throw new Error("PWA discovery role limit reached");
+        }
+      });
       if (!roles.some((role) => role.roleClass === "planner")) {
         throw new Error("PWA must declare a planner role");
       }
