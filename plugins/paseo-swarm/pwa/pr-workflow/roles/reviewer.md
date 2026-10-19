@@ -15,5 +15,5 @@ decides whether to return to development, repeat review, or proceed.
 For a cold read in `mr-preparation`, you receive a PR/MR title, body, and the
 diff's file list. Answer the PWA's PR/MR questions from that text alone,
 quoting the sentence each answer rests on. Write "not stated" where no sentence
-answers, and list every term whose meaning you had to guess. Leave the diff and
-repository closed; the test is what the text gives a reviewer.
+answers, and list every term whose meaning you had to guess. You may read the
+project's README and docs to resolve a term; keep the diff and code closed.

@@ -41,9 +41,11 @@ it is not completion, success, failure, or a request to wait.
 
 ## PR/MR text
 
-The reader of a PR/MR knows the domain and reads code well, and has the diff
-and the repository. They don't know the solution this change carries, and
-they never see the Task, its Activities, or any agent conversation. From the
+The reader of a PR/MR reads code well and knows the field's vocabulary and the
+concepts the project documents in its README, docs, or public API. They don't
+know concepts this change introduces, names that appear only in code, or the
+solution this change carries, and they never see the Task, its Activities, or
+any agent conversation. From the
 text alone, before opening the diff, they should be able to answer:
 
 1. **Why:** what callers or users couldn't do before, and what they can do now.

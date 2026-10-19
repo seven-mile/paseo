@@ -29,12 +29,13 @@ Outline first: one or two sentences per question, in the reader's words. Then
 write the body from the outline.
 
 - Start from the caller: what they couldn't do and what they can do now. Then
-  present the parts as responsibilities and how they connect, then why they
-  sit where they do, then the evidence. Group by responsibility, never by file
-  or hunk.
-- Bring in a project concept only where the explanation needs it, and say what
-  it is in the same sentence, in words the reader already has. Use code
-  identifiers to point the reader into the diff, one or two per part.
+  give the parts, why they sit where they do, and the evidence. With several
+  parts, give each a bullet that opens with its name in the reader's words and
+  states its responsibility, and say how they work together in a sentence
+  before or after the list. Group by responsibility, never by file or hunk.
+- Explain a term the PWA's reader doesn't know in the same sentence where the
+  explanation first needs it, or describe the thing instead of naming it. Use
+  code identifiers to point the reader into the diff, one or two per part.
 - Keep a detail only when it helps answer a question. Complete lists of
   supported values, rejected cases, or tests stay in the diff unless a
   reviewer must check one item.
@@ -44,6 +45,8 @@ write the body from the outline.
   statement. Mention an absence only when the reader would otherwise assume
   the thing is there. Draft status, requested reviews, and merge permission
   belong to the forge.
+- Drop words and clauses that only assert importance or quality, such as
+  "critical", "robust", "seamless", or "which is key".
 - Link only to what a reviewer can open: issues, CI runs, uploaded
   screenshots. Intermediate hashes, local paths, and board or workspace links
   stay in the Task record.
