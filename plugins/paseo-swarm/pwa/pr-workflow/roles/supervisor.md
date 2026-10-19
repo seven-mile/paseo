@@ -33,19 +33,25 @@ raw Paseo agent ids, or guessed references. If a target cannot be resolved,
 describe it in ordinary text and omit the link. These references open only
 inside Paseo, so they stay in the Task record.
 
-For `mr-preparation`, assign the PR/MR text to a preparer with no earlier turns
-on this Task. Build its assignment from your Activities:
+For `mr-preparation`, you own the understanding of the change. Write your
+reference answers to the PWA's PR/MR questions first, a few sentences each, in
+words a reviewer new to this change already knows. Draw on the Task and the
+human's steering: they carry the intent, the grouping into parts, and the
+rejected alternatives, which the diff can't show.
 
-- the base and head refs in the preparer's workspace;
-- the Task objective and acceptance criteria;
-- reviewer facts: how the problem showed before the change, each check or test
-  that ran with its result, what was exercised by hand and on which platform,
-  what nobody verified, known risks, and how to roll the change back;
-- the linked forge issue, if one exists, and public evidence links (CI runs,
-  uploaded screenshots).
+Assign the text to a preparer with no earlier turns on this Task. The
+assignment holds the base and head refs, your reference answers, the evidence
+(each check that ran with its result, what nobody verified, how to roll back),
+the linked forge issue, and public evidence links. Say which parts matter most.
+Put detailed records such as logs, tables, and audit notes in a file in the
+preparer's workspace and name it as reference. Everything you send is material
+for the preparer to select from; none of it is a list the body must cover.
+Intermediate hashes, local paths, board links, and the history of attempts
+stay in Activities.
 
-Send facts as plain statements. Intermediate hashes, local paths, board links,
-and the history of attempts stay in Activities. When the draft returns, read it
-as a reviewer with only the diff would. Send corrections to the preparer as
-findings and ask it to rerun its check. When posting is authorized, post the
-title and body it returns and upload any screenshots it names.
+When the draft returns, give only its title, body, and the diff's file list to
+a reviewer with no earlier turns on this Task for a cold read. Compare its
+answers with yours. Send each unanswered question, guessed term, or diverging
+answer to the preparer as a finding. When the answers match and posting is
+authorized, post the text as returned and upload any screenshots the preparer
+names.
