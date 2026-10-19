@@ -2,7 +2,14 @@ import type { Pwa, RoleClass } from "./pwa";
 
 export type PromptPwa = Pick<
   Pwa,
-  "project" | "role" | "roleClass" | "projectBody" | "roleBody" | "statuses" | "revision"
+  | "directory"
+  | "project"
+  | "role"
+  | "roleClass"
+  | "projectBody"
+  | "roleBody"
+  | "statuses"
+  | "revision"
 >;
 
 export interface PromptAgent {
@@ -89,6 +96,7 @@ export function initialPrompt({ pwa, agent, brief }: InitialPromptInput): string
     `Project: ${pwa.project}. Role class: ${agent.roleClass}. Role: ${agent.role}.`,
     `Reports to: ${agent.reportsTo ?? "none"}. PWA revision: ${pwa.revision}.`,
     `Project statuses: ${pwa.statuses.length ? pwa.statuses.join(", ") : "none declared"}.`,
+    `PWA directory: ${pwa.directory}. When the PWA or your role names a file under refs/, read it from this directory at the step that needs it.`,
     "",
     "Project working agreement:",
     pwa.projectBody,

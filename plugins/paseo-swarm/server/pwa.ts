@@ -6,6 +6,7 @@ import { parse } from "yaml";
 export type RoleClass = "planner" | "supervisor" | "worker";
 
 export interface Pwa {
+  directory: string;
   project: string;
   role: string;
   roleClass: RoleClass;
@@ -115,6 +116,7 @@ export function readPwa(directory: string, role: string): Pwa {
     .digest("hex");
 
   return {
+    directory,
     project,
     role,
     roleClass,

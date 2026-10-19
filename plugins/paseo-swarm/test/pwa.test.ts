@@ -46,6 +46,7 @@ test("readPwa reads global and selected role content and hashes both files", () 
     const pwa = readPwa(directory, "developer");
     assert.deepEqual(
       {
+        directory: pwa.directory,
         project: pwa.project,
         role: pwa.role,
         roleClass: pwa.roleClass,
@@ -54,6 +55,7 @@ test("readPwa reads global and selected role content and hashes both files", () 
         statuses: pwa.statuses,
       },
       {
+        directory,
         project: "Example",
         role: "developer",
         roleClass: "worker",

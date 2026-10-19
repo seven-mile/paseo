@@ -359,6 +359,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
     const first = await prepare("fresh-one");
     assert.match(first.systemPrompt, /Fresh project/);
     assert.match(first.systemPrompt, /First role/);
+    assert.ok(first.systemPrompt.includes(`PWA directory: ${source}.`));
     writeFileSync(
       join(source, "roles", "researcher.md"),
       "---\nversion: 1\nroleClass: worker\n---\nSecond role.\n",
