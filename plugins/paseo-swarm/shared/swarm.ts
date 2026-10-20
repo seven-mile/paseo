@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   activitySchema,
   agentRecordSchema,
+  pwaBindingSchema,
   responseProfileSchema,
   roleClassSchema,
   slugNameSchema,
@@ -11,25 +12,60 @@ import {
 
 export const boardReadRpc = defineRpc({
   name: "swarm.board.read",
-  input: z.object({ projectId: z.string().min(1).optional() }),
+  input: z.object({
+    projectId: z.string().min(1).optional(),
+    teamName: z.string().min(1).optional(),
+    unassigned: z.boolean().optional(),
+  }),
   output: z.object({
     version: z.literal(1),
     agents: z.array(agentRecordSchema),
     tasks: z.array(taskSchema),
     activities: z.array(activitySchema),
+    teamScopes: z.boolean().optional(),
     statuses: z.array(z.string()).optional(),
+    pwaError: z.string().optional(),
+    unassignedTaskCount: z.number().optional(),
   }),
+});
+
+const pwaRoleSchema = z.object({
+  role: z.string(),
+  roleClass: roleClassSchema,
+  title: z.string(),
+  description: z.string(),
 });
 
 export const pwaSourceReadRpc = defineRpc({
   name: "swarm.pwa_source.read",
-  input: z.object({ projectId: z.string().min(1).optional() }),
-  output: z.object({ path: z.string().nullable() }),
+  input: z.object({ projectId: z.string().min(1).optional(), path: z.string().min(1).optional() }),
+  output: z.object({
+    path: z.string().nullable(),
+    sourcePreview: z.boolean().optional(),
+    agentConfigRead: z.boolean().optional(),
+    entries: z
+      .array(
+        z.object({
+          directory: z.string(),
+          title: z.string(),
+          roles: z.array(pwaRoleSchema),
+          statuses: z.array(z.string()),
+          error: z.string().optional(),
+        }),
+      )
+      .optional(),
+    complete: z.boolean().optional(),
+    errors: z.array(z.object({ directory: z.string(), error: z.string() })).optional(),
+    rootError: z.string().optional(),
+  }),
 });
 
 export const pwaSourceSetRpc = defineRpc({
   name: "swarm.pwa_source.set",
-  input: z.object({ path: z.string().min(1), projectId: z.string().min(1).optional() }),
+  input: z.object({
+    path: z.string().min(1),
+    projectId: z.string().min(1).optional(),
+  }),
   output: z.object({ path: z.string() }),
 });
 
@@ -39,21 +75,18 @@ export const pwaRolesReadRpc = defineRpc({
     roleClass: roleClassSchema.optional(),
     path: z.string().min(1).optional(),
     projectId: z.string().min(1).optional(),
+    parentName: z.string().min(1).optional(),
+    actorPaseoAgentId: z.string().optional(),
   }),
-  output: z.array(
-    z.object({
-      role: z.string(),
-      roleClass: roleClassSchema,
-      title: z.string(),
-      description: z.string(),
-    }),
-  ),
+  output: z.array(pwaRoleSchema),
 });
 
 export const registerAgentRpc = defineRpc({
   name: "swarm.agent.register",
   input: z.object({
     projectId: z.string().min(1).optional(),
+    pwaDirectory: z.string().min(1).optional(),
+    pwaBinding: pwaBindingSchema.optional(),
     paseoAgentId: z.string(),
     name: slugNameSchema,
     aliases: z.array(z.string()).default([]),
@@ -69,6 +102,7 @@ export const createAgentRpc = defineRpc({
   name: "swarm.agent.create",
   input: z.object({
     projectId: z.string().min(1).optional(),
+    pwaDirectory: z.string().min(1).optional(),
     name: slugNameSchema,
     aliases: z.array(z.string()).default([]),
     roleClass: z.enum(["planner", "supervisor", "worker"]),
@@ -90,6 +124,7 @@ export const prepareAgentRpc = defineRpc({
   name: "swarm.agent.prepare",
   input: z.object({
     projectId: z.string().min(1).optional(),
+    pwaDirectory: z.string().min(1).optional(),
     name: slugNameSchema,
     aliases: z.array(z.string()).default([]),
     roleClass: z.enum(["planner", "supervisor", "worker"]),
@@ -101,7 +136,20 @@ export const prepareAgentRpc = defineRpc({
   output: z.object({
     agentId: z.string(),
     systemPrompt: z.string(),
+    parentAgentId: z.string().nullable().optional(),
     agent: agentRecordSchema,
+  }),
+});
+
+// Read-only compilation; unlike prepare, this never reserves an identity or name.
+export const resolveAgentConfigRpc = defineRpc({
+  name: "swarm.agent.config.read",
+  input: prepareAgentRpc.input,
+  output: z.object({
+    systemPrompt: z.string(),
+    parentAgentId: z.string().nullable(),
+    pwaBinding: pwaBindingSchema,
+    projectId: z.string().optional(),
   }),
 });
 

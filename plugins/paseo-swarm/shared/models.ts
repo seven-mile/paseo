@@ -9,6 +9,13 @@ export type ResponseProfile = z.infer<typeof responseProfileSchema>;
 const metadataSchema = z.record(z.string(), z.unknown());
 export const slugNameSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 
+export const pwaBindingSchema = z.object({
+  projectId: z.string().min(1).optional(),
+  contentRoot: z.string().min(1),
+  directory: z.string().min(1),
+});
+export type PwaBinding = z.infer<typeof pwaBindingSchema>;
+
 export const agentRecordSchema = z.object({
   id: z.string(),
   paseoAgentId: z.string(),
@@ -20,6 +27,8 @@ export const agentRecordSchema = z.object({
   reportsTo: z.string().nullable(),
   workspaceId: z.string().nullable(),
   projectId: z.string().optional(),
+  pwaBinding: pwaBindingSchema.optional(),
+  creationError: z.string().optional(),
   retired: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),

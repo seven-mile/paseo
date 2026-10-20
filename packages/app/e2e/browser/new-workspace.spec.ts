@@ -1,3 +1,13 @@
+import type { Page } from "@playwright/test";
+import type { AgentRecord } from "../../../../plugins/paseo-swarm/shared/models";
+import {
+  createTaskRpc,
+  pwaSourceReadRpc,
+  registerAgentRpc,
+  resolveAgentConfigRpc,
+} from "../../../../plugins/paseo-swarm/shared/swarm";
+import { swarmTest, type SwarmFixture } from "../support/helpers/swarm-test-daemon";
+import { openProjects, openProjectSettings } from "../support/helpers/project-settings";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { buildHostWorkspaceRoute } from "@/utils/host-routes";
@@ -18,6 +28,7 @@ import {
   expectPickerSelected,
   expectStartingRefPickerTriggerPr,
   fillNewWorkspaceDraft,
+  loadSessionMessageReaders,
   openGlobalNewWorkspaceComposer,
   openBranchPicker,
   openNewWorkspaceComposer,
@@ -69,6 +80,341 @@ const BACKGROUND_RESOLUTION_FILE = {
   mimeType: "application/json",
   buffer: Buffer.from(JSON.stringify({ composer: "background-resolution" })),
 };
+
+async function configureSwarmSource(page: Page, swarm: SwarmFixture) {
+  await openProjects(page);
+  await openProjectSettings(page, swarm.projectName);
+  await page.getByTestId("project-pwa-edit").click();
+  const sheet = page.getByTestId("project-pwa-sheet");
+  await page.getByTestId("project-pwa-directory").fill(swarm.contentRoot);
+  await page.getByTestId("project-pwa-save").click();
+  await expect(page.getByTestId("project-pwa-saved")).toBeVisible();
+  await sheet
+    .getByRole("button", { name: "Close", exact: true })
+    .filter({ hasText: /^Close$/ })
+    .click();
+}
+
+async function openSwarmWorkspace(page: Page, swarm: SwarmFixture) {
+  await page.goto(buildHostWorkspaceRoute(swarm.serverId, swarm.workspaceId));
+  await page
+    .getByTestId("swarm-sidebar-mode")
+    .filter({ visible: true })
+    .getByText("Swarm", { exact: true })
+    .click();
+}
+
+async function waitForSwarmAgent(swarm: SwarmFixture, name: string) {
+  await expect
+    .poll(
+      async () =>
+        (await swarm.board()).agents.find((agent) => agent.qualifiedName === name)?.workspaceId,
+    )
+    .toBeTruthy();
+  const agent = (await swarm.board()).agents.find((entry) => entry.qualifiedName === name);
+  if (!agent?.workspaceId) throw new Error(`Swarm registration missing for ${name}`);
+  return { ...agent, workspaceId: agent.workspaceId };
+}
+
+async function openSwarmPlannerForm(page: Page, swarm: SwarmFixture, directory: "alpha" | "beta") {
+  const title = directory === "alpha" ? "Alpha" : "Beta";
+  const name = `qa-${directory}`;
+  const brief = `Exercise the ${title} team.`;
+  await openSwarmWorkspace(page, swarm);
+  await page
+    .getByRole("button", { name: "Add planner", exact: true })
+    .filter({ visible: true })
+    .click();
+  await expect(page.getByTestId("new-workspace-project-picker-trigger")).toContainText(
+    swarm.projectName,
+  );
+  await page.getByTestId("swarm-pwa-directory").click();
+  await page.getByRole("button", { name: `${title} · ${directory}`, exact: true }).click();
+  await page.getByRole("textbox", { name: "Agent name", exact: true }).fill(name);
+  await page.getByTestId("swarm-role").click();
+  await page.getByRole("button", { name: `${title} planner`, exact: true }).click();
+  await expect(page.getByTestId("swarm-parent")).toHaveCount(0);
+  return { name, brief, title };
+}
+
+async function createSwarmPlanner(page: Page, swarm: SwarmFixture, directory: "alpha" | "beta") {
+  const { name, brief, title } = await openSwarmPlannerForm(page, swarm, directory);
+  const resolved = resolveAgentConfigRpc.output.parse(
+    await swarm.client.invokePluginRpc("paseo-swarm", resolveAgentConfigRpc.name, {
+      projectId: swarm.projectId,
+      pwaDirectory: directory,
+      name,
+      roleClass: "planner",
+      role: "planner",
+      brief,
+    }),
+  );
+  // The independent read-only call must not reserve a Swarm name or identity.
+  expect(
+    (await swarm.board()).agents.find((agent) => agent.qualifiedName === name),
+  ).toBeUndefined();
+  await selectWorkspaceIsolation(page, "worktree");
+  await submitNewWorkspacePrompt(page, brief);
+  const agent = await waitForSwarmAgent(swarm, name);
+  await expect(page).toHaveURL(
+    (url) => url.pathname === buildHostWorkspaceRoute(swarm.serverId, agent.workspaceId),
+  );
+  await expect(
+    page.getByTestId(`swarm-planner-row-${agent.paseoAgentId}`).filter({ visible: true }),
+  ).toBeVisible();
+  expect(agent.pwaBinding).toEqual(resolved.pwaBinding);
+  expect(agent.pwaBinding?.directory).toBe(path.join(swarm.contentRoot, directory));
+  expect(resolved.parentAgentId).toBeNull();
+  expect(swarm.nativePrompt(agent.paseoAgentId)).toBe(resolved.systemPrompt);
+  expect(resolved.systemPrompt).toContain(`${title} planner guidance.`);
+  expect(resolved.systemPrompt).toContain(`${title} working agreement.`);
+  return agent;
+}
+
+async function createSwarmChild(page: Page, swarm: SwarmFixture, parent: AgentRecord) {
+  const name = "qa-child";
+  const brief = "Exercise inherited Beta supervision.";
+  await openSwarmWorkspace(page, swarm);
+  await page
+    .getByTestId(`swarm-planner-row-${parent.paseoAgentId}`)
+    .filter({ visible: true })
+    .hover();
+  await page
+    .getByRole("button", { name: `Add supervisor under ${parent.name}`, exact: true })
+    .filter({ visible: true })
+    .click();
+  await expect(page.getByTestId("swarm-parent")).toContainText(parent.name);
+  await expect(
+    page.getByText(`Inherited PWA · ${path.join(swarm.contentRoot, "beta")}`, { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByTestId("swarm-pwa-directory")).toHaveCount(0);
+  await page.getByRole("textbox", { name: "Agent name", exact: true }).fill(name);
+  await page.getByTestId("swarm-role").click();
+  await page.getByRole("button", { name: "Shared supervisor", exact: true }).click();
+  const resolved = resolveAgentConfigRpc.output.parse(
+    await swarm.client.invokePluginRpc("paseo-swarm", resolveAgentConfigRpc.name, {
+      projectId: swarm.projectId,
+      name,
+      roleClass: "supervisor",
+      role: "supervisor",
+      reportsTo: parent.qualifiedName,
+      brief,
+    }),
+  );
+  await selectWorkspaceIsolation(page, "worktree");
+  await submitNewWorkspacePrompt(page, brief);
+  const child = await waitForSwarmAgent(swarm, `${parent.qualifiedName}.${name}`);
+  await expect(page).toHaveURL(
+    (url) => url.pathname === buildHostWorkspaceRoute(swarm.serverId, child.workspaceId),
+  );
+  expect(child.pwaBinding).toEqual(parent.pwaBinding);
+  expect(child.reportsTo).toBe(parent.qualifiedName);
+  expect(child.workspaceId).not.toBe(parent.workspaceId);
+  expect(resolved.parentAgentId).toBe(parent.paseoAgentId);
+  expect(swarm.nativePrompt(child.paseoAgentId)).toBe(resolved.systemPrompt);
+  expect(resolved.systemPrompt).toContain("Shared supervisor guidance.");
+  expect(resolved.systemPrompt).toContain("Beta working agreement.");
+  expect(resolved.systemPrompt).not.toContain("Alpha working agreement.");
+  const native = await swarm.client.fetchAgent(child.paseoAgentId);
+  expect(native?.agent.labels["paseo.parent-agent-id"]).toBe(parent.paseoAgentId);
+  return child;
+}
+
+async function expectSwarmTeam(
+  page: Page,
+  swarm: SwarmFixture,
+  planner: AgentRecord,
+  status: string,
+  otherStatus: string,
+  taskId: string,
+  otherTaskId: string,
+) {
+  await openSwarmWorkspace(page, swarm);
+  await page
+    .getByTestId(`swarm-planner-row-${planner.paseoAgentId}`)
+    .filter({ visible: true })
+    .hover();
+  await page
+    .getByTestId(`swarm-planner-tasks-${planner.paseoAgentId}`)
+    .filter({ visible: true })
+    .click();
+  const board = page.getByTestId("swarm-task-surface").filter({ visible: true });
+  await expect(board.getByTestId(`swarm-column-${status}`)).toBeVisible();
+  await expect(board.getByTestId(`swarm-column-${otherStatus}`)).toHaveCount(0);
+  await expect(board.getByTestId(`swarm-task-${taskId}`).filter({ visible: true })).toBeVisible();
+  await expect(board.getByTestId(`swarm-task-${otherTaskId}`)).toHaveCount(0);
+}
+
+swarmTest(
+  "Multiple PWA: second-source planner, inherited child and isolated team workflows",
+  async ({ page, swarm }, testInfo) => {
+    swarmTest.setTimeout(210_000);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await configureSwarmSource(page, swarm);
+    const source = pwaSourceReadRpc.output.parse(
+      await swarm.client.invokePluginRpc("paseo-swarm", pwaSourceReadRpc.name, {
+        projectId: swarm.projectId,
+      }),
+    );
+    expect(source.path).toBe(swarm.contentRoot);
+    expect(source.entries?.map((entry) => entry.directory).sort()).toEqual(["alpha", "beta"]);
+    const alpha = await createSwarmPlanner(page, swarm, "alpha");
+    const beta = await createSwarmPlanner(page, swarm, "beta");
+    const child = await createSwarmChild(page, swarm, beta);
+    await swarm.client.invokePluginRpc("paseo-swarm", createTaskRpc.name, {
+      id: "alpha-task",
+      title: "Alpha task",
+      brief: "Alpha only",
+      status: "survey",
+      managerName: alpha.qualifiedName,
+      createdBy: alpha.qualifiedName,
+    });
+    await swarm.client.invokePluginRpc("paseo-swarm", createTaskRpc.name, {
+      id: "beta-task",
+      title: "Beta child task",
+      brief: "Beta only",
+      status: "queued",
+      managerName: child.qualifiedName,
+      createdBy: beta.qualifiedName,
+    });
+    await expectSwarmTeam(page, swarm, beta, "queued", "survey", "beta-task", "alpha-task");
+    await page.screenshot({ path: testInfo.outputPath("multiple-pwa-beta-team.png") });
+    await expectSwarmTeam(page, swarm, alpha, "survey", "queued", "alpha-task", "beta-task");
+    await page.screenshot({ path: testInfo.outputPath("multiple-pwa-alpha-team.png") });
+  },
+);
+
+async function rejectFirstSwarmRegistration(page: Page, port: number) {
+  const frames = await loadSessionMessageReaders();
+  const observed = {
+    configReads: 0,
+    nativeCreates: 0,
+    sentMessages: 0,
+    reconnectReady: false,
+    registrations: [] as ReturnType<typeof registerAgentRpc.input.parse>[],
+  };
+  await page.routeWebSocket(
+    (url) =>
+      url.protocol === "ws:" &&
+      !url.username &&
+      !url.password &&
+      ["127.0.0.1", "localhost"].includes(url.hostname) &&
+      Number(url.port) === port,
+    (socket) => {
+      const afterFirstRegistration = observed.registrations.length > 0;
+      const server = socket.connectToServer();
+      socket.onMessage((message) => {
+        const frame = frames.client(message);
+        if (afterFirstRegistration && frame?.type === "fetch_agents_request")
+          observed.reconnectReady = true;
+        if (frame?.type === "send_agent_message_request") observed.sentMessages += 1;
+        if (
+          frame?.type === "workspace.create.request" ||
+          frame?.type === "agent.create.request" ||
+          frame?.type === "create_agent_request"
+        )
+          observed.nativeCreates += 1;
+        if (frame?.type === "plugin.rpc.invoke.request" && frame.pluginId === "paseo-swarm") {
+          if (frame.method === "swarm.agent.config.read") observed.configReads += 1;
+          if (frame.method === registerAgentRpc.name) {
+            observed.registrations.push(registerAgentRpc.input.parse(frame.input));
+            if (observed.registrations.length === 1) {
+              // A real transport failure before dispatch. No synthetic RPC reply.
+              void Promise.all([
+                socket.close({ code: 4000, reason: "Test: first registration disconnected" }),
+                server.close(),
+              ]);
+              return;
+            }
+          }
+        }
+        server.send(message);
+      });
+    },
+  );
+  return observed;
+}
+
+swarmTest(
+  "Multiple PWA: failed registration retries the same native agent without losing an edited brief",
+  async ({ page, swarm }, testInfo) => {
+    swarmTest.setTimeout(210_000);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await configureSwarmSource(page, swarm);
+    const before = (await swarm.client.fetchAgents({ filter: { includeArchived: true } })).entries
+      .length;
+    const observed = await rejectFirstSwarmRegistration(page, swarm.port);
+    const { name, brief } = await openSwarmPlannerForm(page, swarm, "beta");
+    await selectWorkspaceIsolation(page, "worktree");
+    await submitNewWorkspacePrompt(page, brief);
+    await expect.poll(() => observed.registrations.length).toBe(1);
+    const original = observed.registrations[0];
+    if (!original) throw new Error("No real registration request observed");
+    const draft = page.getByTestId("workspace-pane-main").filter({ visible: true });
+    await expect(
+      draft.getByText(
+        `Native agent ${original.paseoAgentId} was created and may already be running, but Swarm registration failed:`,
+        { exact: false },
+      ),
+    ).toBeVisible();
+    expect((await swarm.board()).agents).toHaveLength(0);
+    const native = await swarm.client.fetchAgent(original.paseoAgentId);
+    expect(native?.agent.workspaceId).toBe(original.workspaceId);
+    expect(
+      (await swarm.client.fetchAgents({ filter: { includeArchived: true } })).entries,
+    ).toHaveLength(before + 1);
+    const originalPrompt = swarm.nativePrompt(original.paseoAgentId);
+    expect(originalPrompt).toContain(brief);
+    const counts = { configReads: observed.configReads, nativeCreates: observed.nativeCreates };
+    expect(counts).toEqual({ configReads: 1, nativeCreates: 1 });
+    const input = draft.getByRole("textbox", { name: "Message agent...", exact: true });
+    await expect(input).toHaveValue(brief);
+    const edited = "Edited brief B must remain in the composer.";
+    await input.fill(edited);
+    await draft.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect(
+      draft
+        .getByText(
+          `Native agent ${original.paseoAgentId} already exists with the original message. Your edited brief or attachments have not been sent and are preserved. Restore the original message to retry registration; another agent will not be created.`,
+          { exact: true },
+        )
+        .and(draft.getByRole("alert")),
+    ).toBeVisible();
+    await expect(input).toHaveValue(edited);
+    await page.screenshot({ path: testInfo.outputPath("multiple-pwa-edited-brief-preserved.png") });
+    expect(observed.registrations).toHaveLength(1);
+    expect(observed.sentMessages).toBe(0);
+    expect(swarm.nativePrompt(original.paseoAgentId)).toBe(originalPrompt);
+    expect({ configReads: observed.configReads, nativeCreates: observed.nativeCreates }).toEqual(
+      counts,
+    );
+    expect(
+      (await swarm.client.fetchAgents({ filter: { includeArchived: true } })).entries,
+    ).toHaveLength(before + 1);
+    await expect.poll(() => observed.reconnectReady).toBe(true);
+    await input.fill(brief);
+    await draft.getByRole("button", { name: "Send message", exact: true }).click();
+    const registered = await waitForSwarmAgent(swarm, name);
+    await expect(page).toHaveURL(
+      (url) => url.pathname === buildHostWorkspaceRoute(swarm.serverId, registered.workspaceId),
+    );
+    expect(registered.paseoAgentId).toBe(original.paseoAgentId);
+    expect(registered.workspaceId).toBe(original.workspaceId);
+    expect(observed.registrations).toEqual([original, original]);
+    expect({ configReads: observed.configReads, nativeCreates: observed.nativeCreates }).toEqual(
+      counts,
+    );
+    expect(
+      (await swarm.client.fetchAgents({ filter: { includeArchived: true } })).entries,
+    ).toHaveLength(before + 1);
+    expect(observed.sentMessages).toBe(0);
+    expect(swarm.nativePrompt(original.paseoAgentId)).toBe(originalPrompt);
+    await expect(
+      page.getByTestId(`swarm-planner-row-${original.paseoAgentId}`).filter({ visible: true }),
+    ).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("multiple-pwa-registration-recovered.png") });
+  },
+);
 
 interface WorkspaceStatusGroupEvent {
   rowTestId: string;

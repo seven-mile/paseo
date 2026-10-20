@@ -848,7 +848,7 @@ describe("Swarm MCP coordination", () => {
       id,
       title: id,
       managerName,
-      workerNames: [],
+      workerNames: [] as string[],
       brief: "private long brief",
       status: "review",
       updatedAt: "2026-10-06",
@@ -868,8 +868,54 @@ describe("Swarm MCP coordination", () => {
       refs: ["file-reference"],
     }));
     const board = {
-      agents: [actor],
-      tasks: [task("alpha", "lead.team"), task("beta", "lead"), task("other", "another")],
+      agents: [
+        actor,
+        {
+          ...actor,
+          paseoAgentId: "team",
+          name: "team",
+          qualifiedName: "non-prefix-manager",
+          roleClass: "supervisor",
+          reportsTo: "lead",
+        },
+        {
+          ...actor,
+          paseoAgentId: "nested",
+          name: "nested",
+          qualifiedName: "non-prefix-descendant",
+          roleClass: "supervisor",
+          reportsTo: "non-prefix-manager",
+        },
+        {
+          ...actor,
+          paseoAgentId: "impostor",
+          name: "impostor",
+          qualifiedName: "lead.impostor",
+          reportsTo: "another",
+        },
+        {
+          ...actor,
+          paseoAgentId: "cycle-a",
+          name: "cycle-a",
+          qualifiedName: "cycle-a",
+          reportsTo: "cycle-b",
+        },
+        {
+          ...actor,
+          paseoAgentId: "cycle-b",
+          name: "cycle-b",
+          qualifiedName: "cycle-b",
+          reportsTo: "cycle-a",
+        },
+      ],
+      tasks: [
+        task("alpha", "non-prefix-manager"),
+        task("beta", "lead"),
+        task("other", "another"),
+        task("prefix-impostor", "lead.impostor"),
+        task("missing-manager", "lead.missing"),
+        task("cyclic", "cycle-a"),
+      ],
       activities,
     };
     const invokePlugin = vi.fn(async () => board);
@@ -893,6 +939,9 @@ describe("Swarm MCP coordination", () => {
       expect(summary).not.toContain("private long brief");
       expect(summary).not.toContain("long metadata");
       expect(summary).not.toContain("evidenceevidence");
+      expect(summary).not.toContain("prefix-impostor");
+      expect(summary).not.toContain("missing-manager");
+      expect(summary).not.toContain("cyclic");
       expect(await read("swarm_board_read", { limit: 1, taskCursor: "alpha" })).toMatchObject({
         tasks: [{ id: "beta" }],
         nextTaskCursor: null,
@@ -917,6 +966,26 @@ describe("Swarm MCP coordination", () => {
       });
       expect(await read("swarm_activity_read", { activityId: "newer" })).toEqual({
         activity: activities[1],
+      });
+      expect(await read("swarm_task_read", { taskId: "prefix-impostor" })).toMatchObject({
+        task: board.tasks.find((entry) => entry.id === "prefix-impostor"),
+      });
+      expect(await read("swarm_task_read", { taskId: "missing-manager" })).toMatchObject({
+        task: board.tasks.find((entry) => entry.id === "missing-manager"),
+      });
+      board.tasks.push({
+        ...task("explicit-worker", "another"),
+        workerNames: [actor.qualifiedName],
+      });
+      board.tasks.push(task("descendant-task", "non-prefix-descendant"));
+      expect(await read("swarm_board_read", {})).toMatchObject({
+        totalTasks: 4,
+        tasks: [
+          { id: "alpha" },
+          { id: "beta" },
+          { id: "descendant-task" },
+          { id: "explicit-worker" },
+        ],
       });
       await expect(read("swarm_task_read", { taskId: "missing" })).rejects.toThrow("Unknown Task");
       await expect(read("swarm_board_read", { taskCursor: "missing" })).rejects.toThrow(
@@ -963,6 +1032,8 @@ describe("Swarm MCP coordination", () => {
         expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.pwa_roles.read", {
           roleClass: roleClass === "planner" ? "supervisor" : "worker",
           projectId: "parent-project",
+          actorPaseoAgentId: actor.paseoAgentId,
+          parentName: actor.qualifiedName,
         });
         await invokeToolWithParsedInput(registeredTool(server, "swarm_agent_create"), {
           name: "child",

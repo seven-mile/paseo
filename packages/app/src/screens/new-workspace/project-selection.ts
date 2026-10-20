@@ -250,3 +250,15 @@ export function reconcileProjectSelection(
 
   return initialSelection;
 }
+
+// A retained manual intent must wait for its live Project instead of becoming the automatic default.
+// resolveProjectSelection still validates availability and host equivalence; this is not cached data.
+export function resolveProjectPickerSelection(
+  local: ProjectSelection,
+  retained: ProjectSelection | null | undefined,
+  context: ProjectSelectionContext,
+): ProjectSelection {
+  if (retained?.source === "manual" && retained.contextKey === context.manualContextKey)
+    return retained;
+  return reconcileProjectSelection(local, context);
+}

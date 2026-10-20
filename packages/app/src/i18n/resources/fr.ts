@@ -37,6 +37,17 @@ export const fr: TranslationResources = {
       save: "Enregistrer",
       directoryLabel: "Dossier",
       saved: "Dossier PWA enregistré",
+      discovered: "{{count}} PWA directories found",
+      partial: "Discovery is incomplete. Refresh to retry unreadable directories.",
+      empty: "No PWA directories found.",
+      choose: "Choose a PWA directory",
+      selectionUnavailable: "The selected PWA directory is unavailable. Choose another or refresh.",
+      inherited: "Inherited PWA · {{directory}}",
+      teamUnavailable: "Team PWA unavailable: {{reason}}",
+      teamUnavailableTitle: "Team PWA unavailable",
+      teamUnavailableDescription:
+        "Review this Project's PWA source. Tasks and Activity remain available.",
+      contentRoot: "PWA content root",
     },
     tasks: {
       title: "Tâches",
@@ -95,8 +106,15 @@ export const fr: TranslationResources = {
         bodyRequired: "Rédigez une activité ou choisissez une option disponible.",
       },
       noMatches: "Aucune tâche correspondante.",
+      unassigned: "Unattributed Tasks",
+      undeclaredStatus: "Undeclared status · {{status}}",
     },
     creation: {
+      updateHost: "Update this host to create Swarm agents with PWA selection.",
+      registrationFailed:
+        "Native agent {{id}} was created and may already be running, but Swarm registration failed: {{reason}}. Retry registers this same agent; it does not create another.",
+      registrationMessageChanged:
+        "Native agent {{id}} already exists with the original message. Your edited brief or attachments have not been sent and are preserved. Restore the original message to retry registration; another agent will not be created.",
       notInstalled: "Swarm n’est pas installé sur l’hôte sélectionné.",
       chooseProject: "Choisissez un projet sur cet hôte.",
       noRoles: "Aucun rôle n’est configuré dans le PWA de ce projet.",

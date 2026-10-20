@@ -1,8 +1,59 @@
 import { z } from "zod";
+import equal from "fast-deep-equal";
+import type { CreateAgentRequestOptions } from "@getpaseo/client/internal/daemon-client";
 
-export const pwaSourceSchema = z.object({ path: z.string().nullable() });
-export const savedPwaSourceSchema = z.object({ path: z.string() });
-export type PwaSource = z.infer<typeof pwaSourceSchema>;
+export const pwaRoleSchema = z.object({
+  role: z.string(),
+  roleClass: z.enum(["planner", "supervisor", "worker"]),
+  title: z.string(),
+  description: z.string(),
+});
+export const pwaEntrySchema = z.object({
+  directory: z.string(),
+  title: z.string(),
+  roles: z.array(pwaRoleSchema),
+  statuses: z.array(z.string()),
+  error: z.string().optional(),
+});
+export const savedPwaSourceSchema = z.object({
+  path: z.string(),
+});
+// COMPAT(swarm-pwa-discovery): path-only hosts predate multi-PWA discovery; added in v0.11, remove after 2027-04-17.
+export const pwaSourceSchema = z
+  .object({
+    path: z.string().nullable(),
+    sourcePreview: z.boolean().optional(),
+    agentConfigRead: z.boolean().optional(),
+    entries: z.array(pwaEntrySchema).optional(),
+    complete: z.boolean().optional(),
+    errors: z.array(z.object({ directory: z.string(), error: z.string() })).optional(),
+    rootError: z.string().optional(),
+  })
+  .transform((source) => ({
+    ...source,
+    entries: source.entries ?? [],
+    complete: source.complete ?? false,
+    errors: source.errors ?? [],
+    discoveryAvailable: source.entries !== undefined,
+  }));
+export interface PwaSource {
+  path: string | null;
+}
+export type PwaDiscovery = z.infer<typeof pwaSourceSchema>;
+export type PwaEntry = z.infer<typeof pwaEntrySchema>;
+
+export function hasRootPwa(source: PwaDiscovery | undefined): boolean {
+  if (!source?.path || source.rootError) return false;
+  if (!source.discoveryAvailable) return true;
+  return source.entries.some((entry) => entry.directory === "." && !entry.error);
+}
+
+export function initialPwaDirectory(source: PwaDiscovery): string | null {
+  if (!source.discoveryAvailable) return hasRootPwa(source) ? "." : null;
+  if (!source.complete || source.rootError || source.errors.length || source.entries.length !== 1)
+    return null;
+  return source.entries[0].error ? null : source.entries[0].directory;
+}
 
 export type PwaFormStatus =
   | { kind: "editing" }
@@ -36,11 +87,12 @@ export function openPwaForm(snapshot: PwaFormSnapshot) {
   };
   function publish(next: PwaFormState) {
     if (closed) return;
-    const canEdit = next.status.kind !== "pending";
-    const trimmedPath = next.path.trim();
     state = {
       ...next,
-      canSubmit: canEdit && trimmedPath.length > 0 && trimmedPath !== next.savedPath,
+      canSubmit:
+        next.status.kind !== "pending" &&
+        next.path.trim().length > 0 &&
+        next.path.trim() !== next.savedPath,
     };
     for (const listener of listeners) listener();
   }
@@ -63,11 +115,10 @@ export function openPwaForm(snapshot: PwaFormSnapshot) {
       publish({ ...state, status: { kind: "pending" } });
       try {
         const saved = await snapshot.save(state.path.trim());
-        const savedPath = saved.path ?? "";
         publish({
           ...state,
-          path: savedPath,
-          savedPath,
+          path: saved.path ?? "",
+          savedPath: saved.path ?? "",
           status: { kind: "success" },
           inputRevision: state.inputRevision + 1,
         });
@@ -75,6 +126,71 @@ export function openPwaForm(snapshot: PwaFormSnapshot) {
         const message = error instanceof Error ? error.message : String(error);
         publish({ ...state, status: { kind: "error", message } });
       }
+    },
+  };
+}
+
+export const swarmAgentConfigSchema = z.object({
+  systemPrompt: z.string(),
+  parentAgentId: z.string().nullable(),
+  projectId: z.string().optional(),
+  pwaBinding: z.object({
+    projectId: z.string().optional(),
+    contentRoot: z.string(),
+    directory: z.string(),
+  }),
+});
+
+export interface SwarmAgentCreationConfig {
+  systemPrompt: string;
+  parentAgentId: string | null;
+  register(input: { agentId: string; workspaceId: string }): Promise<void>;
+}
+
+type SwarmInitialMessage = Pick<
+  CreateAgentRequestOptions,
+  "initialPrompt" | "images" | "attachments"
+>;
+
+export function matchesSwarmRegistrationMessage(
+  original: SwarmInitialMessage,
+  retry: SwarmInitialMessage,
+): boolean {
+  return (
+    (original.initialPrompt ?? "") === (retry.initialPrompt ?? "") &&
+    equal(original.images ?? [], retry.images ?? []) &&
+    equal(original.attachments ?? [], retry.attachments ?? [])
+  );
+}
+
+export async function readSwarmAgentCreationConfig(
+  invoke: (method: string, input: unknown) => Promise<unknown>,
+  input: {
+    projectId: string;
+    roleClass: "planner" | "supervisor" | "worker";
+    name: string;
+    role: string;
+    reportsTo: string | null;
+    pwaDirectory?: string;
+    brief: string;
+  },
+): Promise<SwarmAgentCreationConfig> {
+  const config = swarmAgentConfigSchema.parse(
+    await invoke("swarm.agent.config.read", { ...input, actorPaseoAgentId: null }),
+  );
+  const registration = {
+    name: input.name,
+    role: input.role,
+    roleClass: input.roleClass,
+    reportsTo: input.reportsTo,
+    projectId: config.projectId ?? input.projectId,
+    pwaBinding: config.pwaBinding,
+  };
+  return {
+    systemPrompt: config.systemPrompt,
+    parentAgentId: config.parentAgentId,
+    async register({ agentId, workspaceId }) {
+      await invoke("swarm.agent.register", { ...registration, paseoAgentId: agentId, workspaceId });
     },
   };
 }

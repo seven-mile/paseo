@@ -768,6 +768,8 @@ export async function createPaseoToolCatalog(
                 : undefined);
             const roles = await invokePlugin("paseo-swarm", "swarm.pwa_roles.read", {
               roleClass: swarmRole === "planner" ? "supervisor" : "worker",
+              actorPaseoAgentId: callerAgentId,
+              parentName: actor.qualifiedName ?? actor.name,
               ...(projectId ? { projectId } : {}),
             });
             return swarmResult({ roles });

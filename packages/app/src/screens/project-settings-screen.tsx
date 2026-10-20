@@ -112,18 +112,15 @@ export default function ProjectSettingsScreen({
   );
   const selectedHost = getProjectHostEntry(project, serverId, projectId);
   const selectedSnapshot = useHostRuntimeSnapshot(serverId);
-  const isHostGone =
-    Boolean(serverId) &&
-    (selectedSnapshot?.connectionStatus === "offline" ||
-      selectedSnapshot?.connectionStatus === "error");
+  const isHostGone = selectedSnapshot?.connectionStatus !== "online";
 
   const client = useHostRuntimeClient(serverId);
-  const canEdit =
-    selectedHost?.isOnline === true &&
+  const hasResolvedTarget =
+    selectedHost !== undefined &&
     selectedHost.serverId.trim().length > 0 &&
     selectedHost.repoRoot.trim().length > 0;
 
-  if (!project || !selectedHost || !client || !canEdit) {
+  if (!project || !selectedHost || !client || !hasResolvedTarget) {
     return (
       <NoEditableTarget
         onBackToProjects={onBackToProjects}
@@ -134,6 +131,7 @@ export default function ProjectSettingsScreen({
 
   return (
     <ProjectSettingsBody
+      key={JSON.stringify([selectedHost.serverId, selectedHost.projectId, selectedHost.repoRoot])}
       project={project}
       selectedHost={selectedHost}
       client={client}
@@ -208,9 +206,10 @@ function ProjectSettingsBody({
   const [isEditSheetOpen, setIsEditSheetOpen] = useState(false);
   const [editSessionId, setEditSessionId] = useState(0);
   const openEditSheet = useCallback(() => {
+    if (isHostGone) return;
     setEditSessionId((id) => id + 1);
     setIsEditSheetOpen(true);
-  }, []);
+  }, [isHostGone]);
   const closeEditSheet = useCallback(() => setIsEditSheetOpen(false), []);
   const queryKey = useMemo(
     () => ["project-config", selectedHost.serverId, selectedHost.repoRoot] as const,
@@ -220,13 +219,14 @@ function ProjectSettingsBody({
   const readQuery = useQuery({
     queryKey,
     queryFn: () => client.readProjectConfig(selectedHost.repoRoot),
+    enabled: !isHostGone,
     retry: false,
   });
   const refetchProjectConfig = readQuery.refetch;
   useFocusEffect(
     useCallback(() => {
-      void refetchProjectConfig();
-    }, [refetchProjectConfig]),
+      if (!isHostGone) void refetchProjectConfig();
+    }, [isHostGone, refetchProjectConfig]),
   );
 
   const data = readQuery.data;
@@ -284,6 +284,7 @@ function ProjectSettingsBody({
             accessibilityRole="button"
             accessibilityLabel={t("settings.project.edit.title")}
             onPress={openEditSheet}
+            disabled={isHostGone}
             hitSlop={8}
             style={styles.editButton}
           >
@@ -295,7 +296,7 @@ function ProjectSettingsBody({
       <ProjectEditSheet
         // A new instance per open seeds the form from the project as it stands now.
         key={`${selectedHost.serverId}:${selectedHost.projectId}:${editSessionId}`}
-        visible={isEditSheetOpen}
+        visible={isEditSheetOpen && !isHostGone}
         onClose={closeEditSheet}
         serverId={selectedHost.serverId}
         projectId={selectedHost.projectId}

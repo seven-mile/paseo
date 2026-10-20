@@ -107,6 +107,24 @@ the checkout source, while packaged reloads recompile the shipped entry. Changes
 raw Swarm server modules require rebuilding that packaged entry before reload. The embedded
 PWA directory is content only and does not configure a runtime source.
 
+Configure Swarm with a Project's PWA content parent directory. Each discovered `PWA.md` owns its
+directory and discovers roles from `roles/<slug>.md`. Role files and the roles directory may
+be symlinks, provided their real paths stay inside the content root. A planner selects one directory,
+and children inherit their actual manager's binding. A legacy source pointing at a PWA itself
+can still supply that workflow without saving a binding on read. Existing teams cannot be rebound
+to another PWA; restore a moved source path or create a new team. Changing the configured source
+or editing files never rewrites existing prompts or Task statuses.
+Team boards use the bound planner's current status columns and retain old values in an undeclared
+status section. An unreadable PWA preserves the Tasks and reports the source error. Project board
+reads retain the full record arrays for clients that filter locally; `teamScopes` advertises scoped
+workflow reads. Source previews are read-only and never change a saved source or binding.
+
+Human creation reads the selected PWA configuration without reserving a Swarm name, then uses
+native CreationService and registers that same native agent. If registration fails, retry
+registration for the returned native ID; do not create another agent. Existing prepare/bind RPCs
+retain their reserved-identity contract. Direct creation releases a name only when native creation
+is known not to have produced an agent; unknown outcomes retain the reserved ID for inspection.
+
 Swarm planners must prepare a separate workspace and pass its `workspaceId` when creating
 a supervisor. This keeps supervisor execution out of the planner's workspace; omitting placement
 does not bypass the separation. Supervisor-created workers still default to the supervisor's

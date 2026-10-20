@@ -32,8 +32,19 @@ export interface PendingWorkspaceDraftSetup {
   sourceDirectory?: string | null;
 }
 
+export interface SwarmWorkspaceDraft {
+  form: ReturnType<typeof import("@/swarm/parent-selection").openSwarmCreationFormDraft>;
+  worktreeSlug: string;
+}
+
 interface WorkspaceDraftSubmissionState {
   pendingByDraftId: Record<string, PendingWorkspaceDraftSubmission>;
+  swarmByDraftId: Record<string, SwarmWorkspaceDraft>;
+  retainSwarmDraft: (input: {
+    draftId: string;
+    create: () => SwarmWorkspaceDraft;
+  }) => SwarmWorkspaceDraft;
+  clearSwarmDraft: (input: { draftId: string }) => void;
   setupByDraftId: Record<string, PendingWorkspaceDraftSetup>;
   creationByDraftId: Record<string, NonNullable<PendingWorkspaceDraftSubmission["agentCreation"]>>;
   setPending: (submission: PendingWorkspaceDraftSubmission) => void;
@@ -68,6 +79,21 @@ function normalizeDraftId(draftId: string): string {
 export const useWorkspaceDraftSubmissionStore = create<WorkspaceDraftSubmissionState>(
   (set, get) => ({
     pendingByDraftId: {},
+    swarmByDraftId: {},
+    retainSwarmDraft: ({ draftId, create: createDraft }) => {
+      const existing = get().swarmByDraftId[draftId];
+      if (existing) return existing;
+      const draft = createDraft();
+      set((state) => ({ swarmByDraftId: { ...state.swarmByDraftId, [draftId]: draft } }));
+      return draft;
+    },
+    clearSwarmDraft: ({ draftId }) =>
+      set((state) => {
+        if (!state.swarmByDraftId[draftId]) return state;
+        const swarmByDraftId = { ...state.swarmByDraftId };
+        delete swarmByDraftId[draftId];
+        return { swarmByDraftId };
+      }),
     setupByDraftId: {},
     creationByDraftId: {},
     setPending: (submission) =>
@@ -94,10 +120,12 @@ export const useWorkspaceDraftSubmissionStore = create<WorkspaceDraftSubmissionS
       const normalizedDraftId = normalizeDraftId(draftId);
       if (!normalizedDraftId) return;
       set((state) => {
+        const swarmByDraftId = { ...state.swarmByDraftId };
+        delete swarmByDraftId[normalizedDraftId];
         const creationByDraftId = { ...state.creationByDraftId };
         delete creationByDraftId[normalizedDraftId];
         const { [normalizedDraftId]: _removed, ...setupByDraftId } = state.setupByDraftId;
-        return { setupByDraftId, creationByDraftId };
+        return { setupByDraftId, creationByDraftId, swarmByDraftId };
       });
     },
     consumePending: (input) => {

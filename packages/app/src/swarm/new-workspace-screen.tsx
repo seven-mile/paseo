@@ -1,24 +1,17 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigation } from "expo-router";
+import { createNameId } from "mnemonic-id";
+import { useWorkspaceDraftSubmissionStore } from "@/stores/workspace-draft-submission-store";
 import { useTranslation } from "react-i18next";
-import {
-  NewWorkspaceScreen,
-  type SwarmRoleChoice,
-  type SwarmWorkspaceOptions,
-} from "@/screens/new-workspace-screen";
+import { NewWorkspaceScreen, type SwarmWorkspaceOptions } from "@/screens/new-workspace-screen";
 import { usePluginInstallations } from "@/plugins/registry";
 import { swarmTaskBoardSchema } from "./task-model";
 import { type SwarmRoleClass } from "./rpc";
 import { z } from "zod";
+import { openSwarmCreationFormDraft } from "./parent-selection";
+import { pwaSourceSchema, pwaRoleSchema, readSwarmAgentCreationConfig } from "./pwa-form-model";
 
-const rolesSchema = z.array(
-  z.object({
-    role: z.string(),
-    roleClass: z.enum(["planner", "supervisor", "worker"]),
-    title: z.string(),
-    description: z.string(),
-  }),
-);
-const preparedAgentSchema = z.object({ agentId: z.string(), systemPrompt: z.string() });
+const rolesSchema = z.array(pwaRoleSchema);
 
 export interface SwarmNewWorkspaceScreenProps {
   serverId: string;
@@ -41,24 +34,41 @@ export function SwarmNewWorkspaceScreen({
 }: SwarmNewWorkspaceScreenProps) {
   const { t } = useTranslation();
   const installations = usePluginInstallations("paseo-swarm");
+  const navigation = useNavigation();
+  const [draft] = useState(() => {
+    const create = () => ({
+      form: openSwarmCreationFormDraft(roleClass),
+      worktreeSlug: createNameId(),
+    });
+    return draftId
+      ? useWorkspaceDraftSubmissionStore.getState().retainSwarmDraft({ draftId, create })
+      : create();
+  });
+  // Unmount also means a responsive remount. Only an explicit route removal abandons this draft.
+  useEffect(
+    () =>
+      navigation.addListener("beforeRemove", () => {
+        if (draftId) useWorkspaceDraftSubmissionStore.getState().clearSwarmDraft({ draftId });
+      }),
+    [draftId, navigation],
+  );
   const options = useMemo<SwarmWorkspaceOptions>(() => {
     return {
       roleClass,
       initialParent: parentName,
       initialName: roleClass,
+      draft: draft.form,
+      worktreeSlug: draft.worktreeSlug,
       forServer(targetServerId) {
         const installation = installations.find((plugin) => plugin.serverId === targetServerId);
         if (!installation) return undefined;
         return {
           async loadTarget(target) {
-            const [roleResponse, boardResponse] = await Promise.all([
-              installation.invoke("swarm.pwa_roles.read", {
-                roleClass,
-                projectId: target.projectId,
-              }),
+            const [sourceResponse, boardResponse] = await Promise.all([
+              installation.invoke("swarm.pwa_source.read", { projectId: target.projectId }),
               installation.invoke("swarm.board.read", {}),
             ]);
-            const roles: SwarmRoleChoice[] = rolesSchema.parse(roleResponse);
+            const source = pwaSourceSchema.parse(sourceResponse);
             const board = swarmTaskBoardSchema.parse(boardResponse);
             let parentRoleClass: "planner" | "supervisor" | null = null;
             if (roleClass === "supervisor") parentRoleClass = "planner";
@@ -72,29 +82,31 @@ export function SwarmNewWorkspaceScreen({
                 paseoAgentId: agent.paseoAgentId,
                 serverId: target.serverId,
                 workspaceId: agent.workspaceId,
+                pwaBinding: agent.pwaBinding,
               }));
-            return { roles, parents };
+            return { source, parents };
           },
-          async prepareAgent({ target, ...input }) {
-            return preparedAgentSchema.parse(
-              await installation.invoke("swarm.agent.prepare", {
-                ...input,
-                projectId: target.projectId,
+          async loadRoles({ target, directory, parentName: selectedParent }) {
+            return rolesSchema.parse(
+              await installation.invoke("swarm.pwa_roles.read", {
                 roleClass,
-                actorPaseoAgentId: null,
+                projectId: target.projectId,
+                path: selectedParent ? undefined : directory,
+                parentName: selectedParent ?? undefined,
               }),
             );
           },
-          async bindAgent({ agentId, workspaceId }) {
-            await installation.invoke("swarm.agent.bind_workspace", {
-              agentId,
-              workspaceId,
+          readAgentConfig({ target, ...input }) {
+            return readSwarmAgentCreationConfig(installation.invoke, {
+              ...input,
+              projectId: target.projectId,
+              roleClass,
             });
           },
         };
       },
     };
-  }, [installations, parentName, roleClass]);
+  }, [installations, parentName, roleClass, draft]);
   return (
     <NewWorkspaceScreen
       serverId={serverId}

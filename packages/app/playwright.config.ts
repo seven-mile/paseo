@@ -13,6 +13,7 @@ function videoMode(): "on" | "on-first-retry" | "retain-on-failure" {
 }
 
 export default defineConfig({
+  build: { external: ["**/packages/*/dist/**"] },
   testDir: "./e2e/browser",
   globalSetup: "./e2e/support/global-setup.ts",
   timeout: 60_000,

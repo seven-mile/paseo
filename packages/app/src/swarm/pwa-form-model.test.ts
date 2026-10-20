@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { openPwaForm, type PwaSource } from "./pwa-form-model";
+import {
+  openPwaForm,
+  pwaSourceSchema,
+  savedPwaSourceSchema,
+  initialPwaDirectory,
+  matchesSwarmRegistrationMessage,
+  type PwaSource,
+} from "./pwa-form-model";
 
 interface PendingSave {
   path: string;
@@ -73,5 +80,103 @@ describe("PWA directory form", () => {
     form.setPath("/new");
     await form.submit();
     expect(source.requests.map((request) => request.path)).toEqual(["/pwa"]);
+  });
+});
+
+describe("PWA source discovery", () => {
+  it("reads legacy responses and only preselects complete unique discovery", () => {
+    const legacy = pwaSourceSchema.parse({ path: "/legacy" });
+    expect(legacy.discoveryAvailable).toBe(false);
+    expect(initialPwaDirectory(legacy)).toBe(".");
+    expect(savedPwaSourceSchema.parse({ path: "/legacy" })).toEqual({ path: "/legacy" });
+    const source = pwaSourceSchema.parse({
+      path: "/root",
+      entries: [
+        { directory: "a", title: "A", roles: [], statuses: [] },
+        { directory: "b", title: "B", roles: [], statuses: [] },
+      ],
+      complete: true,
+      errors: [],
+    });
+    expect(initialPwaDirectory(source)).toBeNull();
+    expect(initialPwaDirectory({ ...source, entries: [source.entries[1]] })).toBe("b");
+    expect(
+      initialPwaDirectory({ ...source, entries: [source.entries[0]], complete: false }),
+    ).toBeNull();
+    expect(
+      initialPwaDirectory({
+        ...source,
+        entries: [source.entries[0]],
+        errors: [{ directory: "b", error: "unreadable" }],
+      }),
+    ).toBeNull();
+    expect(
+      initialPwaDirectory({ ...source, entries: [source.entries[0]], rootError: "unreadable" }),
+    ).toBeNull();
+    expect(
+      initialPwaDirectory({ ...source, entries: [{ ...source.entries[0], error: "unreadable" }] }),
+    ).toBeNull();
+  });
+
+  it("keeps the new creation capability explicit and malformed wire fields invalid", () => {
+    expect(pwaSourceSchema.parse({ path: "/root" }).agentConfigRead).toBeUndefined();
+    expect(pwaSourceSchema.parse({ path: "/root", agentConfigRead: true }).agentConfigRead).toBe(
+      true,
+    );
+    expect(() => pwaSourceSchema.parse({ path: "/root", agentConfigRead: "true" })).toThrow();
+  });
+});
+
+describe("Swarm registration retry message", () => {
+  const original = {
+    initialPrompt: "original brief",
+    images: [{ data: "original image", mimeType: "image/png" }],
+    attachments: [
+      {
+        type: "uploaded_file" as const,
+        id: "file-id",
+        fileName: "notes.txt",
+        mimeType: "text/plain",
+        size: 4,
+        path: "/uploads/notes.txt",
+      },
+    ],
+  };
+
+  it("allows the original message and normalizes absent empty fields", () => {
+    expect(
+      matchesSwarmRegistrationMessage(original, {
+        ...original,
+        images: original.images.map((image) => ({ ...image })),
+        attachments: original.attachments.map((attachment) => ({ ...attachment })),
+      }),
+    ).toBe(true);
+    expect(
+      matchesSwarmRegistrationMessage({}, { initialPrompt: "", images: [], attachments: [] }),
+    ).toBe(true);
+  });
+
+  it("rejects edited brief, image data, and full attachment metadata without changing either message", () => {
+    const before = JSON.stringify(original);
+    expect(
+      matchesSwarmRegistrationMessage(original, { ...original, initialPrompt: "edited brief" }),
+    ).toBe(false);
+    expect(
+      matchesSwarmRegistrationMessage(original, {
+        ...original,
+        images: [{ ...original.images[0], data: "edited image" }],
+      }),
+    ).toBe(false);
+    expect(
+      matchesSwarmRegistrationMessage(original, {
+        ...original,
+        attachments: [{ ...original.attachments[0], path: "/uploads/other.txt" }],
+      }),
+    ).toBe(false);
+    expect(
+      matchesSwarmRegistrationMessage(original, { ...original, images: [], attachments: [] }),
+    ).toBe(false);
+    expect(JSON.stringify(original)).toBe(before);
+    expect(matchesSwarmRegistrationMessage(original, original)).toBe(true);
   });
 });

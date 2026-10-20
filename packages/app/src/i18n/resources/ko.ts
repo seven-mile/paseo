@@ -37,6 +37,17 @@ export const ko: TranslationResources = {
       save: "저장",
       directoryLabel: "디렉터리",
       saved: "PWA 디렉터리가 저장되었습니다",
+      discovered: "{{count}} PWA directories found",
+      partial: "Discovery is incomplete. Refresh to retry unreadable directories.",
+      empty: "No PWA directories found.",
+      choose: "Choose a PWA directory",
+      selectionUnavailable: "The selected PWA directory is unavailable. Choose another or refresh.",
+      inherited: "Inherited PWA · {{directory}}",
+      teamUnavailable: "Team PWA unavailable: {{reason}}",
+      teamUnavailableTitle: "Team PWA unavailable",
+      teamUnavailableDescription:
+        "Review this Project's PWA source. Tasks and Activity remain available.",
+      contentRoot: "PWA content root",
     },
     tasks: {
       title: "작업",
@@ -94,8 +105,15 @@ export const ko: TranslationResources = {
         bodyRequired: "활동을 작성하거나 사용 가능한 선택지를 고르세요.",
       },
       noMatches: "일치하는 작업이 없습니다.",
+      unassigned: "Unattributed Tasks",
+      undeclaredStatus: "Undeclared status · {{status}}",
     },
     creation: {
+      updateHost: "Update this host to create Swarm agents with PWA selection.",
+      registrationFailed:
+        "Native agent {{id}} was created and may already be running, but Swarm registration failed: {{reason}}. Retry registers this same agent; it does not create another.",
+      registrationMessageChanged:
+        "Native agent {{id}} already exists with the original message. Your edited brief or attachments have not been sent and are preserved. Restore the original message to retry registration; another agent will not be created.",
       notInstalled: "선택한 호스트에 Swarm이 설치되지 않았습니다.",
       chooseProject: "이 호스트의 프로젝트를 선택하세요.",
       noRoles: "이 프로젝트의 PWA에 역할이 설정되지 않았습니다.",
