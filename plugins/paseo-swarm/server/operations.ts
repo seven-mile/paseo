@@ -22,7 +22,7 @@ import {
   prepareAgentRpc,
   bindPreparedAgentRpc,
 } from "../shared/swarm";
-import type { AgentRecord, Task } from "../shared/models";
+import type { AgentRecord, SwarmState, Task } from "../shared/models";
 import { agentQualifiedName } from "../shared/models";
 
 const now = () => new Date().toISOString();
@@ -334,7 +334,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     );
     const timestamp = now();
     let result!: AgentRecord;
-    await store.update((state) => {
+    await store.commit((state) => {
       const existing = state.agents.find((agent) => agent.paseoAgentId === input.paseoAgentId);
       const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
       if (!existing) ensureUniqueName(input.name, qualifiedName, parent);
@@ -347,32 +347,34 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       ) {
         throw new Error(`Agent identity and hierarchy are immutable: ${input.paseoAgentId}`);
       }
-      result = existing ?? {
-        id: id("agent"),
-        paseoAgentId: input.paseoAgentId,
-        name: input.name,
-        qualifiedName,
-        aliases: input.aliases,
-        roleClass: input.roleClass,
-        role: input.role,
-        reportsTo: parent ? agentQualifiedName(parent) : null,
-        workspaceId: snapshot.workspaceId ?? null,
-        projectId,
-        retired: false,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
-      if (existing)
-        Object.assign(existing, {
-          ...input,
-          workspaceId: snapshot.workspaceId,
-          projectId,
-          qualifiedName,
-          reportsTo: parent ? agentQualifiedName(parent) : null,
-          retired: false,
-          updatedAt: timestamp,
-        });
-      else state.agents.push(result);
+      const reportsTo = parent ? agentQualifiedName(parent) : null;
+      result = existing
+        ? {
+            ...existing,
+            ...input,
+            workspaceId: snapshot.workspaceId ?? null,
+            projectId,
+            qualifiedName,
+            reportsTo,
+            retired: false,
+            updatedAt: timestamp,
+          }
+        : {
+            id: id("agent"),
+            paseoAgentId: input.paseoAgentId,
+            name: input.name,
+            qualifiedName,
+            aliases: input.aliases,
+            roleClass: input.roleClass,
+            role: input.role,
+            reportsTo: parent ? agentQualifiedName(parent) : null,
+            workspaceId: snapshot.workspaceId ?? null,
+            projectId,
+            retired: false,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          };
+      return [{ op: "put", collection: "agents", record: result }];
     });
     return result;
   });
@@ -417,9 +419,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         updatedAt: timestamp,
       };
       const createConfig = creationConfig(input, provisional, parent, projectId);
-      await store.update((state) => {
-        state.agents.push(reservedAgent);
-      });
+      await store.commit(() => [{ op: "put", collection: "agents", record: reservedAgent }]);
       let created;
       try {
         let workspace = workspaceId ? context.paseo.workspaces.ref(workspaceId) : null;
@@ -440,19 +440,20 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
               cwd,
             });
       } catch (error) {
-        await store.update((state) => {
-          state.agents = state.agents.filter((agent) => agent.paseoAgentId !== paseoAgentId);
-        });
+        await store.commit(() => [{ op: "delete", collection: "agents", key: reservedAgent.id }]);
         throw error;
       }
       const snapshot = (await created.refresh())?.agent;
       let result = reservedAgent;
-      await store.update((state) => {
+      await store.commit((state) => {
         const current = state.agents.find((agent) => agent.paseoAgentId === paseoAgentId);
         if (!current) throw new Error(`Reserved Swarm agent disappeared: ${paseoAgentId}`);
-        current.workspaceId = snapshot?.workspaceId ?? current.workspaceId;
-        current.updatedAt = now();
-        result = current;
+        result = {
+          ...current,
+          workspaceId: snapshot?.workspaceId ?? current.workspaceId,
+          updatedAt: now(),
+        };
+        return [{ op: "put", collection: "agents", record: result }];
       });
       await created.send(input.brief);
       return result;
@@ -489,9 +490,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       updatedAt: timestamp,
     };
     const systemPrompt = rolePrompt(provisional, input.brief, projectId);
-    await store.update((state) => {
-      state.agents.push(agent);
-    });
+    await store.commit(() => [{ op: "put", collection: "agents", record: agent }]);
     return { agentId: agent.paseoAgentId, systemPrompt, agent };
   });
 
@@ -516,15 +515,13 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         );
       }
       let result!: AgentRecord;
-      await store.update((state) => {
+      await store.commit((state) => {
         const agent = state.agents.find(
           (candidate) => candidate.paseoAgentId === input.agentId && !candidate.retired,
         );
         if (!agent) throw new Error(`Unknown prepared agent: ${input.agentId}`);
-        agent.workspaceId = input.workspaceId;
-        agent.projectId = projectId;
-        agent.updatedAt = now();
-        result = agent;
+        result = { ...agent, workspaceId: input.workspaceId, projectId, updatedAt: now() };
+        return [{ op: "put", collection: "agents", record: result }];
       });
       return result;
     },
@@ -545,7 +542,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     const workerNames = resolveTaskWorkers(input.workerNames, manager);
     let result!: Task;
     const timestamp = now();
-    await store.update((state) => {
+    await store.commit((state) => {
       if (state.tasks.some((task) => task.id === input.id)) {
         throw new Error(`Task id already exists: ${input.id}`);
       }
@@ -557,7 +554,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         createdAt: timestamp,
         updatedAt: timestamp,
       };
-      state.tasks.push(result);
+      return [{ op: "put", collection: "tasks", record: result }];
     });
     return result;
   });
@@ -577,18 +574,19 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     const workerNames =
       input.workerNames === undefined ? undefined : resolveTaskWorkers(input.workerNames, manager);
     let result!: Task;
-    await store.update((state) => {
+    await store.commit((state) => {
       const value = state.tasks.find((candidate) => candidate.id === input.taskId);
       if (!value) throw new Error(`Unknown Task: ${input.taskId}`);
-      Object.assign(value, {
+      result = {
+        ...value,
         ...(input.status === undefined ? {} : { status: input.status }),
         ...(input.title === undefined ? {} : { title: input.title }),
         ...(input.brief === undefined ? {} : { brief: input.brief }),
         ...(workerNames === undefined ? {} : { workerNames }),
         ...(input.data === undefined ? {} : { data: input.data }),
         updatedAt: now(),
-      });
-      result = value;
+      };
+      return [{ op: "put", collection: "tasks", record: result }];
     });
     return result;
   });
@@ -604,9 +602,9 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       throw new Error(`Agent ${input.actorName} cannot append Activity to Task ${input.taskId}`);
     }
     let result!: ReturnType<typeof makeActivity>;
-    await store.update((state) => {
+    await store.commit((state) => {
       result = makeActivity({ ...input, actorKind: "agent" }, state);
-      state.activities.push(result);
+      return [{ op: "put", collection: "activities", record: result }];
     });
     return result;
   });
@@ -616,9 +614,9 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     async (input: RpcInput<typeof appendHumanActivityRpc>, context: PluginHandlerContext) => {
       const task = findTask(input.taskId);
       let result!: ReturnType<typeof makeActivity>;
-      await store.update((state) => {
+      await store.commit((state) => {
         result = makeActivity({ ...input, actorKind: "human" }, state);
-        state.activities.push(result);
+        return [{ op: "put", collection: "activities", record: result }];
       });
       try {
         const manager = findAgent(task.managerName);
@@ -713,7 +711,7 @@ function makeActivity(
     body: string;
     data: Record<string, unknown>;
   },
-  state: import("../shared/models").SwarmState,
+  state: Readonly<SwarmState>,
 ) {
   return {
     id: id("activity"),
