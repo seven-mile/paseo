@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import type {
   PluginHandlerContext,
@@ -11,8 +11,15 @@ import type {
 } from "@getpaseo/plugin/server";
 import contribute from "../index.server";
 import { notifyManager, registerOperations } from "../server/operations";
-import { getConfigPath, getStatePath, StateStore, store } from "../server/state";
-import { emptyState, type AgentRecord } from "../shared/models";
+import {
+  getConfigPath,
+  getEventLogPath,
+  getSnapshotPath,
+  StateStore,
+  store,
+  type SwarmChange,
+} from "../server/state";
+import { emptyState, type AgentRecord, type SwarmState } from "../shared/models";
 import {
   boardReadRpc,
   createAgentRpc,
@@ -26,6 +33,28 @@ import {
   prepareAgentRpc,
   bindPreparedAgentRpc,
 } from "../shared/swarm";
+
+async function seed(seeded: SwarmState): Promise<void> {
+  await store.commit(() => [
+    ...seeded.agents.map((record): SwarmChange => ({ op: "put", collection: "agents", record })),
+    ...seeded.tasks.map((record): SwarmChange => ({ op: "put", collection: "tasks", record })),
+    ...seeded.activities.map(
+      (record): SwarmChange => ({ op: "put", collection: "activities", record }),
+    ),
+  ]);
+}
+
+function readDisk(): string {
+  return [getSnapshotPath(), getEventLogPath()]
+    .map((path) => {
+      try {
+        return readFileSync(path, "utf8");
+      } catch {
+        return "";
+      }
+    })
+    .join("\0");
+}
 
 test("supervisors require independent placement, workers keep caller defaults, and foreign occupants are rejected", async () => {
   const home = mkdtempSync(join(tmpdir(), "swarm-operations-"));
@@ -49,8 +78,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
     updatedAt: "2026-10-06T00:00:00Z",
   };
   seeded.agents.push(planner);
-  await store.update((state) => Object.assign(state, seeded));
-  const state = store.read();
+  await seed(seeded);
   const handlers = new Map<string, (input: never, context: PluginHandlerContext) => unknown>();
   const server: Pick<PluginServerContext, "handle"> = {
     handle(contract, handler) {
@@ -167,7 +195,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
         ),
       /selected project/,
     );
-    assert.equal(state.agents.length, 1);
+    assert.equal(store.read().agents.length, 1);
     assert.equal(workspaceCreations.length, 0);
     const placementError =
       /Prepare a separate workspace for the supervisor and pass its workspaceId/;
@@ -187,7 +215,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
           ),
         placementError,
       );
-      assert.equal(state.agents.length, 1);
+      assert.equal(store.read().agents.length, 1);
       assert.equal(agentCreations.length, 0);
     }
     const supervisor = (await invoke(
@@ -249,7 +277,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
     assert.equal(parallel.reportsTo, supervisor.qualifiedName);
     const peer = await createChild(supervisor, "parallel-peer", "parallel-workspace");
     assert.equal(peer.reportsTo, supervisor.qualifiedName);
-    const savedCount = state.agents.length;
+    const savedCount = store.read().agents.length;
     const createdCount = agentCreations.length;
     await assert.rejects(
       async () => createChild(planner, "grandchild-conflict", "parallel-workspace"),
@@ -269,7 +297,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
       /ordinary-native-agent.*outside/,
     );
     runtimeWorkspaces.delete("ordinary-native-agent");
-    assert.equal(state.agents.length, savedCount);
+    assert.equal(store.read().agents.length, savedCount);
     assert.equal(agentCreations.length, createdCount);
     const prepareLegacy = (name: string) =>
       invoke(
@@ -279,11 +307,11 @@ test("supervisors require independent placement, workers keep caller defaults, a
     const legacyDefault = await prepareLegacy("legacy-default");
     assert.equal(legacyDefault.agent.projectId, undefined);
     runtimeWorkspaces.set(legacyDefault.agentId, "supervisor-workspace");
-    await invoke(bindPreparedAgentRpc.name, {
+    const bound = (await invoke(bindPreparedAgentRpc.name, {
       agentId: legacyDefault.agentId,
       workspaceId: "supervisor-workspace",
-    });
-    assert.equal(legacyDefault.agent.projectId, "project");
+    })) as AgentRecord;
+    assert.equal(bound.projectId, "project");
     const legacyOverride = await prepareLegacy("legacy-override");
     runtimeWorkspaces.set(legacyOverride.agentId, "supervisor-workspace");
     const source = join(home, "agreement");
@@ -316,8 +344,11 @@ test("supervisors require independent placement, workers keep caller defaults, a
         }),
       /Prepare this agent with the selected project before binding its PWA directory/,
     );
-    assert.equal(legacyOverride.agent.workspaceId, null);
-    assert.equal(legacyOverride.agent.projectId, undefined);
+    const unbound = store
+      .read()
+      .agents.find((agent) => agent.paseoAgentId === legacyOverride.agentId);
+    assert.equal(unbound?.workspaceId, null);
+    assert.equal(unbound?.projectId, undefined);
     assert.equal(legacyOverride.systemPrompt, legacyPrompt);
 
     await assert.rejects(
@@ -344,8 +375,8 @@ test("supervisors require independent placement, workers keep caller defaults, a
       "---\nversion: 1\nproject: Override\nstatuses: [completed, review]\n---\nFresh project.\n",
     );
     assert.deepEqual(await readStatuses(), ["completed", "review"]);
-    assert.equal("statuses" in state, false);
-    assert.deepEqual(await invoke(boardReadRpc.name, {}), state);
+    assert.equal("statuses" in store.read(), false);
+    assert.deepEqual(await invoke(boardReadRpc.name, {}), store.read());
     const prepare = (name: string) =>
       invoke(
         prepareAgentRpc.name,
@@ -367,10 +398,10 @@ test("supervisors require independent placement, workers keep caller defaults, a
     assert.match(second.systemPrompt, /Second role/);
     assert.doesNotMatch(first.systemPrompt, /Second role/);
     assert.doesNotMatch(prompts[1], /Fresh project/);
-    const count = state.agents.length;
+    const count = store.read().agents.length;
     writeFileSync(join(source, "roles", "researcher.md"), "invalid");
     await assert.rejects(async () => prepare("invalid-preparation"), /YAML frontmatter/);
-    assert.equal(state.agents.length, count);
+    assert.equal(store.read().agents.length, count);
     runtimeWorkspaces.set(first.agentId, "other-workspace");
     await assert.rejects(
       async () =>
@@ -380,13 +411,14 @@ test("supervisors require independent placement, workers keep caller defaults, a
         }),
       /selected project/,
     );
-    assert.equal(first.agent.workspaceId, null);
+    const stored = () => store.read().agents.find((agent) => agent.paseoAgentId === first.agentId);
+    assert.equal(stored()?.workspaceId, null);
     runtimeWorkspaces.set(first.agentId, "supervisor-workspace");
     await invoke(bindPreparedAgentRpc.name, {
       agentId: first.agentId,
       workspaceId: "supervisor-workspace",
     });
-    assert.equal(first.agent.workspaceId, "supervisor-workspace");
+    assert.equal(stored()?.workspaceId, "supervisor-workspace");
     const initialSends = sends.length;
     await notifyManager(
       { id: worker.paseoAgentId },
@@ -430,17 +462,22 @@ test("supervisors require independent placement, workers keep caller defaults, a
         ),
       /Unknown active Swarm recipient/,
     );
-    state.tasks.push({
-      id: "survey",
-      title: "Survey",
-      brief: "Survey",
-      status: "survey",
-      managerName: "planner.supervisor",
-      workerNames: [],
-      createdBy: "planner",
-      data: {},
-      createdAt: planner.createdAt,
-      updatedAt: planner.updatedAt,
+    await seed({
+      ...emptyState(),
+      tasks: [
+        {
+          id: "survey",
+          title: "Survey",
+          brief: "Survey",
+          status: "survey",
+          managerName: "planner.supervisor",
+          workerNames: [],
+          createdBy: "planner",
+          data: {},
+          createdAt: planner.createdAt,
+          updatedAt: planner.updatedAt,
+        },
+      ],
     });
     await assert.rejects(
       async () =>
@@ -570,9 +607,7 @@ test("turn notifications use current-turn text without falling back to history",
     },
   ];
   try {
-    await store.update((state) =>
-      Object.assign(state, { ...emptyState(), agents: [manager, worker] }),
-    );
+    await seed({ ...emptyState(), agents: [manager, worker] });
     contribute(server as PluginServerContext);
     assert.deepEqual([...hooks.keys()], ["agent.turn_ended"]);
     for (const scenario of cases) {
@@ -676,7 +711,7 @@ test("human Activity stays saved when notification fails; storage failure still 
       context,
     );
   try {
-    await store.update((state) => Object.assign(state, seeded));
+    await seed(seeded);
     const saved = appendHumanActivityRpc.output.parse(await invoke());
     assert.equal(saved.notificationWarning, "Manager is offline");
     assert.equal(sends, 1);
@@ -684,19 +719,22 @@ test("human Activity stays saved when notification fails; storage failure still 
     assert.equal(persisted.activities.length, 1);
     assert.equal(persisted.activities[0].id, saved.id);
     assert.equal("notificationWarning" in persisted.activities[0], false);
-    await store.update((state) => {
-      state.agents = [];
-    });
+    await store.commit((state) =>
+      state.agents.map((agent) => ({ op: "delete", collection: "agents", key: agent.id })),
+    );
     const missing = appendHumanActivityRpc.output.parse(await invoke());
     assert.match(missing.notificationWarning!, /Unknown active agent/);
     assert.equal(new StateStore().read().activities.length, 2);
-    const diskBefore = readFileSync(getStatePath(), "utf8");
-    const blocked = join(home, "not-a-directory");
-    writeFileSync(blocked, "file");
-    process.env.PASEO_HOME = blocked;
-    await assert.rejects(async () => invoke(), /ENOTDIR/);
-    process.env.PASEO_HOME = home;
-    assert.equal(readFileSync(getStatePath(), "utf8"), diskBefore);
+    const diskBefore = readDisk();
+    // A directory where the log should be makes the append fail on every platform.
+    const log = getEventLogPath();
+    renameSync(log, `${log}.aside`);
+    mkdirSync(log);
+    await assert.rejects(async () => invoke());
+    rmSync(log, { recursive: true });
+    renameSync(`${log}.aside`, log);
+    assert.equal(store.read().activities.length, 2);
+    assert.equal(readDisk(), diskBefore);
     assert.equal(sends, 1);
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
@@ -734,7 +772,7 @@ test("plain board reads bypass absent or corrupt sources; project reads resolve 
   const invoke = (projectId?: string) =>
     handlers.get(boardReadRpc.name)!({ projectId } as never, context);
   try {
-    await store.update((state) => Object.assign(state, emptyState()));
+    await seed(emptyState());
     const original = store.read();
     assert.deepEqual(await invoke(), original);
     assert.deepEqual(boardReadRpc.output.parse(await invoke("project")).statuses, []);
@@ -742,6 +780,7 @@ test("plain board reads bypass absent or corrupt sources; project reads resolve 
     process.env.PASEO_SWARM_PWA_ROOT = join(home, "missing");
     assert.deepEqual(await invoke(), original);
     await assert.rejects(async () => invoke("project"), /ENOENT/);
+    mkdirSync(dirname(getConfigPath()), { recursive: true });
     writeFileSync(getConfigPath(), "corrupt config");
     assert.deepEqual(await invoke(), original);
     await assert.rejects(async () => invoke("project"), SyntaxError);
@@ -810,8 +849,8 @@ test("roster reads filter native availability without releasing historical names
   const invoke = (rpc: typeof boardReadRpc | typeof createAgentRpc, input: unknown) =>
     handlers.get(rpc.name)!(rpc.input.parse(input) as never, context);
   try {
-    await store.update((state) => Object.assign(state, { ...emptyState(), agents: [agent] }));
-    const before = readFileSync(getStatePath(), "utf8");
+    await seed({ ...emptyState(), agents: [agent] });
+    const before = readDisk();
     assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, []);
     assert.deepEqual(cursors, [undefined, "next"]);
     await assert.rejects(
@@ -829,7 +868,7 @@ test("roster reads filter native availability without releasing historical names
     assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, []);
     fail = true;
     await assert.rejects(async () => invoke(boardReadRpc, {}), /daemon unavailable/);
-    assert.equal(readFileSync(getStatePath(), "utf8"), before);
+    assert.equal(readDisk(), before);
     assert.deepEqual(store.read().agents, [agent]);
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
@@ -894,14 +933,14 @@ test("manager can replace a Task worker roster with creation-time validation", a
   const invoke = (name: string, input: unknown) =>
     handlers.get(name)!(input as never, {} as PluginHandlerContext);
   try {
-    await store.update((state) => {
-      Object.assign(state, emptyState());
-      state.agents.push(
+    await seed({
+      ...emptyState(),
+      agents: [
         planner,
         manager,
         worker("first", "first-record"),
         worker("second", "second-record"),
-      );
+      ],
     });
     const created = createTaskRpc.output.parse(
       await invoke(

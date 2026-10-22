@@ -107,6 +107,14 @@ the checkout source, while packaged reloads recompile the shipped entry. Changes
 raw Swarm server modules require rebuilding that packaged entry before reload. The embedded
 PWA directory is content only and does not configure a runtime source.
 
+Swarm keeps its roster, Tasks, and Activities under `$PASEO_HOME/plugin-data/paseo-swarm/` as
+`snapshot.json` plus an append-only `events.jsonl` of record-level changes (`server/state.ts`).
+A commit is one fsynced line, and the log folds into the snapshot on load and every 500
+commits. A pre-log `state.json` is imported once and renamed to `state.json.imported`. An
+unreadable snapshot, log line, or legacy file stops every Swarm read and write with an error
+naming the file until it is repaired or moved aside; nothing is written meanwhile. Only an unterminated final
+log line, left by a crash mid-append, is dropped automatically.
+
 Swarm planners must prepare a separate workspace and pass its `workspaceId` when creating
 a supervisor. This keeps supervisor execution out of the planner's workspace; omitting placement
 does not bypass the separation. Supervisor-created workers still default to the supervisor's
