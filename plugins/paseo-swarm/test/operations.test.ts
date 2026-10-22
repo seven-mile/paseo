@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
@@ -726,11 +726,14 @@ test("human Activity stays saved when notification fails; storage failure still 
     assert.match(missing.notificationWarning!, /Unknown active agent/);
     assert.equal(new StateStore().read().activities.length, 2);
     const diskBefore = readDisk();
-    const blocked = join(home, "not-a-directory");
-    writeFileSync(blocked, "file");
-    process.env.PASEO_HOME = blocked;
-    await assert.rejects(async () => invoke(), /ENOTDIR/);
-    process.env.PASEO_HOME = home;
+    // A directory where the log should be makes the append fail on every platform.
+    const log = getEventLogPath();
+    renameSync(log, `${log}.aside`);
+    mkdirSync(log);
+    await assert.rejects(async () => invoke());
+    assert.equal(store.read().activities.length, 2);
+    rmSync(log, { recursive: true });
+    renameSync(`${log}.aside`, log);
     assert.equal(readDisk(), diskBefore);
     assert.equal(sends, 1);
   } finally {
