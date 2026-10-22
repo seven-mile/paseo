@@ -77,6 +77,8 @@ export const mailboxMessageSchema = z.object({
   deliveredToPaseoAgentId: z.string().nullable(),
   consumedAt: z.string().nullable(),
   failedAt: z.string().nullable(),
+  // Turn rows delivered together as one digest share this id, which is also the daemon messageId.
+  batchId: z.string().optional(),
 });
 export type MailboxMessage = z.infer<typeof mailboxMessageSchema>;
 

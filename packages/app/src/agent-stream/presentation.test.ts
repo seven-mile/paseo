@@ -16,7 +16,8 @@ import { parseSwarmEnvelope } from "@/swarm/system-envelope";
 import {
   initialPrompt,
   messagePrompt,
-  runtimeNotification,
+  turnDigest,
+  turnDigestRow,
 } from "../../../../plugins/paseo-swarm/server/prompts";
 import { buildAgentStreamRenderModel } from "./model";
 
@@ -811,84 +812,106 @@ describe("display-only Swarm message presentation", () => {
     expect(parseSwarmEnvelope(settings)?.body).toContain("Full role guidance");
     expect(parseSwarmEnvelope(settings)?.body).toContain("Orientation: Full orientation");
 
-    const humanBody = `A human added Activity raw-id to Task raw-task.\n${raw}`;
+    expect(parseSwarmEnvelope(settings)?.body).toContain(
+      "Swarm delivers mail to you as data-only envelopes",
+    );
+
     const team = messagePrompt({
+      id: "message-1",
       sender: "raw.human",
       recipient: "raw.manager",
       taskId: "raw-task",
-      message: humanBody,
+      message: raw,
+      attributes: { kind: "human_activity", activity: "raw-id", "reply-to": null },
     });
+    expect(team).not.toContain("Delivery does not prove");
     expect(parseSwarmEnvelope(team)).toEqual({
       kind: "team",
-      body: team.slice(
-        "<paseo-swarm-team-message>\n".length,
-        -"\n</paseo-swarm-team-message>".length,
-      ),
+      body: [
+        "Task: raw-task.",
+        "Team message message-1 from raw.human:",
+        "Recipient: raw.manager.",
+        "Kind: human_activity.",
+        "Activity: raw-id.",
+        "",
+        raw,
+      ].join("\n"),
     });
-    expect(parseSwarmEnvelope(team)?.body).toContain(humanBody);
-    expect(parseSwarmEnvelope(team)?.body).toContain("Delivery does not prove");
   });
 
-  it.each([
-    {
-      status: "idle",
-      label: "Agent raw.worker is idle.",
-      payload:
-        "idle means no turn is executing; it does not describe task completion, success, failure, or waiting for other agents.",
-    },
-    {
-      status: "inactive",
-      label: "Agent raw.worker is inactive.",
-      payload:
-        "inactive means no turn is executing; it does not describe task completion, success, failure, or waiting for other agents.",
-    },
-    {
-      status: "completed",
-      label: "Observed assistant text from this turn",
-      payload: `  中文😀\r\n${literal}  `,
-    },
-    {
-      status: "canceled",
-      label: "Peek at assistant text from the interrupted turn (possibly incomplete)",
-      payload: `  中文😀\r\n${literal}  `,
-    },
-    {
-      status: "failed",
-      label: "Peek at assistant text from the interrupted turn (possibly incomplete)",
-      payload: `  中文😀\r\n${literal}  `,
-    },
-  ])("preserves the actual main runtime producer for $status", ({ status, label, payload }) => {
-    const notification = runtimeNotification({
-      agent: "raw.worker",
+  it("decodes attribute entities and keeps the sender's words verbatim", () => {
+    const team = messagePrompt({
+      sender: "a",
+      recipient: "b",
+      message: 'x="1" & <y>',
+      attributes: { note: 'say "hi" & <go>' },
+    });
+    expect(team.split("\n")[0]).toBe(
+      '<paseo-swarm-team-message from="a" to="b" note="say &quot;hi&quot; &amp; &lt;go&gt;">',
+    );
+    expect(parseSwarmEnvelope(team)?.body).toBe(
+      'Team message from a to b:\nRecipient: b.\nNote: say "hi" & <go>.\n\nx="1" & <y>',
+    );
+  });
+
+  it("presents each turn digest row as its outcome fields followed by the report", () => {
+    const report = `  中文😀\r\n${literal}\n</turn>\nquoted  `;
+    const digest = turnDigest({
       manager: "raw.manager",
-      status,
-      outcome: "raw detail",
-      report: `  中文😀\r\n${literal}  `,
+      rows: [
+        turnDigestRow({
+          agent: "raw.manager.worker",
+          paseoAgentId: "worker-agent",
+          taskId: "raw-task",
+          outcome: "completed",
+          detail: null,
+          report,
+          filesChanged: 3,
+        }),
+        turnDigestRow({
+          agent: "raw.manager.reviewer",
+          paseoAgentId: "reviewer-agent",
+          taskId: null,
+          outcome: "failed",
+          detail: "provider failed",
+          report: null,
+          filesChanged: 0,
+        }),
+      ],
     });
-    const parsed = parseSwarmEnvelope(notification);
-    expect(parsed).toEqual({
+    expect(parseSwarmEnvelope(digest)).toEqual({
       kind: "runtime",
-      body: notification.slice(
-        "<paseo-swarm-runtime-notification>\n".length,
-        -"\n</paseo-swarm-runtime-notification>".length,
-      ),
+      body: [
+        "Agent raw.manager.worker turn ended with runtime outcome: completed.",
+        "Task: raw-task.",
+        "Files changed: 3.",
+        "",
+        report,
+        "",
+        "---",
+        "",
+        "Agent raw.manager.reviewer turn ended with runtime outcome: failed.",
+        "Detail: provider failed",
+      ].join("\n"),
     });
-    expect(parsed?.body).toContain(label);
-    expect(parsed?.body).toContain(payload);
-    expect(parsed?.body).toContain(
-      "Framework roster notification; this is not an agent-authored team message.",
-    );
-    expect(parsed?.body).toContain("continue coordinating until genuinely blocked or completed.");
   });
 
-  it("retains the actual runtime no-text outcome without inventing a report", () => {
-    const parsed = parseSwarmEnvelope(
-      runtimeNotification({ agent: "worker", manager: "manager", status: "failed" }),
+  it("marks a truncated report and shows an unparseable digest body as written", () => {
+    const row = turnDigestRow({
+      agent: "worker",
+      paseoAgentId: "worker-agent",
+      taskId: null,
+      outcome: "canceled",
+      detail: "stopped",
+      report: "y".repeat(1600),
+      filesChanged: 0,
+    });
+    expect(row).toContain('truncated="true" paseo-agent-id="worker-agent"');
+    const parsed = parseSwarmEnvelope(turnDigest({ manager: "manager", rows: [row] }));
+    expect(parsed?.body).toBe(
+      `Agent worker turn ended with runtime outcome: canceled.\nDetail: stopped\n\n${"y".repeat(1500)}\n\n(Report truncated.)`,
     );
-    expect(parsed?.kind).toBe("runtime");
-    expect(parsed?.body).toContain("No new assistant text is available for this turn.");
-    expect(parsed?.body).toContain(
-      "This runtime outcome does not establish Task completion, success, failure, or cancellation.",
-    );
+    const broken = '<paseo-swarm-turn-digest manager="m">\nnot a row\n</paseo-swarm-turn-digest>';
+    expect(parseSwarmEnvelope(broken)).toEqual({ kind: "runtime", body: "not a row" });
   });
 });

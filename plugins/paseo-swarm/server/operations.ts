@@ -3,7 +3,8 @@ import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { listPwaRoles, readPwa } from "./pwa";
-import { initialPrompt, messagePrompt, messageReceipt, runtimeNotification } from "./prompts";
+import { initialPrompt, messagePrompt, messageReceipt, turnDigestRow } from "./prompts";
+import type { TurnSummary } from "./turns";
 import { flushMailbox, sendThroughMailbox } from "./mailbox";
 import { store } from "./state";
 import { readPwaSource, requirePwaSource, writePwaSource } from "./source";
@@ -644,16 +645,15 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
               id: messageId,
               sender: input.actorName,
               recipient: agentQualifiedName(manager),
-              message: [
-                `A human added Activity ${activity.id} to Task ${task.id}.`,
-                `Kind: ${activity.kind}.`,
-                activity.replyTo ? `Reply to: ${activity.replyTo}.` : "",
-                activity.responseProfile ? `Response profile: ${activity.responseProfile}.` : "",
-                activity.body,
-              ]
-                .filter(Boolean)
-                .join("\n"),
+              message: activity.body,
               taskId: task.id,
+              attributes: {
+                kind: "human_activity",
+                activity: activity.id,
+                "activity-kind": activity.kind,
+                "reply-to": activity.replyTo,
+                "response-profile": activity.responseProfile,
+              },
             }),
         },
         context,
@@ -772,30 +772,38 @@ function makeActivity(
   };
 }
 
+// The Task a child was last working on: the Task of the last Task-scoped message it received.
+function lastAssignedTask(agent: AgentRecord): string | null {
+  const messages = store.read().messages;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.recipientAgentId === agent.id && message.taskId) return message.taskId;
+  }
+  return null;
+}
+
 export async function notifyManager(
   agent: { id: string },
-  status: "completed" | "canceled" | "failed",
-  outcome: string,
-  report: string | undefined,
+  turn: TurnSummary,
   context: PluginHandlerContext,
 ): Promise<void> {
   const managed = store.read().agents.find((candidate) => candidate.paseoAgentId === agent.id);
   if (!managed?.reportsTo) return;
   const manager = findAgent(managed.reportsTo);
+  const taskId = lastAssignedTask(managed);
   await sendThroughMailbox(
     {
       recipientAgentId: manager.id,
       recipientName: agentQualifiedName(manager),
       senderName: agentQualifiedName(managed),
-      taskId: null,
+      taskId,
       kind: "runtime",
       render: () =>
-        runtimeNotification({
-          agent: managed.name,
-          manager: manager.name,
-          status,
-          outcome,
-          report,
+        turnDigestRow({
+          agent: agentQualifiedName(managed),
+          paseoAgentId: managed.paseoAgentId,
+          taskId,
+          ...turn,
         }),
     },
     context,

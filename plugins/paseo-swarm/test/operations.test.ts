@@ -10,6 +10,7 @@ import type {
   PluginServerContext,
 } from "@getpaseo/plugin/server";
 import contribute from "../index.server";
+import { forgetRunningTurns } from "../server/mailbox";
 import { notifyManager, registerOperations } from "../server/operations";
 import {
   getConfigPath,
@@ -426,9 +427,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
     const initialSends = sends.length;
     await notifyManager(
       { id: worker.paseoAgentId },
-      "completed",
-      "turn completed",
-      "Findings",
+      { outcome: "completed", detail: null, report: "Findings", filesChanged: 0 },
       context,
     );
     await invoke(
@@ -514,7 +513,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
         activeTurnBehavior: "steer",
         messageId: (delivery.options as { messageId: string }).messageId,
       });
-      assert.match((delivery.options as { messageId: string }).messageId, /^message-/);
+      assert.match((delivery.options as { messageId: string }).messageId, /^(message|digest)-/);
     }
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
@@ -617,10 +616,12 @@ test("turn notifications use current-turn text without falling back to history",
   try {
     await seed({ ...emptyState(), agents: [manager, worker] });
     contribute(server as PluginServerContext);
-    assert.deepEqual([...hooks.keys()], ["agent.turn_ended"]);
+    assert.deepEqual([...hooks.keys()], ["agent.turn_started", "agent.turn_ended"]);
     for (const scenario of cases) {
       await t.test(scenario.name, async () => {
         sends.length = 0;
+        // Each scenario finds the manager idle, so its row is not held for a digest.
+        forgetRunningTurns();
         const event: PluginLifecycleEvents["agent.turn_ended"] = {
           agent: {
             id: worker.paseoAgentId,
