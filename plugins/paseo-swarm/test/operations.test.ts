@@ -731,9 +731,9 @@ test("human Activity stays saved when notification fails; storage failure still 
     renameSync(log, `${log}.aside`);
     mkdirSync(log);
     await assert.rejects(async () => invoke());
-    assert.equal(store.read().activities.length, 2);
     rmSync(log, { recursive: true });
     renameSync(`${log}.aside`, log);
+    assert.equal(store.read().activities.length, 2);
     assert.equal(readDisk(), diskBefore);
     assert.equal(sends, 1);
   } finally {
