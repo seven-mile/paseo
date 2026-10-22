@@ -57,11 +57,13 @@ function boardOf({
   messages: _messages,
   swarms: _swarms,
   intents: _intents,
+  approvals: _approvals,
   ...board
 }: Readonly<SwarmState>) {
   return {
     ...board,
     agents: board.agents.filter((agent) => agent.paseoAgentId !== null).map(seatView),
+    inbox: [],
   };
 }
 
@@ -601,10 +603,13 @@ test("turn notifications use current-turn text without falling back to history",
     reportsTo: "manager",
   };
   const hooks = new Map<string, (event: never, context: PluginHookContext) => unknown>();
-  const server: Pick<PluginServerContext, "handle" | "on"> = {
+  const server: Pick<PluginServerContext, "handle" | "on" | "before"> = {
     handle() {},
     on(name, handler) {
       hooks.set(name, handler);
+      return () => {};
+    },
+    before() {
       return () => {};
     },
   };
@@ -661,10 +666,14 @@ test("turn notifications use current-turn text without falling back to history",
       event: { turnId: null, outcome: { kind: "failed", error: { message: "provider failed" } } },
     },
   ];
+  let cleanup: ReturnType<typeof contribute> | undefined;
   try {
     await seed({ ...emptyState(), agents: [manager, worker] });
-    contribute(server as PluginServerContext);
-    assert.deepEqual([...hooks.keys()], ["agent.turn_started", "agent.turn_ended"]);
+    cleanup = contribute(server as PluginServerContext);
+    assert.deepEqual(
+      [...hooks.keys()],
+      ["agent.permission_resolved", "agent.turn_started", "agent.turn_ended"],
+    );
     for (const scenario of cases) {
       await t.test(scenario.name, async () => {
         sends.length = 0;
@@ -707,6 +716,7 @@ test("turn notifications use current-turn text without falling back to history",
       });
     }
   } finally {
+    await cleanup?.();
     if (previousHome === undefined) delete process.env.PASEO_HOME;
     else process.env.PASEO_HOME = previousHome;
     rmSync(home, { recursive: true, force: true });

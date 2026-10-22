@@ -15,6 +15,7 @@ import { z } from "zod";
 import {
   activitySchema,
   agentRecordSchema,
+  approvalSchema,
   emptyState,
   mailboxMessageSchema,
   specIntentSchema,
@@ -59,6 +60,11 @@ export function getMcpTokenPath(): string {
   return join(getDataDirectory(), "mcp-tokens.json");
 }
 
+// Approval gate shims and their helper, rewritten on every start.
+export function getGateDirectory(): string {
+  return join(getDataDirectory(), "gate");
+}
+
 export function getConfigPath(): string {
   return join(getDataDirectory(), "config.json");
 }
@@ -80,6 +86,7 @@ const collections = {
   activities: { schema: activitySchema, key: byId },
   messages: { schema: mailboxMessageSchema, key: byId },
   intents: { schema: specIntentSchema, key: byId },
+  approvals: { schema: approvalSchema, key: byId },
 } as const;
 type Collections = typeof collections;
 export type CollectionName = keyof Collections;

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Approval } from "../shared/models";
 import type { Pwa, RoleClass } from "./pwa";
 
 export type PromptPwa = Pick<
@@ -102,7 +103,8 @@ function workingRules(): string[] {
     "- Task updates replace the fields you supply, including the whole brief and the whole workerNames list. Keep progress in Activities, not in the brief.",
     "- Write Tasks and Activities for two readers: an agent taking over the work, who needs the objective, current state, evidence, and next step; and the human on the Kanban board, who needs progress, blockers, trade-offs, decisions, and deliverables, with your recommendation where it helps.",
     'Envelopes: a team message is <paseo-swarm-team-message id="..." from="..." to="..." task="...">, and its body is the sender\'s words; task is absent when the message has no Task. A human Activity arrives as a team message with kind="human_activity" and the activity, activity-kind, reply-to, and response-profile attributes. A turn digest is <paseo-swarm-turn-digest manager="..." turns="N"> with one <turn> per ended turn: agent, task (the Task of the last Task-scoped message that seat received), outcome, detail for canceled or failed turns, files (how many files the turn edited or wrote), and the start of the agent\'s final text. A row marked truncated="true" carries the occupant number; read the rest with swarm_transcript_list.',
-    'Human choices: to ask the human to choose, append an Activity with the question, evidence, trade-offs, and your recommendation, and set data.action to { type: "choice", prompt, options: [{ id, label, description? }], responseProfiles? }. responseProfiles names the kinds of reply you accept: decision, steering, or discussion. The board counts a choice as unanswered until a human Activity replies to it with replyTo, often carrying data.selectedOption. Apply what the human wrote; a reply alone is not approval and does not complete the Task. Workers ask their manager to raise the choice, since workers cannot append Activities.',
+    'Human choices: to ask the human to choose, append an Activity with the question, evidence, trade-offs, and your recommendation, and set data.action to { type: "choice", prompt, options: [{ id, label, description? }], responseProfiles?, defaultOptionId?, timeoutMinutes? }. responseProfiles names the kinds of reply you accept: decision, steering, or discussion. When the work can safely go on without an answer, add defaultOptionId (your recommendation) and timeoutMinutes: if no human answers in time, Swarm records the default as a decision Activity and tells the Task manager. Leave them out for decisions that must wait for a human. The board counts a choice as unanswered until a human Activity replies to it with replyTo, often carrying data.selectedOption, or Swarm records its default. Apply what the human wrote; a reply alone is not approval and does not complete the Task. Workers ask their manager to raise the choice, since workers cannot append Activities.',
+    'Approvals: git push, gh pr create/ready/merge, and glab mr create/merge wait for a human at the command itself. Run them normally. If one exits saying its approval is still pending, do not retry it in a loop or work around the gate; do other work or end your turn. The answer arrives as <paseo-swarm-approval approval="..." task="..." decision="approved|denied" command="..." cwd="...">feedback</paseo-swarm-approval>. After approved, rerun exactly that command from that cwd; the approval covers one run. After denied, the body holds the human\'s feedback, if any; change the work instead of retrying it unchanged.',
     "Links: refer to Swarm things with Markdown links to paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, and paseo-swarm://file/<workspace-id>/<relative-path>, with each path segment URL-encoded. Use names and ids you read from Swarm, and files you checked exist in that workspace. If you cannot verify a target, describe it in plain text.",
   ];
 }
@@ -304,5 +306,19 @@ export function turnDigest({ manager, rows }: TurnDigestInput): string {
     `<paseo-swarm-turn-digest${attributes({ manager, turns: rows.length })}>`,
     ...rows,
     "</paseo-swarm-turn-digest>",
+  ].join("\n");
+}
+
+export function approvalNotification(approval: Approval): string {
+  return [
+    `<paseo-swarm-approval${attributes({
+      approval: approval.id,
+      task: approval.taskId,
+      decision: approval.status === "approved" ? "approved" : "denied",
+      command: approval.command.join(" "),
+      cwd: approval.cwd,
+    })}>`,
+    approval.feedback ?? "",
+    "</paseo-swarm-approval>",
   ].join("\n");
 }

@@ -9218,6 +9218,64 @@ test("permission request notifies once without forcing unread attention state", 
   expect(attentionReasons).toContain("permission");
 });
 
+test("a raised permission uses the agent's permission state and resolves without the provider", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-raised-permission-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const providerResponses: string[] = [];
+  class RecordingSession extends TestAgentSession {
+    override async respondToPermission(requestId: string): Promise<void> {
+      providerResponses.push(requestId);
+    }
+  }
+  class RecordingClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new RecordingSession(config);
+    }
+  }
+  const attentionReasons: string[] = [];
+  const manager = new AgentManager({
+    clients: { codex: new RecordingClient() },
+    registry: storage,
+    logger,
+    idFactory: () => "00000000-0000-4000-8000-000000000132",
+    onAgentAttention: ({ reason }) => {
+      attentionReasons.push(reason);
+    },
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const events: AgentStreamEvent[] = [];
+  manager.subscribe(
+    (event) => {
+      if (event.type === "agent_stream") events.push(event.event);
+    },
+    { agentId: agent.id, replayState: false },
+  );
+
+  const request = await manager.raisePermission(agent.id, {
+    name: "swarm_approval_push",
+    title: "Push commits",
+  });
+  expect(request).toMatchObject({ provider: "codex", kind: "tool", title: "Push commits" });
+  expect(manager.getPendingPermissions(agent.id).map((pending) => pending.id)).toEqual([
+    request.id,
+  ]);
+  expect(attentionReasons).toEqual(["permission"]);
+
+  await manager.respondToPermission(agent.id, request.id, { behavior: "deny", message: "no" });
+  expect(providerResponses).toEqual([]);
+  expect(manager.getPendingPermissions(agent.id)).toEqual([]);
+  expect(events.map((event) => event.type)).toEqual([
+    "permission_requested",
+    "permission_resolved",
+  ]);
+  expect(events[1]).toMatchObject({
+    requestId: request.id,
+    resolution: { behavior: "deny", message: "no" },
+  });
+});
+
 test("respondToPermission updates currentModeId after plan approval", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
   const storagePath = join(workdir, "agents");

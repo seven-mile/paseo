@@ -2146,6 +2146,32 @@ export const AgentPermissionResponseMessageSchema = z.object({
   response: AgentPermissionResponseSchema,
 });
 
+// A daemon-side caller, such as a plugin gating a shell command, asks the human on the agent's
+// behalf. The request renders and resolves like a provider permission; the provider never sees it.
+export const AgentPermissionRaiseRequestSchema = z.object({
+  type: z.literal("agent.permission.raise.request"),
+  agentId: z.string(),
+  permission: z.object({
+    name: z.string(),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    input: z.record(z.string(), z.unknown()).optional(),
+    actions: z.array(AgentPermissionActionSchema).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  }),
+  requestId: z.string(),
+});
+
+export const AgentPermissionRaiseResponseSchema = z.object({
+  type: z.literal("agent.permission.raise.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    permissionId: z.string().nullable(),
+    error: z.string().nullable(),
+  }),
+});
+
 const CheckoutErrorCodeSchema = z.enum([
   "NOT_GIT_REPO",
   "NOT_ALLOWED",
@@ -3196,6 +3222,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ProjectRemoveRequestSchema,
   WorkspaceTitleSetRequestSchema,
   WorkspacePinSetRequestSchema,
+  AgentPermissionRaiseRequestSchema,
   WorkspaceLabelListRequestSchema,
   WorkspaceLabelAssignmentSetRequestSchema,
   WorkspaceLabelUpdateRequestSchema,
@@ -6919,6 +6946,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ProjectRemoveResponseSchema,
   WorkspaceTitleSetResponseSchema,
   WorkspacePinSetResponseSchema,
+  AgentPermissionRaiseResponseSchema,
   WorkspaceRecoveryInspectResponseSchema,
   WorkspaceRecoveryRestoreResponseSchema,
   WaitForFinishResponseMessageSchema,
@@ -7283,6 +7311,8 @@ export type SetAgentFeatureRequestMessage = z.infer<typeof SetAgentFeatureReques
 export type AgentConfigApplyRequestMessage = z.infer<typeof AgentConfigApplyRequestMessageSchema>;
 export type AgentDetachRequestMessage = z.infer<typeof AgentDetachRequestMessageSchema>;
 export type AgentPermissionResponseMessage = z.infer<typeof AgentPermissionResponseMessageSchema>;
+export type AgentPermissionRaiseRequest = z.infer<typeof AgentPermissionRaiseRequestSchema>;
+export type AgentPermissionRaiseResponse = z.infer<typeof AgentPermissionRaiseResponseSchema>;
 export type CheckoutStatusRequest = z.infer<typeof CheckoutStatusRequestSchema>;
 export type CheckoutStatusResponse = z.infer<typeof CheckoutStatusResponseSchema>;
 export type CheckoutStatusUpdate = z.infer<typeof CheckoutStatusUpdateSchema>;

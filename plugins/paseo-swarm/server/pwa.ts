@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
+import { approvalActionSchema, type ApprovalAction } from "../shared/models";
 
 // A PWA as files, keyed by path within its directory: PWA.md and roles/<role>.md. Swarm reads a
 // directory into this once, when it accepts it, and parses prompts from the accepted copy.
@@ -21,6 +22,8 @@ export interface Pwa {
   projectBody: string;
   roleBody: string;
   statuses: string[];
+  // Actions held for human approval. Every action is gated unless PWA.md lists a narrower set.
+  approvals: ApprovalAction[];
   revision: string;
 }
 
@@ -130,6 +133,14 @@ export function readPwa(files: PwaFiles, role: string): Pwa {
     throw new Error("PWA.md frontmatter field statuses must be an array of strings");
   }
 
+  const approvals = pwa.approvals === undefined ? approvalActionSchema.options : pwa.approvals;
+  const parsedApprovals = approvalActionSchema.array().safeParse(approvals);
+  if (!parsedApprovals.success) {
+    throw new Error(
+      `PWA.md frontmatter field approvals must list actions from: ${approvalActionSchema.options.join(", ")}`,
+    );
+  }
+
   const revision = createHash("sha256")
     .update(pwaSource)
     .update("\0")
@@ -143,6 +154,7 @@ export function readPwa(files: PwaFiles, role: string): Pwa {
     projectBody: pwaDocument.body,
     roleBody: roleDocument.body,
     statuses: [...statuses],
+    approvals: parsedApprovals.data,
     revision,
   };
 }

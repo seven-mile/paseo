@@ -39,6 +39,9 @@ import {
   resolveConflict,
   withSwarmLock,
 } from "./spec";
+import { approvals } from "./approvals";
+import { buildInbox, normalizeChoiceAction, type LiveAgent } from "./inbox";
+import { attachPaseo } from "./runtime";
 import {
   appendActivityRpc,
   appendHumanActivityRpc,
@@ -61,6 +64,8 @@ import {
   seatResetRpc,
   seatRetireRpc,
   seatUpdateRpc,
+  approvalResolveRpc,
+  permissionRespondRpc,
 } from "../shared/swarm";
 import type { AgentConfig, AgentRecord, SwarmRecord, SwarmState, Task } from "../shared/models";
 import { agentQualifiedName, currentOccupant, mailboxMessageStatus } from "../shared/models";
@@ -79,7 +84,7 @@ function swarmSummary(swarm: SwarmRecord) {
 }
 
 async function availableAgents(context: PluginHandlerContext) {
-  const agents: Array<{ id: string; workspaceId?: string }> = [];
+  const agents: LiveAgent[] = [];
   let cursor: string | undefined;
   do {
     const page = await context.paseo.agents.list({
@@ -353,7 +358,14 @@ async function namedWorkspace(
 export function registerOperations(server: Pick<PluginServerContext, "handle">): void {
   // The board of one swarm, or of every swarm when the request names none, as before swarms.
   server.handle(boardReadRpc, async ({ projectId, swarmId, includeReserved }, context) => {
+    attachPaseo(context.paseo);
     if (projectId) await projectRoot(projectId, context);
+    // Seats show whatever their agents' state. Without the agent list, the inbox only lacks
+    // the provider permissions and errors it reads from there.
+    const live = await availableAgents(context).catch((error: unknown) => {
+      console.warn("[paseo-swarm] Could not list agents for the inbox:", error);
+      return [];
+    });
     const saved = store.read();
     const swarms = saved.swarms.filter(
       (swarm) =>
@@ -370,6 +382,16 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         .map(seatView),
       tasks: scoped(saved.tasks),
       activities: scoped(saved.activities),
+      inbox: buildInbox(
+        {
+          ...saved,
+          agents: scoped(saved.agents),
+          tasks: scoped(saved.tasks),
+          activities: scoped(saved.activities),
+          approvals: scoped(saved.approvals),
+        },
+        live,
+      ),
     };
     if (!projectId && !swarmId) return board;
     if (swarms.length !== 1) return { ...board, statuses: [] };
@@ -632,11 +654,13 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     if (currentTask.managerName !== actorReference && actor.roleClass !== "planner") {
       throw new Error(`Agent ${input.actorName} cannot append Activity to Task ${input.taskId}`);
     }
+    const data = normalizeChoiceAction(input.data, new Date());
     let result!: ReturnType<typeof makeActivity>;
     await store.commit((state) => {
       result = makeActivity(
         {
           ...input,
+          data,
           swarmId: swarm.id,
           actorKind: "agent",
           actorOccupant: currentOccupant(actor).number,
@@ -799,6 +823,28 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     return { seat: seatView(store.read().agents.find((candidate) => candidate.id === seat.id)!) };
   });
   server.handle(seatHistoryReadRpc, async (input, context) => readSeatHistory(input, context));
+  server.handle(approvalResolveRpc, async (input, context) => {
+    const approval = await approvals.resolve(
+      input.approvalId,
+      { behavior: input.behavior, ...(input.message ? { message: input.message } : {}) },
+      context.paseo,
+    );
+    return { approvalId: approval.id, status: approval.status };
+  });
+
+  server.handle(permissionRespondRpc, async (input, context) => {
+    if (!seatOfAgent(input.paseoAgentId)) {
+      throw new Error(`Unknown active Swarm agent: ${input.paseoAgentId}`);
+    }
+    await context.paseo.agents.ref(input.paseoAgentId).respondToPermission({
+      requestId: input.permissionId,
+      response:
+        input.behavior === "allow"
+          ? { behavior: "allow" }
+          : { behavior: "deny", message: "Denied from the Swarm inbox." },
+    });
+    return { ok: true as const };
+  });
 
   server.handle(mailboxReadRpc, async (input: RpcInput<typeof mailboxReadRpc>, context) => {
     await flushMailbox(context);

@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import { z } from "zod";
 import {
   activitySchema,
+  approvalSchema,
   agentQualifiedName,
   agentRecordSchema,
   emptyState,
@@ -50,12 +51,14 @@ const v1Records = {
   activities: activitySchema.extend({ swarmId: z.string().optional() }),
   messages: mailboxMessageSchema,
   intents: specIntentSchema,
+  approvals: approvalSchema.extend({ swarmId: z.string().optional() }),
 } satisfies Record<CollectionName, z.ZodTypeAny>;
 
 const v1StateSchema = stateSchema.extend({
   agents: z.array(v1Records.agents),
   tasks: z.array(v1Records.tasks),
   activities: z.array(v1Records.activities),
+  approvals: z.array(v1Records.approvals).default([]),
 });
 type V1State = z.infer<typeof v1StateSchema>;
 
@@ -281,8 +284,29 @@ function plan(old: V1State): Migration {
     });
     return false;
   });
+  const approvals: SwarmState["approvals"] = [];
+  for (const approval of old.approvals) {
+    const swarmId =
+      approval.swarmId ?? agents.find((seat) => seat.id === approval.agentId)?.swarmId;
+    if (swarmId) approvals.push({ ...approval, swarmId });
+    else {
+      archived.push({
+        collection: "approvals",
+        record: approval,
+        reason: `Its seat ${approval.agentName} has no swarm`,
+      });
+    }
+  }
 
-  const state = stateSchema.parse({ ...old, swarms, agents, tasks, activities, messages });
+  const state = stateSchema.parse({
+    ...old,
+    swarms,
+    agents,
+    tasks,
+    activities,
+    messages,
+    approvals,
+  });
   const swarmIds = new Set(state.swarms.map((swarm) => swarm.id));
   for (const record of [...state.agents, ...state.tasks, ...state.activities]) {
     if (!swarmIds.has(record.swarmId)) {

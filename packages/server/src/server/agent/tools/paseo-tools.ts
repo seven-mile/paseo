@@ -809,7 +809,7 @@ export async function createPaseoToolCatalog(
         "swarm_activity_read",
         {
           description:
-            "Read one Swarm Activity in full: body, kind, author, references, and data. A choice Activity has data.action.type=choice; a human reply points back to it with replyTo and may carry data.selectedOption. responseProfile says what kind of reply a choice accepts, or what a reply is: decision, steering, or discussion.",
+            "Read one Swarm Activity in full: body, kind, author, references, and data. A choice Activity has data.action.type=choice; a human reply points back to it with replyTo and may carry data.selectedOption. A choice with defaultOptionId and a deadline that passes unanswered gets a default-decision Activity from Swarm instead. responseProfile says what kind of reply a choice accepts, or what a reply is: decision, steering, or discussion.",
           inputSchema: { activityId: z.string() },
         },
         async (input) => {
@@ -1009,7 +1009,7 @@ export async function createPaseoToolCatalog(
           "swarm_activity_append",
           {
             description:
-              'Append an Activity to a Swarm Task you manage, or to any Task if you are a planner: evidence, a decision, a blocker, a stage change, or a deliverable. To ask the human to choose, set data.action to { type: "choice", prompt, options: [{ id, label, description? }], responseProfiles? }. Link Swarm things as paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, or paseo-swarm://file/<workspace-id>/<relative-path>.',
+              'Append an Activity to a Swarm Task you manage, or to any Task if you are a planner: evidence, a decision, a blocker, a stage change, or a deliverable. To ask the human to choose, set data.action to { type: "choice", prompt, options: [{ id, label, description? }], responseProfiles?, defaultOptionId?, timeoutMinutes? }. With defaultOptionId and timeoutMinutes, Swarm records the default as the decision when the time passes and messages the Task manager. Link Swarm things as paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, or paseo-swarm://file/<workspace-id>/<relative-path>.',
             inputSchema: {
               taskId: z.string(),
               kind: z.string().min(1),

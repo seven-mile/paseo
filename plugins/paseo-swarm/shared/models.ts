@@ -207,6 +207,45 @@ export const specIntentSchema = z.object({
 });
 export type SpecIntent = z.infer<typeof specIntentSchema>;
 
+// Remote effects a Swarm member must get human approval for. The gate classifies shell commands
+// into these; a PWA can narrow the set with its `approvals` frontmatter list.
+export const approvalActionSchema = z.enum([
+  "push",
+  "pr_create",
+  "pr_ready",
+  "pr_merge",
+  "mr_create",
+  "mr_merge",
+]);
+export type ApprovalAction = z.infer<typeof approvalActionSchema>;
+
+// pending: waiting on a human. approved: allowed after the command gave up waiting; the next
+// identical command consumes it. consumed: a command ran on it. denied: refused, with feedback.
+export const approvalStatusSchema = z.enum(["pending", "approved", "consumed", "denied"]);
+export type ApprovalStatus = z.infer<typeof approvalStatusSchema>;
+
+export const approvalSchema = z.object({
+  id: z.string(),
+  swarmId: z.string(),
+  // Roster id and Paseo agent of the member whose command is held.
+  agentId: z.string(),
+  paseoAgentId: z.string(),
+  agentName: z.string(),
+  taskId: z.string().nullable(),
+  action: approvalActionSchema,
+  command: z.array(z.string()),
+  cwd: z.string(),
+  // Same agent, action, directory and arguments: a rerun matches the approval it waited on.
+  fingerprint: z.string(),
+  status: approvalStatusSchema,
+  // The permission raised on the agent, so answering either surface clears the other.
+  permissionId: z.string().nullable(),
+  feedback: z.string().nullable(),
+  createdAt: z.string(),
+  resolvedAt: z.string().nullable(),
+});
+export type Approval = z.infer<typeof approvalSchema>;
+
 // version is the board's wire format, which clients read; the store's own format is the version
 // of its snapshot (server/state.ts).
 export const stateSchema = z.object({
@@ -217,9 +256,10 @@ export const stateSchema = z.object({
   activities: z.array(activitySchema),
   messages: z.array(mailboxMessageSchema).default([]),
   intents: z.array(specIntentSchema).default([]),
+  approvals: z.array(approvalSchema).default([]),
 });
 export type SwarmState = z.infer<typeof stateSchema>;
-// What the board shows; the mailbox is read through its own RPC.
+// What the board shows; the mailbox and approvals reach the app through their own views.
 export type SwarmBoard = Pick<SwarmState, "version" | "agents" | "tasks" | "activities">;
 
 export function emptyState(): SwarmState {
@@ -231,5 +271,6 @@ export function emptyState(): SwarmState {
     activities: [],
     messages: [],
     intents: [],
+    approvals: [],
   };
 }
