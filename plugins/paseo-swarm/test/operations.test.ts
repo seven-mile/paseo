@@ -32,6 +32,7 @@ import {
   pwaRolesReadRpc,
   prepareAgentRpc,
   bindPreparedAgentRpc,
+  refreshPromptRpc,
 } from "../shared/swarm";
 
 async function seed(seeded: SwarmState): Promise<void> {
@@ -1001,6 +1002,113 @@ test("manager can replace a Task worker roster with creation-time validation", a
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
     else process.env.PASEO_HOME = previousHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("prompt refresh re-assembles the standing prompt and records the received revision", async () => {
+  const home = mkdtempSync(join(tmpdir(), "swarm-prompt-refresh-"));
+  const previousHome = process.env.PASEO_HOME;
+  const previousPwa = process.env.PASEO_SWARM_PWA_ROOT;
+  const source = join(home, "agreement");
+  mkdirSync(join(source, "roles"), { recursive: true });
+  writeFileSync(join(source, "PWA.md"), "---\nversion: 1\nproject: Refresh\n---\nProject one.\n");
+  const writeRole = (body: string) =>
+    writeFileSync(
+      join(source, "roles", "planner.md"),
+      `---\nversion: 1\nroleClass: planner\n---\n${body}\n`,
+    );
+  writeRole("Role one.");
+  process.env.PASEO_HOME = home;
+  process.env.PASEO_SWARM_PWA_ROOT = source;
+  const handlers = new Map<string, (input: never, context: PluginHandlerContext) => unknown>();
+  registerOperations({
+    handle(contract, handler) {
+      handlers.set(contract.name, handler);
+    },
+  });
+  const invoke = (name: string, input: unknown) =>
+    handlers.get(name)!(input as never, {} as PluginHandlerContext);
+  const refresh = async (paseoAgentId: string) =>
+    refreshPromptRpc.output.parse(await invoke(refreshPromptRpc.name, { paseoAgentId }));
+  try {
+    const prepared = (await invoke(
+      prepareAgentRpc.name,
+      prepareAgentRpc.input.parse({
+        name: "lead",
+        roleClass: "planner",
+        role: "planner",
+        brief: "One-time orientation.",
+      }),
+    )) as { agentId: string; systemPrompt: string; agent: AgentRecord };
+    const created = prepared.agent.prompt;
+    assert.ok(created);
+    assert.match(prepared.systemPrompt, /One-time orientation/);
+
+    const unchanged = await refresh(prepared.agentId);
+    assert.equal(unchanged.changed, false);
+    assert.equal(unchanged.previousRevision, created.revision);
+    assert.equal(unchanged.revision, created.revision);
+    assert.match(unchanged.prompt, /^<paseo-swarm-prompt-refresh>\n/);
+    assert.match(unchanged.prompt, /nothing changed/);
+    assert.match(unchanged.prompt, /<paseo-swarm-system-settings>/);
+    assert.match(unchanged.prompt, /Role one\./);
+    assert.doesNotMatch(unchanged.prompt, /One-time orientation/);
+
+    writeRole("Role two.");
+    const changed = await refresh(prepared.agentId);
+    assert.equal(changed.changed, true);
+    assert.equal(changed.previousRevision, created.revision);
+    assert.notEqual(changed.revision, created.revision);
+    assert.match(changed.prompt, /supersedes/);
+    assert.match(changed.prompt, /Role two\./);
+    assert.doesNotMatch(changed.prompt, /Role one\./);
+    const stored = store.read().agents.find((agent) => agent.paseoAgentId === prepared.agentId);
+    assert.equal(stored?.prompt?.revision, changed.revision);
+    assert.notEqual(stored?.prompt?.pwaRevision, created.pwaRevision);
+    assert.equal((await refresh(prepared.agentId)).changed, false);
+
+    // An agent registered before revisions were recorded has nothing to compare.
+    await seed({
+      ...emptyState(),
+      agents: [
+        {
+          id: "legacy-record",
+          paseoAgentId: "legacy-agent",
+          name: "legacy",
+          qualifiedName: "legacy",
+          aliases: [],
+          roleClass: "planner",
+          role: "planner",
+          reportsTo: null,
+          workspaceId: null,
+          retired: false,
+          createdAt: "2026-10-06T00:00:00Z",
+          updatedAt: "2026-10-06T00:00:00Z",
+        },
+      ],
+    });
+    const legacy = await refresh("legacy-agent");
+    assert.equal(legacy.previousRevision, null);
+    assert.equal(legacy.changed, true);
+    assert.equal(
+      store.read().agents.find((agent) => agent.paseoAgentId === "legacy-agent")?.prompt?.revision,
+      legacy.revision,
+    );
+
+    await assert.rejects(async () => refresh("missing-agent"), /Unknown active Swarm agent/);
+    writeFileSync(join(source, "roles", "planner.md"), "invalid");
+    await assert.rejects(async () => refresh(prepared.agentId), /YAML frontmatter/);
+    assert.equal(
+      store.read().agents.find((agent) => agent.paseoAgentId === prepared.agentId)?.prompt
+        ?.revision,
+      changed.revision,
+    );
+  } finally {
+    if (previousHome === undefined) delete process.env.PASEO_HOME;
+    else process.env.PASEO_HOME = previousHome;
+    if (previousPwa === undefined) delete process.env.PASEO_SWARM_PWA_ROOT;
+    else process.env.PASEO_SWARM_PWA_ROOT = previousPwa;
     rmSync(home, { recursive: true, force: true });
   }
 });

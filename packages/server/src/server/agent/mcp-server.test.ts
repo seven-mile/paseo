@@ -1054,6 +1054,46 @@ describe("Swarm MCP coordination", () => {
     },
   );
 
+  it("refreshes the caller's own standing prompt as model-visible text", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const actor = {
+      paseoAgentId: "worker-agent",
+      qualifiedName: "planner.supervisor.scout",
+      name: "scout",
+      roleClass: "worker",
+      retired: false,
+    };
+    const refreshed = {
+      revision: "next",
+      previousRevision: "previous",
+      changed: true,
+      prompt: "<paseo-swarm-prompt-refresh>Current role guidance</paseo-swarm-prompt-refresh>",
+    };
+    const invokePlugin = vi.fn(async (_pluginId: string, method: string) =>
+      method === "swarm.board.read" ? { agents: [actor] } : refreshed,
+    );
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      callerAgentId: actor.paseoAgentId,
+      invokePlugin,
+      logger: createTestLogger(),
+    });
+    try {
+      const result = await registeredTool(server, "swarm_prompt_refresh").handler({});
+      expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.agent.refresh_prompt", {
+        paseoAgentId: actor.paseoAgentId,
+      });
+      expect(result).toMatchObject({
+        content: [{ type: "text", text: refreshed.prompt }],
+        structuredContent: { revision: "next", previousRevision: "previous", changed: true },
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
   it.each([
     ["alpha.team", "review", "alpha.team.review"],
     ["alpha.team.scout", "review", "alpha.team.review"],

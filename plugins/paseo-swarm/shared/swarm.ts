@@ -113,6 +113,17 @@ export const bindPreparedAgentRpc = defineRpc({
   output: agentRecordSchema,
 });
 
+export const refreshPromptRpc = defineRpc({
+  name: "swarm.agent.refresh_prompt",
+  input: z.object({ paseoAgentId: z.string().min(1) }),
+  output: z.object({
+    revision: z.string(),
+    previousRevision: z.string().nullable(),
+    changed: z.boolean(),
+    prompt: z.string(),
+  }),
+});
+
 export const createTaskRpc = defineRpc({
   name: "swarm.task.create",
   input: z.object({
