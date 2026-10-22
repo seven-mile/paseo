@@ -11,10 +11,10 @@ import {
   type PressableProps,
 } from "react-native";
 import { appendHumanActivityRpc, boardReadRpc } from "../shared/swarm";
-import type { Activity, ResponseProfile, SwarmState, Task } from "../shared/models";
+import type { Activity, ResponseProfile, SwarmBoard, Task } from "../shared/models";
 import { splitMarkdownParts, type ActivityRef } from "../shared/refs";
 
-const empty: SwarmState = { version: 1, agents: [], tasks: [], activities: [] };
+const empty: SwarmBoard = { version: 1, agents: [], tasks: [], activities: [] };
 
 interface ActionOption {
   id: string;
@@ -374,7 +374,7 @@ function ActivityRow({
   );
 }
 
-function findAgent(board: SwarmState, reference: string) {
+function findAgent(board: SwarmBoard, reference: string) {
   return board.agents.find(
     (agent) =>
       agent.qualifiedName === reference ||
@@ -395,7 +395,7 @@ function TaskDetail({
   onTaskPress,
 }: {
   task: Task;
-  board: SwarmState;
+  board: SwarmBoard;
   theme: PluginSurfaceProps["theme"];
   layout: PluginSurfaceProps["layout"];
   navigation: PluginSurfaceProps["navigation"];
@@ -629,7 +629,7 @@ function TaskDetail({
 export function BoardSurface({ theme, layout, navigation, host }: PluginSurfaceProps) {
   const styles = useBoardStyles(theme, layout.compact);
   const readBoard = useRpc(boardReadRpc);
-  const [board, setBoard] = useState<SwarmState>(empty);
+  const [board, setBoard] = useState<SwarmBoard>(empty);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
   const refresh = useCallback(async (): Promise<void> => {

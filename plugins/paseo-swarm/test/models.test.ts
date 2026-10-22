@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { stateSchema } from "../shared/models";
 
-test("state parsing drops legacy executions and preserves old Activities", () => {
+test("state parsing drops legacy executions, preserves old Activities, and starts an empty mailbox", () => {
   const state = stateSchema.parse({
     version: 1,
     agents: [],
@@ -51,4 +51,5 @@ test("state parsing drops legacy executions and preserves old Activities", () =>
   assert.equal("executions" in state, false);
   assert.equal(state.activities[0].actorKind, "agent");
   assert.equal("executionId" in state.activities[0], false);
+  assert.deepEqual(state.messages, []);
 });

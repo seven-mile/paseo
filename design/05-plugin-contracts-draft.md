@@ -12,7 +12,7 @@
 | role class authorization 的粗粒度判断                   | plugin                       |
 | 当前 workflow 的阶段含义、准入准出和 remote effect 规则 | PWA + agent 判断             |
 
-`create_workspace` 和 `send_message` 直接使用 Paseo 原生能力。plugin 不为它们建立平行 store。
+`create_workspace` 直接使用 Paseo 原生能力，plugin 不为它建立平行 store。`send_message` 先写入 plugin 的 durable mailbox，再用 Paseo send message 投递，见 [02 的 A2A 与向上通知](02-plugin-boundary-and-runtime.md#a2a-与向上通知)。
 
 Agent 侧的这些 plugin-owned operations 通过注入到 Paseo agent 配置的、带 per-agent capability URL 的 Streamable HTTP MCP server 暴露；Paseo UI 侧通过同一组 shared Zod contract 调用 plugin RPC。两条入口都进入同一套 use case，不能让 UI 或 MCP 各自实现一套权限和状态逻辑。MCP gateway 用 capability token 将请求绑定到创建它的 Paseo agent，credential 与 roster 分开持久化。
 

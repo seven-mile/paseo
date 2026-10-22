@@ -56,6 +56,10 @@ function readDisk(): string {
     .join("\0");
 }
 
+function boardOf({ messages: _messages, ...board }: Readonly<SwarmState>) {
+  return board;
+}
+
 test("supervisors require independent placement, workers keep caller defaults, and foreign occupants are rejected", async () => {
   const home = mkdtempSync(join(tmpdir(), "swarm-operations-"));
   const previousHome = process.env.PASEO_HOME;
@@ -376,7 +380,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
     );
     assert.deepEqual(await readStatuses(), ["completed", "review"]);
     assert.equal("statuses" in store.read(), false);
-    assert.deepEqual(await invoke(boardReadRpc.name, {}), store.read());
+    assert.deepEqual(await invoke(boardReadRpc.name, {}), boardOf(store.read()));
     const prepare = (name: string) =>
       invoke(
         prepareAgentRpc.name,
@@ -506,7 +510,11 @@ test("supervisors require independent placement, workers keep caller defaults, a
     assert.equal(sends.length, initialSends + 3);
     for (const delivery of sends.slice(initialSends)) {
       assert.equal(delivery.agentId, supervisor.paseoAgentId);
-      assert.deepEqual(delivery.options, { activeTurnBehavior: "steer" });
+      assert.deepEqual(delivery.options, {
+        activeTurnBehavior: "steer",
+        messageId: (delivery.options as { messageId: string }).messageId,
+      });
+      assert.match((delivery.options as { messageId: string }).messageId, /^message-/);
     }
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
@@ -631,7 +639,15 @@ test("turn notifications use current-turn text without falling back to history",
         await hooks.get("agent.turn_ended")!(event as never, context);
         assert.deepEqual(
           sends.map(({ agentId, options }) => ({ agentId, options })),
-          [{ agentId: manager.paseoAgentId, options: { activeTurnBehavior: "steer" } }],
+          [
+            {
+              agentId: manager.paseoAgentId,
+              options: {
+                activeTurnBehavior: "steer",
+                messageId: (sends[0].options as { messageId: string }).messageId,
+              },
+            },
+          ],
         );
         if (scenario.expectedOutput) {
           assert.ok(sends[0].text.includes(scenario.expectedOutput));
@@ -773,7 +789,7 @@ test("plain board reads bypass absent or corrupt sources; project reads resolve 
     handlers.get(boardReadRpc.name)!({ projectId } as never, context);
   try {
     await seed(emptyState());
-    const original = store.read();
+    const original = boardOf(store.read());
     assert.deepEqual(await invoke(), original);
     assert.deepEqual(boardReadRpc.output.parse(await invoke("project")).statuses, []);
     await assert.rejects(async () => invoke("missing"), /Unknown project/);

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { listPwaRoles, readPwa } from "./pwa";
 import { initialPrompt, messagePrompt, messageReceipt, runtimeNotification } from "./prompts";
+import { flushMailbox, sendThroughMailbox } from "./mailbox";
 import { store } from "./state";
 import { readPwaSource, requirePwaSource, writePwaSource } from "./source";
 import { resolveActivityRefs } from "./refs";
@@ -21,9 +22,10 @@ import {
   pwaRolesReadRpc,
   prepareAgentRpc,
   bindPreparedAgentRpc,
+  mailboxReadRpc,
 } from "../shared/swarm";
 import type { AgentRecord, SwarmState, Task } from "../shared/models";
-import { agentQualifiedName } from "../shared/models";
+import { agentQualifiedName, mailboxMessageStatus } from "../shared/models";
 
 const now = () => new Date().toISOString();
 const id = (prefix: string) => `${prefix}-${randomUUID()}`;
@@ -290,8 +292,10 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     const availableIds = new Set((await availableAgents(context)).map((agent) => agent.id));
     const saved = store.read();
     const board = {
-      ...saved,
+      version: saved.version,
       agents: saved.agents.filter((agent) => availableIds.has(agent.paseoAgentId)),
+      tasks: saved.tasks,
+      activities: saved.activities,
     };
     if (!projectId) return board;
     await projectRoot(projectId, context);
@@ -618,32 +622,44 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         result = makeActivity({ ...input, actorKind: "human" }, state);
         return [{ op: "put", collection: "activities", record: result }];
       });
+      let manager: AgentRecord;
       try {
-        const manager = findAgent(task.managerName);
-        await context.paseo.agents.ref(manager.paseoAgentId).send(
-          messagePrompt({
-            sender: input.actorName,
-            recipient: agentQualifiedName(manager),
-            message: [
-              `A human added Activity ${result.id} to Task ${task.id}.`,
-              `Kind: ${result.kind}.`,
-              result.replyTo ? `Reply to: ${result.replyTo}.` : "",
-              result.responseProfile ? `Response profile: ${result.responseProfile}.` : "",
-              result.body,
-            ]
-              .filter(Boolean)
-              .join("\n"),
-            taskId: task.id,
-          }),
-          { activeTurnBehavior: "steer" },
-        );
+        manager = findAgent(task.managerName);
       } catch (error) {
         return {
           ...result,
           notificationWarning: error instanceof Error ? error.message : String(error),
         };
       }
-      return result;
+      const activity = result;
+      const message = await sendThroughMailbox(
+        {
+          recipientAgentId: manager.id,
+          recipientName: agentQualifiedName(manager),
+          senderName: input.actorName,
+          taskId: task.id,
+          kind: "human_activity",
+          render: (messageId) =>
+            messagePrompt({
+              id: messageId,
+              sender: input.actorName,
+              recipient: agentQualifiedName(manager),
+              message: [
+                `A human added Activity ${activity.id} to Task ${task.id}.`,
+                `Kind: ${activity.kind}.`,
+                activity.replyTo ? `Reply to: ${activity.replyTo}.` : "",
+                activity.responseProfile ? `Response profile: ${activity.responseProfile}.` : "",
+                activity.body,
+              ]
+                .filter(Boolean)
+                .join("\n"),
+              taskId: task.id,
+            }),
+        },
+        context,
+      );
+      if (message.deliveredAt || !message.lastError) return result;
+      return { ...result, notificationWarning: message.lastError };
     },
   );
 
@@ -680,24 +696,52 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
           throw new Error(`Agent ${actorReference} cannot send a message for Task ${task.id}`);
         }
       }
-      await context.paseo.agents.ref(input.recipientPaseoAgentId).send(
-        messagePrompt({
-          sender: input.senderName,
-          recipient: input.recipientName,
-          message: input.body,
+      const message = await sendThroughMailbox(
+        {
+          recipientAgentId: recipient.id,
+          recipientName: input.recipientName,
+          senderName: input.senderName,
           taskId: input.taskId,
-        }),
-        { activeTurnBehavior: "steer" },
+          kind: "team",
+          render: (messageId) =>
+            messagePrompt({
+              id: messageId,
+              sender: input.senderName,
+              recipient: input.recipientName,
+              message: input.body,
+              taskId: input.taskId,
+            }),
+        },
+        context,
       );
+      const status = mailboxMessageStatus(message);
       return {
-        delivered: true as const,
+        delivered: message.deliveredAt !== null,
+        messageId: message.id,
+        status,
         receipt: messageReceipt({
           recipient: input.recipientName,
-          delivery: "accepted by Paseo for delivery",
+          messageId: message.id,
+          status,
+          error: message.lastError,
         }),
       };
     },
   );
+
+  server.handle(mailboxReadRpc, async (input: RpcInput<typeof mailboxReadRpc>, context) => {
+    await flushMailbox(context);
+    const messages = [];
+    for (const message of store.read().messages.toReversed()) {
+      if (messages.length === input.limit) break;
+      const status = mailboxMessageStatus(message);
+      if (input.recipientName && message.recipientName !== input.recipientName) continue;
+      if (input.senderName && message.senderName !== input.senderName) continue;
+      if (input.status && status !== input.status) continue;
+      messages.push(Object.assign({ status }, message));
+    }
+    return { messages };
+  });
 }
 
 function makeActivity(
@@ -738,14 +782,22 @@ export async function notifyManager(
   const managed = store.read().agents.find((candidate) => candidate.paseoAgentId === agent.id);
   if (!managed?.reportsTo) return;
   const manager = findAgent(managed.reportsTo);
-  await context.paseo.agents.ref(manager.paseoAgentId).send(
-    runtimeNotification({
-      agent: managed.name,
-      manager: manager.name,
-      status,
-      outcome,
-      report,
-    }),
-    { activeTurnBehavior: "steer" },
+  await sendThroughMailbox(
+    {
+      recipientAgentId: manager.id,
+      recipientName: agentQualifiedName(manager),
+      senderName: agentQualifiedName(managed),
+      taskId: null,
+      kind: "runtime",
+      render: () =>
+        runtimeNotification({
+          agent: managed.name,
+          manager: manager.name,
+          status,
+          outcome,
+          report,
+        }),
+    },
+    context,
   );
 }

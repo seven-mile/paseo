@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
   activitySchema,
   agentRecordSchema,
+  mailboxMessageSchema,
+  mailboxStatusSchema,
   responseProfileSchema,
   roleClassSchema,
   slugNameSchema,
@@ -178,5 +180,23 @@ export const sendMessageRpc = defineRpc({
     recipientName: z.string().min(1),
     body: z.string().min(1),
   }),
-  output: z.object({ delivered: z.literal(true), receipt: z.string() }),
+  output: z.object({
+    delivered: z.boolean(),
+    messageId: z.string(),
+    status: mailboxStatusSchema,
+    receipt: z.string(),
+  }),
+});
+
+export const mailboxReadRpc = defineRpc({
+  name: "swarm.mailbox.read",
+  input: z.object({
+    recipientName: z.string().min(1).optional(),
+    senderName: z.string().min(1).optional(),
+    status: mailboxStatusSchema.optional(),
+    limit: z.number().int().positive().max(500).default(100),
+  }),
+  output: z.object({
+    messages: z.array(mailboxMessageSchema.extend({ status: mailboxStatusSchema })),
+  }),
 });

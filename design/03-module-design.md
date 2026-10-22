@@ -82,7 +82,7 @@ create_workspace
 send_message
 ```
 
-这些是 UI 或 agent tools 可能调用的边界，不是必须对应同名类。Paseo-backed capabilities 由薄 integration 暴露，不写入 plugin store。Activity 回复是 `append_human_activity` 携带 reply metadata 的便利入口。`assemble_prompt` 是内部纯函数；Paseo runtime event 的接收、启动同步和向上通知也是内部协调流程，不是 agent 要调用的 `report_runtime_status`。相关操作可以共享一个小的 `work` 或 `coordination` 模块。
+这些是 UI 或 agent tools 可能调用的边界，不是必须对应同名类。Paseo-backed capabilities 由薄 integration 暴露；`send_message` 例外，它先把消息写入 plugin 的 durable mailbox。Activity 回复是 `append_human_activity` 携带 reply metadata 的便利入口。`assemble_prompt` 是内部纯函数；Paseo runtime event 的接收、启动同步和向上通知也是内部协调流程，不是 agent 要调用的 `report_runtime_status`。相关操作可以共享一个小的 `work` 或 `coordination` 模块。
 
 ## 数据关系
 

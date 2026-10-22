@@ -29,7 +29,9 @@ export interface MessagePromptInput {
 
 export interface MessageReceiptInput {
   recipient: string;
-  delivery: string;
+  messageId: string;
+  status: "queued" | "delivered" | "consumed" | "failed";
+  error?: string | null;
 }
 
 export interface RuntimeNotificationInput {
@@ -125,8 +127,20 @@ export function messagePrompt({
   ].join("\n");
 }
 
-export function messageReceipt({ recipient, delivery }: MessageReceiptInput): string {
-  return `Delivery receipt for ${recipient}: ${delivery}. Paseo accepted the delivery only; this does not mean the recipient read it, understood it, or started work. Paseo delivery is not a durable queue.`;
+export function messageReceipt({
+  recipient,
+  messageId,
+  status,
+  error,
+}: MessageReceiptInput): string {
+  switch (status) {
+    case "failed":
+      return `Message ${messageId} to ${recipient} was not delivered and will not be retried: ${error ?? "unknown error"}.`;
+    case "queued":
+      return `Message ${messageId} to ${recipient} is queued in the recipient's Swarm mailbox${error ? ` after a failed attempt (${error})` : ""}. Swarm retries delivery automatically; do not resend it.`;
+    default:
+      return `Message ${messageId} was delivered to ${recipient}'s Swarm mailbox. Delivery does not mean the recipient read it, understood it, or started work.`;
+  }
 }
 
 export function runtimeNotification({

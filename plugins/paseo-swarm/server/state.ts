@@ -17,6 +17,7 @@ import {
   activitySchema,
   agentRecordSchema,
   emptyState,
+  mailboxMessageSchema,
   stateSchema,
   taskSchema,
   type SwarmState,
@@ -55,6 +56,7 @@ const collections = {
   agents: { schema: agentRecordSchema, key: "id" },
   tasks: { schema: taskSchema, key: "id" },
   activities: { schema: activitySchema, key: "id" },
+  messages: { schema: mailboxMessageSchema, key: "id" },
 } as const;
 type Collections = typeof collections;
 export type CollectionName = keyof Collections;
