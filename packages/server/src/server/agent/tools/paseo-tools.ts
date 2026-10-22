@@ -878,7 +878,7 @@ export async function createPaseoToolCatalog(
         "swarm_message_send",
         {
           description:
-            "Send an actionable agent-to-agent message to a named active Swarm agent. Use local relationship names within your team and roster-qualified names outside it; do not guess. For Task-scoped messages, the recipient must be that Task's manager or a registered worker and the sender must be authorized; include taskId. Omit taskId for other coordination. Delivery steers an active turn without canceling its tool call. A receipt means Paseo accepted the message for delivery; it does not prove the recipient read, understood, acted, or completed the Task. A timeout is not proof of agent failure.",
+            "Send an actionable agent-to-agent message to a named active Swarm agent. Use local relationship names within your team and roster-qualified names outside it; do not guess. For Task-scoped messages, the recipient must be that Task's manager or a registered worker and the sender must be authorized; include taskId. Omit taskId for other coordination. The message is stored in the recipient's durable Swarm mailbox; delivery steers an active turn without canceling its tool call. The receipt reports status delivered, queued, or failed. A queued message is retried automatically, so do not resend it. Delivery does not prove the recipient read, understood, acted, or completed the Task. A timeout is not proof of agent failure.",
           inputSchema: {
             recipient: z.string().min(1),
             body: z.string().min(1),

@@ -20,11 +20,13 @@ Planner 或人类维护项目 schema。Supervisor 维护自己管理的 Tasks �
 
 ## A2A 与向上通知
 
-A2A 消息通过 Paseo 原生 send message 传递，使用发送者 name、接收者 name、正文和可选 Task 引用。消息正文保持自然语言，不要求 transcript 遵循可机械提取的格式；第一版不在 plugin 中复制一套消息持久化模型。
+A2A 消息使用发送者 name、接收者 name、正文和可选 Task 引用。消息正文保持自然语言，不要求 transcript 遵循可机械提取的格式。
 
 同一套上下级关系用于两层通知：worker 的运行状态变化和明确报告发给 supervisor；supervisor 的状态变化和项目级报告发给 planner。通知只描述运行事实或报告，不自动改变 Task 状态，也不把消息送达解释为工作完成。
 
-Paseo 的 queue、steer 和 interrupt 能力由 adapter 统一使用。完整的 durable async 投递和接收回执是后续增强；第一版保留 plugin 的消息记录，按 Paseo 实际返回值报告投递结果。
+Team message、人工 Activity 通知和向上的 runtime 通知都先写入接收者的 durable mailbox（`server/mailbox.ts`），再通过 Paseo send message 以 steer 投递。Mailbox 行按 roster member（`AgentRecord.id`）寻址，投递时才解析当前的 Paseo agent，所以 member 换了底层 agent 后，未投递的消息跟着 member 走。Paseo send 使用 mailbox 行 id 作为 `messageId`，daemon 的 message receipt 让重试幂等。
+
+状态按顺序推进：queued（尚未投递）→ delivered（Paseo 已接受，记录 `deliveredToPaseoAgentId`）→ consumed（该 Paseo agent 之后有一个 turn 以 completed 结束）。连续失败到上限或接收者已 retired 时记为 failed，不再重试。同一接收者的消息按创建顺序投递，前一条失败时后面的保持 queued。Plugin 拿不到常驻的 Paseo API，所以重试发生在下一次发送、任意 agent 的 turn 结束和 `swarm.mailbox.read` 时；daemon 重启后遗留的 queued 消息也在这些时机补投。Daemon 只记下 send 已开始而不知结果（`agent_request_outcome_unknown`）时，消息按 delivered 记录并写明原因，不换 id 重发，避免重复投递。
 
 Paseo hook 是 live wakeup。Plugin 启动和重连时重新读取 roster、Tasks、Paseo agents 和 Workspaces，补齐当前事实；不能把漏掉某次 hook 当作永久状态。
 

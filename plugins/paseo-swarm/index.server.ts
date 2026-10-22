@@ -1,9 +1,11 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { flushMailbox, markConsumed } from "./server/mailbox";
 import { notifyManager, registerOperations } from "./server/operations";
 
 export default function contribute(server: PluginServerContext) {
   registerOperations(server);
   server.on("agent.turn_ended", async (event, context) => {
+    if (event.outcome.kind === "completed") await markConsumed(event.agent.id);
     let detail: string;
     if (event.outcome.kind === "completed") detail = "turn completed";
     else if (event.outcome.kind === "canceled") detail = `canceled: ${event.outcome.reason}`;
@@ -26,6 +28,9 @@ export default function contribute(server: PluginServerContext) {
       break;
     }
     await notifyManager(event.agent, event.outcome.kind, detail, report, context);
+    // Any turn end is a chance to retry mail that earlier sends could not deliver,
+    // including mail left queued when the daemon last stopped.
+    await flushMailbox(context);
   });
   return async () => {};
 }

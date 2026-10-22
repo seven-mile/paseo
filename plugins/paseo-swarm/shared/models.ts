@@ -59,14 +59,50 @@ export const activitySchema = z.object({
 });
 export type Activity = z.infer<typeof activitySchema>;
 
+export const messageKindSchema = z.enum(["team", "runtime", "human_activity"]);
+export type MessageKind = z.infer<typeof messageKindSchema>;
+
+export const mailboxMessageSchema = z.object({
+  id: z.string(),
+  recipientAgentId: z.string(),
+  recipientName: z.string(),
+  senderName: z.string(),
+  taskId: z.string().nullable(),
+  kind: messageKindSchema,
+  prompt: z.string(),
+  createdAt: z.string(),
+  attempts: z.number().int().nonnegative(),
+  lastError: z.string().nullable(),
+  deliveredAt: z.string().nullable(),
+  deliveredToPaseoAgentId: z.string().nullable(),
+  consumedAt: z.string().nullable(),
+  failedAt: z.string().nullable(),
+});
+export type MailboxMessage = z.infer<typeof mailboxMessageSchema>;
+
+export const mailboxStatusSchema = z.enum(["queued", "delivered", "consumed", "failed"]);
+export type MailboxStatus = z.infer<typeof mailboxStatusSchema>;
+
+export function mailboxMessageStatus(
+  message: Pick<MailboxMessage, "deliveredAt" | "consumedAt" | "failedAt">,
+): MailboxStatus {
+  if (message.consumedAt) return "consumed";
+  if (message.deliveredAt) return "delivered";
+  if (message.failedAt) return "failed";
+  return "queued";
+}
+
 export const stateSchema = z.object({
   version: z.literal(1),
   agents: z.array(agentRecordSchema),
   tasks: z.array(taskSchema),
   activities: z.array(activitySchema),
+  messages: z.array(mailboxMessageSchema).default([]),
 });
 export type SwarmState = z.infer<typeof stateSchema>;
+// What the board shows; the mailbox is read through its own RPC.
+export type SwarmBoard = Omit<SwarmState, "messages">;
 
 export function emptyState(): SwarmState {
-  return { version: 1, agents: [], tasks: [], activities: [] };
+  return { version: 1, agents: [], tasks: [], activities: [], messages: [] };
 }
