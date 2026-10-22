@@ -95,7 +95,7 @@ function setup(t: { after(fn: () => void): void }) {
   });
   const handlers = new Map<string, (input: never, context: PluginHandlerContext) => unknown>();
   const hooks = new Map<string, (event: never, context: PluginHookContext) => unknown>();
-  const server: Pick<PluginServerContext, "handle" | "on"> = {
+  const server: Pick<PluginServerContext, "handle" | "on" | "before"> = {
     handle(contract, handler) {
       handlers.set(contract.name, handler);
     },
@@ -103,9 +103,13 @@ function setup(t: { after(fn: () => void): void }) {
       hooks.set(name, handler);
       return () => {};
     },
+    before() {
+      return () => {};
+    },
   };
   registerOperations(server);
-  contribute(server as PluginServerContext);
+  const cleanup = contribute(server as PluginServerContext);
+  t.after(cleanup);
   forgetRunningTurns();
   const hookAgent = (agent: AgentRecord) => ({
     id: agent.paseoAgentId,

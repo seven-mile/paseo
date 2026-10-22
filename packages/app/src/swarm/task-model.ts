@@ -97,13 +97,56 @@ const activitySchema = z.object({
 export const swarmHumanActivityReceiptSchema = activitySchema.extend({
   notificationWarning: z.string().optional(),
 });
+const inboxOptionSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  description: z.string().optional(),
+});
+const inboxBase = {
+  id: z.string(),
+  taskId: z.string().nullable(),
+  agentName: z.string().nullable(),
+  paseoAgentId: z.string().nullable(),
+  title: z.string(),
+  createdAt: z.string(),
+};
+// Mirrors the plugin's inbox rows: what waits on a human, most blocking first.
+const inboxItemSchema = z.discriminatedUnion("kind", [
+  z.object({
+    ...inboxBase,
+    kind: z.literal("approval"),
+    approvalId: z.string(),
+    action: z.string(),
+    command: z.string(),
+    cwd: z.string(),
+  }),
+  z.object({
+    ...inboxBase,
+    kind: z.literal("permission"),
+    permissionId: z.string(),
+    detail: z.string().nullable(),
+  }),
+  z.object({
+    ...inboxBase,
+    kind: z.literal("choice"),
+    activityId: z.string(),
+    prompt: z.string(),
+    options: z.array(inboxOptionSchema),
+    responseProfiles: z.array(responseProfileSchema).optional(),
+    defaultOptionId: z.string().nullable(),
+    deadline: z.string().nullable(),
+  }),
+  z.object({ ...inboxBase, kind: z.literal("error"), detail: z.string().nullable() }),
+]);
 export const swarmTaskBoardSchema = z.object({
   version: z.literal(1),
   statuses: z.array(z.string()).optional(),
   agents: z.array(agentSchema),
   tasks: z.array(taskSchema),
   activities: z.array(activitySchema),
+  inbox: z.array(inboxItemSchema).optional(),
 });
+export type SwarmInboxItem = z.infer<typeof inboxItemSchema>;
 export type SwarmTaskBoard = z.infer<typeof swarmTaskBoardSchema>;
 export type SwarmTask = SwarmTaskBoard["tasks"][number];
 export type SwarmActivity = SwarmTaskBoard["activities"][number];
@@ -211,6 +254,8 @@ const choiceSchema = z.object({
     .array(z.object({ id: z.string(), label: z.string(), description: z.string().optional() }))
     .min(1),
   responseProfiles: z.array(responseProfileSchema).min(1).optional(),
+  defaultOptionId: z.string().optional(),
+  deadline: z.string().optional(),
 });
 export function activityChoice(activity: SwarmActivity) {
   const result = choiceSchema.safeParse(activity.data.action);
@@ -311,10 +356,32 @@ export function scopedSwarmTasks(
     );
 }
 
+// Inbox rows for the Tasks in scope, plus Task-less rows from agents those Tasks name.
+export function scopedSwarmInbox(board: SwarmTaskBoard, tasks: readonly SwarmTask[]) {
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const names = new Set(tasks.flatMap((task) => [task.managerName, ...task.workerNames]));
+  return (board.inbox ?? []).filter((item) =>
+    item.taskId ? taskIds.has(item.taskId) : item.agentName !== null && names.has(item.agentName),
+  );
+}
+
+export function swarmInboxCounts(inbox: readonly SwarmInboxItem[]) {
+  const counts = new Map<string, number>();
+  for (const item of inbox) {
+    if (item.taskId) counts.set(item.taskId, (counts.get(item.taskId) ?? 0) + 1);
+  }
+  return counts;
+}
+
 export function unansweredChoices(activities: readonly SwarmActivity[]) {
+  // A human reply answers a choice; so does the default Swarm records at its deadline.
   const answered = new Set(
     activities
-      .filter((activity) => activity.actorKind === "human" && activity.replyTo)
+      .filter(
+        (activity) =>
+          activity.replyTo &&
+          (activity.actorKind === "human" || activity.kind === "default-decision"),
+      )
       .map((activity) => activity.replyTo),
   );
   return activities.filter((activity) => activityChoice(activity) && !answered.has(activity.id));

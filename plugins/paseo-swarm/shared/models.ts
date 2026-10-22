@@ -98,17 +98,56 @@ export function mailboxMessageStatus(
   return "queued";
 }
 
+// Remote effects a Swarm member must get human approval for. The gate classifies shell commands
+// into these; a PWA can narrow the set with its `approvals` frontmatter list.
+export const approvalActionSchema = z.enum([
+  "push",
+  "pr_create",
+  "pr_ready",
+  "pr_merge",
+  "mr_create",
+  "mr_merge",
+]);
+export type ApprovalAction = z.infer<typeof approvalActionSchema>;
+
+// pending: waiting on a human. approved: allowed after the command gave up waiting; the next
+// identical command consumes it. consumed: a command ran on it. denied: refused, with feedback.
+export const approvalStatusSchema = z.enum(["pending", "approved", "consumed", "denied"]);
+export type ApprovalStatus = z.infer<typeof approvalStatusSchema>;
+
+export const approvalSchema = z.object({
+  id: z.string(),
+  // Roster id and Paseo agent of the member whose command is held.
+  agentId: z.string(),
+  paseoAgentId: z.string(),
+  agentName: z.string(),
+  taskId: z.string().nullable(),
+  action: approvalActionSchema,
+  command: z.array(z.string()),
+  cwd: z.string(),
+  // Same agent, action, directory and arguments: a rerun matches the approval it waited on.
+  fingerprint: z.string(),
+  status: approvalStatusSchema,
+  // The permission raised on the agent, so answering either surface clears the other.
+  permissionId: z.string().nullable(),
+  feedback: z.string().nullable(),
+  createdAt: z.string(),
+  resolvedAt: z.string().nullable(),
+});
+export type Approval = z.infer<typeof approvalSchema>;
+
 export const stateSchema = z.object({
   version: z.literal(1),
   agents: z.array(agentRecordSchema),
   tasks: z.array(taskSchema),
   activities: z.array(activitySchema),
   messages: z.array(mailboxMessageSchema).default([]),
+  approvals: z.array(approvalSchema).default([]),
 });
 export type SwarmState = z.infer<typeof stateSchema>;
-// What the board shows; the mailbox is read through its own RPC.
-export type SwarmBoard = Omit<SwarmState, "messages">;
+// What the board shows; the mailbox and approvals reach it through their own views.
+export type SwarmBoard = Omit<SwarmState, "messages" | "approvals">;
 
 export function emptyState(): SwarmState {
-  return { version: 1, agents: [], tasks: [], activities: [], messages: [] };
+  return { version: 1, agents: [], tasks: [], activities: [], messages: [], approvals: [] };
 }

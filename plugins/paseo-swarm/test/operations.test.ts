@@ -58,8 +58,8 @@ function readDisk(): string {
     .join("\0");
 }
 
-function boardOf({ messages: _messages, ...board }: Readonly<SwarmState>) {
-  return board;
+function boardOf({ messages: _messages, approvals: _approvals, ...board }: Readonly<SwarmState>) {
+  return { ...board, inbox: [] };
 }
 
 test("supervisors require independent placement, workers keep caller defaults, and foreign occupants are rejected", async () => {
@@ -554,10 +554,13 @@ test("turn notifications use current-turn text without falling back to history",
     reportsTo: "manager",
   };
   const hooks = new Map<string, (event: never, context: PluginHookContext) => unknown>();
-  const server: Pick<PluginServerContext, "handle" | "on"> = {
+  const server: Pick<PluginServerContext, "handle" | "on" | "before"> = {
     handle() {},
     on(name, handler) {
       hooks.set(name, handler);
+      return () => {};
+    },
+    before() {
       return () => {};
     },
   };
@@ -614,10 +617,14 @@ test("turn notifications use current-turn text without falling back to history",
       event: { turnId: null, outcome: { kind: "failed", error: { message: "provider failed" } } },
     },
   ];
+  let cleanup: ReturnType<typeof contribute> | undefined;
   try {
     await seed({ ...emptyState(), agents: [manager, worker] });
-    contribute(server as PluginServerContext);
-    assert.deepEqual([...hooks.keys()], ["agent.turn_started", "agent.turn_ended"]);
+    cleanup = contribute(server as PluginServerContext);
+    assert.deepEqual(
+      [...hooks.keys()],
+      ["agent.permission_resolved", "agent.turn_started", "agent.turn_ended"],
+    );
     for (const scenario of cases) {
       await t.test(scenario.name, async () => {
         sends.length = 0;
@@ -660,6 +667,7 @@ test("turn notifications use current-turn text without falling back to history",
       });
     }
   } finally {
+    await cleanup?.();
     if (previousHome === undefined) delete process.env.PASEO_HOME;
     else process.env.PASEO_HOME = previousHome;
     rmSync(home, { recursive: true, force: true });

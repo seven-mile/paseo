@@ -3,6 +3,7 @@ export type { OwnedSubscription, SubscriptionObserver } from "./connection/index
 import type { DaemonClientConfig } from "./daemon-client.js";
 import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
 import type {
+  AgentPermissionRaiseRequest,
   AgentSnapshotPayload,
   CreationSnapshot,
   CreateAgentRequestMessage,
@@ -285,6 +286,8 @@ export interface PaseoAgentRunOptions extends PaseoAgentSendOptions {
 export type PaseoAgentRunResult = WaitForFinishResult;
 export type PaseoAgentPermissionResponse = AgentPermissionResponse;
 
+export type PaseoAgentRaisePermission = AgentPermissionRaiseRequest["permission"];
+
 export interface PaseoAgentRespondToPermissionOptions {
   requestId: string;
   response: PaseoAgentPermissionResponse;
@@ -362,6 +365,11 @@ export interface PaseoAgentHandle {
   refresh(requestId?: string): Promise<PaseoAgentRefetchResult | null>;
   send(text: string, options?: PaseoAgentSendOptions): Promise<void>;
   respondToPermission(options: PaseoAgentRespondToPermissionOptions): Promise<void>;
+  /**
+   * Asks the human on this agent's behalf with the agent's permission card and attention push.
+   * The provider never sees the request. Watch `agent.permission_resolved` for the answer.
+   */
+  raisePermission(permission: PaseoAgentRaisePermission): Promise<{ permissionId: string }>;
   /** Sends a prompt and resolves when that turn finishes or needs attention. */
   run(text: string, options?: PaseoAgentRunOptions): Promise<PaseoAgentRunResult>;
   /** Waits for the current turn, including one started with `prompt`. */
@@ -943,6 +951,7 @@ function createAgentHandleFactory(
       respondToPermission: async ({ requestId, response }) => {
         await daemonClient.respondToPermission(id, requestId, response);
       },
+      raisePermission: (permission) => daemonClient.raiseAgentPermission(id, permission),
       run: async (text, options) => {
         const { timeoutMs, ...sendOptions } = options ?? {};
         await daemonClient.sendAgentMessage(id, text, sendOptions);
