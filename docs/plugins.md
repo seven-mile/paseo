@@ -127,6 +127,20 @@ a supervisor. This keeps supervisor execution out of the planner's workspace; om
 does not bypass the separation. Supervisor-created workers still default to the supervisor's
 workspace. Explicit placement keeps the reporting relationship unchanged.
 
+Swarm holds remote effects for human approval at the command. On start it writes POSIX shims
+for `git`, `gh`, and `glab` under `plugin-data/paseo-swarm/gate/bin` and prepends that directory
+to `PATH` for Swarm members through `agent.session_open`, so the gate covers every provider,
+including ones running without permission prompts. A shim runs the real binary unless the
+arguments name `push`, `pr create|ready|merge`, or `mr create|merge`; only then it starts Node
+and asks a loopback HTTP gate (`server/gate.ts`). The gate is cooperative: an agent can bypass it
+by calling a binary by absolute path, and Windows agents run ungated. A held command waits 90
+seconds, under the two-minute default shell timeout, then exits 75 with the approval left pending;
+the agent gets a mailbox message when a human answers and reruns the same command. Each approval
+also raises a permission on the agent through `agent.permission.raise.request`, which gives it the
+agent's permission card and the attention push. The provider never sees that request; answering
+it in either place resolves both. A PWA narrows the gated actions with an `approvals` list in
+`PWA.md`.
+
 Built-ins run in process and remain active independently of `pluginsEnabled`. They are
 absent from the installed plugin list and source configuration; their client bundles
 appear in the plugin catalog. After editing one, use `paseo plugin reload <id>` to

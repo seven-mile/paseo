@@ -10,6 +10,7 @@ import {
   slugNameSchema,
   taskSchema,
 } from "./models";
+import { inboxItemSchema } from "./inbox";
 
 export const boardReadRpc = defineRpc({
   name: "swarm.board.read",
@@ -20,7 +21,29 @@ export const boardReadRpc = defineRpc({
     tasks: z.array(taskSchema),
     activities: z.array(activitySchema),
     statuses: z.array(z.string()).optional(),
+    inbox: z.array(inboxItemSchema).optional(),
   }),
+});
+
+export const approvalResolveRpc = defineRpc({
+  name: "swarm.approval.resolve",
+  input: z.object({
+    approvalId: z.string().min(1),
+    behavior: z.enum(["allow", "deny"]),
+    message: z.string().min(1).optional(),
+  }),
+  output: z.object({ approvalId: z.string(), status: z.string() }),
+});
+
+// Answers a provider permission held by a Swarm member from the inbox.
+export const permissionRespondRpc = defineRpc({
+  name: "swarm.permission.respond",
+  input: z.object({
+    paseoAgentId: z.string().min(1),
+    permissionId: z.string().min(1),
+    behavior: z.enum(["allow", "deny"]),
+  }),
+  output: z.object({ ok: z.literal(true) }),
 });
 
 export const pwaSourceReadRpc = defineRpc({

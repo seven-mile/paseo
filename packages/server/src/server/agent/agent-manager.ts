@@ -743,6 +743,9 @@ export class AgentManager {
   private paseoToolsEnabled = true;
   private paseoToolCatalogFactory: PaseoToolCatalogFactory | null = null;
   private readonly paseoToolPolicies = new Map<string, ProviderPaseoToolsPolicy | undefined>();
+  // Permissions raised on an agent by a daemon-side caller. They live beside the provider's own
+  // pending permissions and survive session refreshes, which only report the provider's.
+  private readonly raisedPermissions = new Map<string, Map<string, AgentPermissionRequest>>();
   private readonly resolvePaseoToolPolicy: (
     provider: AgentProvider,
   ) => ProviderPaseoToolsPolicy | undefined;
@@ -2973,12 +2976,56 @@ export class AgentManager {
     });
   }
 
+  // Asks the human on the agent's behalf. The request uses the agent's permission card and
+  // attention push; answering it resolves it here and emits agent.permission_resolved.
+  async raisePermission(
+    agentId: string,
+    permission: Pick<
+      AgentPermissionRequest,
+      "name" | "title" | "description" | "input" | "actions" | "metadata"
+    >,
+  ): Promise<AgentPermissionRequest> {
+    const agent = this.requireSessionAgent(agentId);
+    const request: AgentPermissionRequest = {
+      ...permission,
+      id: `raised:${randomUUID()}`,
+      provider: agent.provider,
+      kind: "tool",
+    };
+    const raised = this.raisedPermissions.get(agent.id) ?? new Map();
+    raised.set(request.id, request);
+    this.raisedPermissions.set(agent.id, raised);
+    await this.dispatchSessionEvent(agent, {
+      type: "permission_requested",
+      provider: agent.provider,
+      request,
+    });
+    return request;
+  }
+
   async respondToPermission(
     agentId: string,
     requestId: string,
     response: AgentPermissionResponse,
   ): Promise<AgentPermissionResult | void> {
     const agent = this.requireAgent(agentId);
+    const raised = this.raisedPermissions.get(agent.id);
+    if (raised?.delete(requestId)) {
+      if (agent.session) {
+        await this.dispatchSessionEvent(agent, {
+          type: "permission_resolved",
+          provider: agent.provider,
+          requestId,
+          resolution: response,
+        });
+      } else {
+        agent.pendingPermissions.delete(requestId);
+        this.emitState(agent);
+      }
+      this.touchUpdatedAt(agent);
+      await this.persistSnapshot(agent);
+      return;
+    }
     if (agent.inFlightPermissionResponses.has(requestId)) {
       throw new Error("A response to this permission request is already being submitted");
     }
@@ -3699,6 +3746,7 @@ export class AgentManager {
   ): ManagedAgentClosed {
     this.agentStreamCoalescer.flushAndDiscard(agent.id);
     this.agents.delete(agent.id);
+    this.raisedPermissions.delete(agent.id);
     this.previousStatuses.delete(agent.id);
     if (agent.unsubscribeSession) {
       agent.unsubscribeSession();
@@ -3950,6 +3998,9 @@ export class AgentManager {
     try {
       const pending = agent.session.getPendingPermissions();
       agent.pendingPermissions = new Map(pending.map((request) => [request.id, request]));
+      for (const request of this.raisedPermissions.get(agent.id)?.values() ?? []) {
+        agent.pendingPermissions.set(request.id, request);
+      }
     } catch {
       agent.pendingPermissions.clear();
     }
@@ -4647,6 +4698,7 @@ export class AgentManager {
   ): void {
     for (const [requestId] of agent.pendingPermissions) {
       agent.pendingPermissions.delete(requestId);
+      this.raisedPermissions.get(agent.id)?.delete(requestId);
       if (!options?.fromHistory) {
         this.dispatchStream(agent.id, {
           type: "permission_resolved",

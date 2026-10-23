@@ -16,6 +16,9 @@ import { flushMailbox, sendThroughMailbox } from "./mailbox";
 import { store } from "./state";
 import { readPwaSource, requirePwaSource, writePwaSource } from "./source";
 import { resolveActivityRefs } from "./refs";
+import { approvals } from "./approvals";
+import { buildInbox, normalizeChoiceAction, type LiveAgent } from "./inbox";
+import { attachPaseo } from "./runtime";
 import {
   appendActivityRpc,
   appendHumanActivityRpc,
@@ -32,6 +35,8 @@ import {
   bindPreparedAgentRpc,
   mailboxReadRpc,
   refreshPromptRpc,
+  approvalResolveRpc,
+  permissionRespondRpc,
 } from "../shared/swarm";
 import type { AgentRecord, SwarmState, Task } from "../shared/models";
 import { agentQualifiedName, mailboxMessageStatus } from "../shared/models";
@@ -40,7 +45,7 @@ const now = () => new Date().toISOString();
 const id = (prefix: string) => `${prefix}-${randomUUID()}`;
 
 async function availableAgents(context: PluginHandlerContext) {
-  const agents: Array<{ id: string; workspaceId?: string }> = [];
+  const agents: LiveAgent[] = [];
   let cursor: string | undefined;
   do {
     const page = await context.paseo.agents.list({
@@ -305,13 +310,16 @@ async function creationPlacement(
 
 export function registerOperations(server: Pick<PluginServerContext, "handle">): void {
   server.handle(boardReadRpc, async ({ projectId }, context) => {
-    const availableIds = new Set((await availableAgents(context)).map((agent) => agent.id));
+    attachPaseo(context.paseo);
+    const live = await availableAgents(context);
+    const availableIds = new Set(live.map((agent) => agent.id));
     const saved = store.read();
     const board = {
       version: saved.version,
       agents: saved.agents.filter((agent) => availableIds.has(agent.paseoAgentId)),
       tasks: saved.tasks,
       activities: saved.activities,
+      inbox: buildInbox(saved, live),
     };
     if (!projectId) return board;
     await projectRoot(projectId, context);
@@ -658,9 +666,10 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     if (currentTask.managerName !== actorReference && actor.roleClass !== "planner") {
       throw new Error(`Agent ${input.actorName} cannot append Activity to Task ${input.taskId}`);
     }
+    const data = normalizeChoiceAction(input.data, new Date());
     let result!: ReturnType<typeof makeActivity>;
     await store.commit((state) => {
-      result = makeActivity({ ...input, actorKind: "agent" }, state);
+      result = makeActivity({ ...input, data, actorKind: "agent" }, state);
       return [{ op: "put", collection: "activities", record: result }];
     });
     return result;
@@ -780,6 +789,29 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       };
     },
   );
+
+  server.handle(approvalResolveRpc, async (input, context) => {
+    const approval = await approvals.resolve(
+      input.approvalId,
+      { behavior: input.behavior, ...(input.message ? { message: input.message } : {}) },
+      context.paseo,
+    );
+    return { approvalId: approval.id, status: approval.status };
+  });
+
+  server.handle(permissionRespondRpc, async (input, context) => {
+    if (!findAgentByPaseoId(input.paseoAgentId)) {
+      throw new Error(`Unknown active Swarm agent: ${input.paseoAgentId}`);
+    }
+    await context.paseo.agents.ref(input.paseoAgentId).respondToPermission({
+      requestId: input.permissionId,
+      response:
+        input.behavior === "allow"
+          ? { behavior: "allow" }
+          : { behavior: "deny", message: "Denied from the Swarm inbox." },
+    });
+    return { ok: true as const };
+  });
 
   server.handle(mailboxReadRpc, async (input: RpcInput<typeof mailboxReadRpc>, context) => {
     await flushMailbox(context);

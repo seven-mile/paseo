@@ -8,7 +8,9 @@ import {
   openSwarmReply,
   openSwarmTaskSurfaceState,
   resolveSwarmTaskReference,
+  scopedSwarmInbox,
   scopedSwarmTasks,
+  swarmInboxCounts,
   swarmTaskScopeOptions,
   swarmTaskColumns,
   swarmHumanActivityReceiptSchema,
@@ -640,5 +642,53 @@ describe("Tasks responsive shell state", () => {
     ).toBe(false);
     expect(sent).toEqual([]);
     expect(() => session.detail("another-task", [])).toThrow("Tasks tab state is closed");
+  });
+});
+
+describe("Swarm Needs you inbox", () => {
+  it("keeps rows for Tasks in scope and for agents those Tasks name", () => {
+    const value = board();
+    const base = { paseoAgentId: null, title: "Row", createdAt: "2026-10-06T00:00:00Z" };
+    value.inbox = [
+      {
+        ...base,
+        kind: "error",
+        id: "in-task",
+        taskId: "planner.manager",
+        agentName: null,
+        detail: null,
+      },
+      {
+        ...base,
+        kind: "error",
+        id: "other-task",
+        taskId: "other.manager",
+        agentName: null,
+        detail: null,
+      },
+      {
+        ...base,
+        kind: "error",
+        id: "task-less",
+        taskId: null,
+        agentName: "planner.manager",
+        detail: null,
+      },
+    ];
+    const tasks = value.tasks.filter((task) => task.id === "planner.manager");
+    const inbox = scopedSwarmInbox(value, tasks);
+    expect(inbox.map((item) => item.id)).toEqual(["in-task", "task-less"]);
+    expect(swarmInboxCounts(inbox)).toEqual(new Map([["planner.manager", 1]]));
+  });
+  it("treats a deadline default as an answer to its choice", () => {
+    const question = activity();
+    const fallback = {
+      ...activity("fallback"),
+      actorName: "swarm",
+      kind: "default-decision",
+      replyTo: question.id,
+      data: { selectedOption: "yes", resolvedBy: "deadline" },
+    };
+    expect(unansweredChoices([question, fallback])).toEqual([]);
   });
 });
