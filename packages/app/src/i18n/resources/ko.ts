@@ -22,7 +22,7 @@ export const ko: TranslationResources = {
       addWorker: "작업자 추가",
       noWorkers: "아직 작업자가 없습니다",
       addWorkerUnder: "{{name}} 아래 작업자 추가",
-      staleSeat: "다음 Swarm 메시지에서 변경 ({{reason}})",
+      pendingSeat: "다음 Swarm 메시지에서 변경 ({{reason}})",
       tasksFor: "{{name}}의 작업",
       loadingAgents: "에이전트 불러오는 중…",
       planners: "플래너",

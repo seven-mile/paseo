@@ -12,7 +12,7 @@ import type {
 import contribute from "../index.server";
 import { forgetRunningTurns } from "../server/mailbox";
 import { notifyManager, registerOperations } from "../server/operations";
-import { seatPendingChange } from "../server/seat-policy";
+import { pendingPlan } from "../server/seat-policy";
 import {
   getConfigPath,
   getEventLogPath,
@@ -62,7 +62,7 @@ function readDisk(): string {
 function boardOf({ messages: _messages, ...board }: Readonly<SwarmState>) {
   return {
     ...board,
-    agents: board.agents.map((agent) => ({ ...agent, stale: seatPendingChange(agent) })),
+    agents: board.agents.map((agent) => ({ ...agent, pending: pendingPlan(agent) })),
   };
 }
 
@@ -886,7 +886,7 @@ test("roster reads filter native availability without releasing historical names
     );
     available = true;
     assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, [
-      { ...agent, stale: null },
+      { ...agent, pending: null },
     ]);
     available = false;
     assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, []);

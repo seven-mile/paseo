@@ -14,7 +14,15 @@ import {
 } from "../shared/models";
 import { initialPrompt, promptRevision, returnBrief, takeoverBrief } from "./prompts";
 import { readPwa } from "./pwa";
-import { adjustedConfig, planSeat, seatPendingChange, type SeatPlan } from "./seat-policy";
+import {
+  adjustedConfig,
+  bootConfig,
+  pendingPlan,
+  planSeat,
+  settingsLostOnProviderChange,
+  type PendingPlan,
+  type SeatPlan,
+} from "./seat-policy";
 import { requirePwaSource } from "./source";
 import { store } from "./state";
 
@@ -88,24 +96,6 @@ export async function observedConfig(
 export async function occupantRunning(seat: AgentRecord, context: SeatContext): Promise<boolean> {
   const snapshot = (await context.paseo.agents.ref(seat.paseoAgentId).refresh())?.agent;
   return snapshot?.status === "running";
-}
-
-// The config a replacement boots with: the seat's fields over what the previous occupant ran.
-// Settings carry over only within one provider; on another provider the seat's own fields apply.
-async function bootConfig(seat: AgentRecord, context: SeatContext): Promise<AgentConfig> {
-  const previous = seat.occupant
-    ? seat.occupant.config
-    : await observedConfig(seat.paseoAgentId, context);
-  const wanted = definedConfig(seat.agentConfig ?? {});
-  const sameProvider =
-    !wanted.provider ||
-    (previous.provider !== undefined &&
-      providerFamily(previous.provider) === providerFamily(wanted.provider));
-  const config = sameProvider ? adjustedConfig(wanted, previous) : wanted;
-  if (!config.provider) {
-    throw new Error(`Seat ${agentQualifiedName(seat)} has no provider to start a new agent with`);
-  }
-  return config;
 }
 
 // Rows the old occupant was handed but never finished a turn on go back to the queue.
@@ -201,7 +191,10 @@ async function replaceOccupant(
   reason: string,
   context: SeatContext,
 ): Promise<AgentRecord> {
-  const config = await bootConfig(stale, context);
+  const config = bootConfig(stale.agentConfig ?? {}, currentOccupant(stale).config);
+  if (!config.provider) {
+    throw new Error(`Seat ${agentQualifiedName(stale)} has no provider to start a new agent with`);
+  }
   const assembled = assemblePrompt(stale, stale.projectId);
   const number = nextOccupantNumber(stale);
   const systemPrompt = initialPrompt({
@@ -236,9 +229,10 @@ async function replaceOccupant(
   );
 }
 
-// Brings back an earlier occupant, whose session resumes with its context. The return brief is
-// the probe: if Paseo cannot resume that session the send fails, and the caller starts a new
-// agent instead. Changes the earlier occupant needs in place follow on the next delivery.
+// Brings back an earlier occupant that runs the seat's spec as it stands, so its session resumes
+// with its context. The return brief is the probe: if Paseo cannot resume that session the send
+// fails, and the caller starts a new agent instead. A session that resumes but fails later, during
+// the return turn, is not caught here; a reset gives the seat a new agent.
 async function reviveOccupant(
   stale: AgentRecord,
   past: PastOccupant,
@@ -313,10 +307,10 @@ export async function reconcileSeat(seat: AgentRecord, context: SeatContext): Pr
   }
 }
 
-export type SeatView = AgentRecord & { stale: string | null };
+export type SeatView = AgentRecord & { pending: PendingPlan };
 
 export function seatView(seat: AgentRecord): SeatView {
-  return { ...seat, stale: seatPendingChange(seat) };
+  return { ...seat, pending: pendingPlan(seat) };
 }
 
 export function listSeats(input: { projectId?: string; includeRetired: boolean }): SeatView[] {
@@ -339,8 +333,8 @@ function resolveSeats(references: string[]): AgentRecord[] {
   return [...seats.values()];
 }
 
-// Seats made before seats existed carry no stamp of what their agent booted with. The live
-// agent's config stands in, so a seat edit compares against what actually runs.
+// Seats made before seats existed carry no stamp and no spec. What the live agent runs stands in
+// for both, once, so a seat edit compares against what actually runs and a new agent keeps it.
 async function withOccupantStamp(seat: AgentRecord, context: SeatContext): Promise<AgentRecord> {
   if (seat.occupant) return seat;
   let config: AgentConfig = {};
@@ -351,6 +345,7 @@ async function withOccupantStamp(seat: AgentRecord, context: SeatContext): Promi
   }
   return {
     ...seat,
+    agentConfig: seat.agentConfig ?? config,
     occupant: { number: 1, config, generation: seat.generation ?? 0, boundAt: seat.createdAt },
   };
 }
@@ -378,7 +373,11 @@ async function editSeats(
     for (const before of stamped.values()) {
       const current = state.agents.find((agent) => agent.id === before.id);
       if (!current) throw new Error(`Swarm seat disappeared: ${before.id}`);
-      const edited = edit({ ...current, occupant: current.occupant ?? before.occupant });
+      const edited = edit({
+        ...current,
+        agentConfig: current.agentConfig ?? before.agentConfig,
+        occupant: current.occupant ?? before.occupant,
+      });
       results.push({ ...edited, updatedAt: timestamp });
     }
     return results.map((record) => ({ op: "put" as const, collection: "agents" as const, record }));
@@ -390,16 +389,8 @@ export type AgentConfigPatch = {
   [Key in keyof AgentConfig]-?: AgentConfig[Key] | null | undefined;
 };
 
-const PROVIDER_SETTINGS = ["modeId", "thinkingOptionId", "featureValues"] as const;
-
-function changesProvider(seat: AgentRecord, provider: string): boolean {
-  const current = seat.agentConfig?.provider ?? currentOccupant(seat).config.provider;
-  return !current || providerFamily(current) !== providerFamily(provider);
-}
-
-// A replacement inherits settings only from an occupant of the same provider. A seat that wants
-// another provider names its model, which Paseo needs to create the agent, and its mode, since mode
-// names do not transfer: Claude's "auto" approves through a classifier, while Codex's "auto" asks
+// A new agent on another provider has nothing to take its model or mode from. Paseo creates agents
+// from "provider/model", and mode names do not transfer: Claude's "auto" approves through a classifier, while Codex's "auto" asks
 // and its classifier mode is "auto-review". A guessed mode could stall an agent or let it act
 // without asking.
 function assertBootable(seats: AgentRecord[]): void {
@@ -428,10 +419,11 @@ export function updateSeats(
     input.dryRun,
     (seat) => {
       const agentConfig: Record<string, unknown> = { ...seat.agentConfig };
-      // The old provider's thinking option and feature values mean nothing to the new one; the
-      // new agent gets its provider's defaults unless the edit sets them.
-      if (patch.provider && changesProvider(seat, patch.provider)) {
-        for (const field of PROVIDER_SETTINGS) delete agentConfig[field];
+      if (patch.provider) {
+        const from = seat.agentConfig?.provider ?? currentOccupant(seat).config.provider;
+        for (const field of settingsLostOnProviderChange(from, patch.provider)) {
+          delete agentConfig[field];
+        }
       }
       for (const [key, value] of Object.entries(patch)) {
         if (value === null) delete agentConfig[key];

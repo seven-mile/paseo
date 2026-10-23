@@ -253,10 +253,6 @@ async function syncSeat(
   } catch (error) {
     return hold("Could not update the agent in", error);
   }
-  // A returning agent may still need changes in place; it is busy with its return brief, and
-  // the end of that turn flushes the mailbox again.
-  const updated = store.read().agents.find((agent) => agent.id === seat.id);
-  if (updated && planSeat(updated).kind !== "keep") return null;
   return queuedFor(seat.id);
 }
 

@@ -14,6 +14,9 @@ export type SeatPlan =
   | { kind: "revive"; reason: string; occupant: PastOccupant }
   | { kind: "replace"; reason: string };
 
+// The plan a seat view reports: what the next mail does to the agent, or null to keep it.
+export type PendingPlan = { kind: Exclude<SeatPlan["kind"], "keep">; reason: string } | null;
+
 // What an in-place change sends to the live agent; see the agent handle's applyConfig.
 export interface AgentConfigApply {
   modelId?: string;
@@ -40,16 +43,23 @@ function providerMatches(wanted: string, actual: string | undefined): boolean {
   return actual === wanted || actual.startsWith(`${wanted}/`);
 }
 
-function sameValues(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
-  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
-  return [...keys].every((key) => JSON.stringify(left[key]) === JSON.stringify(right[key]));
+// True when an agent on `from` can switch to `to` without losing a working session.
+function modelSwitchKeepsContext(from: string | undefined, to: string): boolean {
+  if (!from) return false;
+  const family = providerFamily(to);
+  return family === providerFamily(from) && MODEL_SWITCH_KEEPS_CONTEXT.has(family);
 }
 
-function modelSwitchInPlace(wanted: string, running: string | undefined): AgentConfigApply | null {
-  if (!running || !wanted.includes("/")) return null;
-  const family = providerFamily(wanted);
-  if (family !== providerFamily(running) || !MODEL_SWITCH_KEEPS_CONTEXT.has(family)) return null;
-  return { modelId: wanted.slice(family.length + 1) };
+// Feature values a seat names are managed one key at a time; keys it leaves out are not.
+function changedFeatures(
+  wanted: Record<string, unknown> | undefined,
+  running: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(wanted ?? {}).filter(
+      ([key, value]) => JSON.stringify(value) !== JSON.stringify(running?.[key]),
+    ),
+  );
 }
 
 // The fields a seat specifies that the agent does not run. Fields the seat leaves out are not
@@ -58,11 +68,14 @@ function modelSwitchInPlace(wanted: string, running: string | undefined): AgentC
 function changes(wanted: AgentConfig, running: AgentConfig): Change[] {
   const result: Change[] = [];
   if (wanted.provider !== undefined && !providerMatches(wanted.provider, running.provider)) {
-    const apply = modelSwitchInPlace(wanted.provider, running.provider);
+    const inPlace =
+      wanted.provider.includes("/") && modelSwitchKeepsContext(running.provider, wanted.provider);
     result.push({
       description: `provider ${running.provider ?? "unknown"} → ${wanted.provider}`,
-      inPlace: apply !== null,
-      apply: apply ?? {},
+      inPlace,
+      apply: inPlace
+        ? { modelId: wanted.provider.slice(providerFamily(wanted.provider).length + 1) }
+        : {},
     });
   }
   if (wanted.modeId !== undefined && wanted.modeId !== running.modeId) {
@@ -82,14 +95,12 @@ function changes(wanted: AgentConfig, running: AgentConfig): Change[] {
       apply: { thinkingOptionId: wanted.thinkingOptionId },
     });
   }
-  if (
-    wanted.featureValues !== undefined &&
-    !sameValues(wanted.featureValues, running.featureValues ?? {})
-  ) {
+  const features = changedFeatures(wanted.featureValues, running.featureValues);
+  if (Object.keys(features).length > 0) {
     result.push({
-      description: "features changed",
+      description: `features ${Object.keys(features).join(", ")}`,
       inPlace: true,
-      apply: { featureValues: wanted.featureValues },
+      apply: { featureValues: features },
     });
   }
   return result;
@@ -112,43 +123,58 @@ export function planSeat(
   if (diff.every((change) => change.inPlace)) {
     return { kind: "adjust", reason, apply: Object.assign({}, ...diff.map((c) => c.apply)) };
   }
-  // The most recent earlier agent the spec fits, give or take in-place changes, still has the
-  // context of its time in the seat. Switching A → B → A brings the A agent back.
+  // The most recent earlier agent that runs the spec as it stands still has the context of its
+  // time in the seat, so switching A → B → A brings the A agent back. Only an exact fit returns:
+  // the return brief starts a turn, and that turn must not run under an old mode.
   const earlier = (seat.pastOccupants ?? [])
     .toReversed()
-    .find(
-      (past) =>
-        past.generation === generation &&
-        changes(wanted, past.config).every((change) => change.inPlace),
-    );
+    .find((past) => past.generation === generation && changes(wanted, past.config).length === 0);
   if (earlier) return { kind: "revive", reason, occupant: earlier };
   return { kind: "replace", reason };
 }
 
-// What the next mail to the seat will do to its agent, or null while the agent fits the seat.
-export function seatPendingChange(seat: Parameters<typeof planSeat>[0]): string | null {
+export function pendingPlan(seat: Parameters<typeof planSeat>[0]): PendingPlan {
   const plan = planSeat(seat);
-  switch (plan.kind) {
-    case "keep":
-      return null;
-    case "adjust":
-      return `${plan.reason}, in place`;
-    case "revive":
-      return `${plan.reason}, back to occupant ${plan.occupant.number}`;
-    case "replace":
-      return plan.reason;
-  }
+  return plan.kind === "keep" ? null : { kind: plan.kind, reason: plan.reason };
 }
 
-// The stamp an agent carries after an in-place change: what it ran, with the seat's fields over it.
-// A seat that names only its provider keeps the model the agent runs.
+// The stamp an agent carries after an in-place change: what Swarm gave it before, with the seat's
+// fields over it. A seat that names only its provider keeps the model the agent runs.
 export function adjustedConfig(wanted: AgentConfig, running: AgentConfig): AgentConfig {
   const config: AgentConfig = { ...running };
-  for (const [key, value] of Object.entries(wanted) as Array<[keyof AgentConfig, never]>) {
-    if (value !== undefined) config[key] = value;
+  if (wanted.provider !== undefined && !providerMatches(wanted.provider, running.provider)) {
+    config.provider = wanted.provider;
   }
-  if (wanted.provider && !wanted.provider.includes("/") && running.provider) {
-    config.provider = running.provider;
+  if (wanted.modeId !== undefined) config.modeId = wanted.modeId;
+  if (wanted.thinkingOptionId !== undefined) config.thinkingOptionId = wanted.thinkingOptionId;
+  if (wanted.featureValues !== undefined) {
+    config.featureValues = { ...running.featureValues, ...wanted.featureValues };
   }
   return config;
+}
+
+// What a new agent boots with: the seat's spec, nothing inherited, so a field the seat leaves out
+// or clears gets the provider's default. A bare provider takes the model the previous agent ran,
+// since Paseo creates agents from "provider/model".
+export function bootConfig(wanted: AgentConfig, previous: AgentConfig): AgentConfig {
+  const config: AgentConfig = Object.fromEntries(
+    Object.entries(wanted).filter(([, value]) => value !== undefined),
+  );
+  if (!config.provider) config.provider = previous.provider;
+  else if (providerMatches(config.provider, previous.provider)) config.provider = previous.provider;
+  return config;
+}
+
+// Settings a seat edit drops when it changes the provider, unless the edit sets them: modes,
+// thinking options, and feature values are defined per provider, and thinking options and
+// feature values per model too, unless a model switch on that provider is known to be safe.
+export function settingsLostOnProviderChange(
+  from: string | undefined,
+  to: string,
+): Array<"modeId" | "thinkingOptionId" | "featureValues"> {
+  if (!from || providerFamily(from) !== providerFamily(to)) {
+    return ["modeId", "thinkingOptionId", "featureValues"];
+  }
+  if (providerMatches(to, from) || modelSwitchKeepsContext(from, to)) return [];
+  return ["thinkingOptionId", "featureValues"];
 }

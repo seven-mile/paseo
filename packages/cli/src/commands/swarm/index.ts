@@ -24,7 +24,7 @@ interface Seat {
   role: string;
   agentConfig?: AgentConfig;
   occupant?: { number: number; config: AgentConfig };
-  stale: string | null;
+  pending: { kind: string; reason: string } | null;
 }
 
 interface SeatRow {
@@ -35,6 +35,7 @@ interface SeatRow {
   wants: string;
   applied: string;
   pending: string;
+  source: Seat;
 }
 
 interface HistoryEntryRow {
@@ -61,7 +62,8 @@ function toSeatRow(seat: Seat): SeatRow {
     agent: seat.paseoAgentId,
     wants: configSummary(seat.agentConfig),
     applied: configSummary(seat.occupant?.config),
-    pending: seat.stale ?? "-",
+    pending: seat.pending ? `${seat.pending.kind}: ${seat.pending.reason}` : "-",
+    source: seat,
   };
 }
 
@@ -80,6 +82,8 @@ const seatSchema: OutputSchema<SeatRow> = {
       color: (value) => (value === "-" ? undefined : "yellow"),
     },
   ],
+  // JSON and YAML get the seat as the daemon returns it, with its plan as { kind, reason }.
+  serialize: (row) => row.source,
 };
 
 const historySchema: OutputSchema<HistoryEntryRow> = {

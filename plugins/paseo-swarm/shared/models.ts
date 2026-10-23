@@ -21,8 +21,9 @@ export const agentConfigSchema = z.object({
 });
 export type AgentConfig = z.infer<typeof agentConfigSchema>;
 
-// The Paseo agent currently bound to a seat, stamped with the config it runs: what it booted with,
-// plus changes made in place since, from a seat edit or from its own chat.
+// The Paseo agent currently bound to a seat, stamped with the config Swarm last gave it: what it
+// booted with, plus seat edits applied in place since. Changes made in the agent's own chat are
+// drift and never reach the stamp.
 export const occupantSchema = z.object({
   number: z.number().int().positive(),
   config: agentConfigSchema,

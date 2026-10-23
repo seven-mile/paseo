@@ -13,7 +13,7 @@ import { flushMailbox, forgetRunningTurns, MAX_DELIVERY_ATTEMPTS } from "../serv
 import { registerOperations } from "../server/operations";
 import { store } from "../server/state";
 import { mailboxMessageStatus, type AgentRecord } from "../shared/models";
-import { planSeat } from "../server/seat-policy";
+import { bootConfig, planSeat, settingsLostOnProviderChange } from "../server/seat-policy";
 import {
   appendActivityRpc,
   createTaskRpc,
@@ -254,7 +254,7 @@ function seat(id: string): AgentRecord {
 }
 
 interface Seats {
-  seats: Array<AgentRecord & { stale: string | null }>;
+  seats: Array<AgentRecord & { pending: { kind: string; reason: string } | null }>;
 }
 
 test("the seat policy keeps, adjusts, revives, or replaces an agent by what a change costs", () => {
@@ -301,7 +301,7 @@ test("the seat policy keeps, adjusts, revives, or replaces an agent by what a ch
   };
   const moved = {
     ...supervisor,
-    agentConfig: { provider: "slow/large", modeId: "plan" },
+    agentConfig: { provider: "slow/large", modeId: "default" },
     occupant: { ...supervisor.occupant!, number: 2, config: { provider: "fast/small" } },
     pastOccupants: [earlier],
   };
@@ -310,6 +310,53 @@ test("the seat policy keeps, adjusts, revives, or replaces an agent by what a ch
     planSeat({ ...moved, generation: 1, occupant: { ...moved.occupant, generation: 1 } }).kind,
     "replace",
     "no agent from before a reset comes back",
+  );
+  // Its return brief starts a turn, so an earlier agent that would need another mode first
+  // does not come back.
+  assert.equal(
+    planSeat({ ...moved, agentConfig: { provider: "slow/large", modeId: "plan" } }).kind,
+    "replace",
+  );
+
+  // Feature values are managed per key: keys the seat leaves out are not compared.
+  const featured = {
+    ...supervisor,
+    occupant: { ...supervisor.occupant!, config: { featureValues: { fast: true, web: false } } },
+  };
+  assert.equal(planSeat({ ...featured, agentConfig: { featureValues: {} } }).kind, "keep");
+  assert.equal(
+    planSeat({ ...featured, agentConfig: { featureValues: { fast: true } } }).kind,
+    "keep",
+  );
+  assert.deepEqual(planSeat({ ...featured, agentConfig: { featureValues: { web: true } } }), {
+    kind: "adjust",
+    reason: "features web",
+    apply: { featureValues: { web: true } },
+  });
+});
+
+test("a new agent boots from the seat alone, and a provider change drops settings it cannot keep", () => {
+  // A cleared field is not brought back from the previous agent; a bare provider keeps its model.
+  assert.deepEqual(
+    bootConfig(
+      { provider: "slow" },
+      { provider: "slow/large", modeId: "default", thinkingOptionId: "high" },
+    ),
+    { provider: "slow/large" },
+  );
+  assert.deepEqual(bootConfig({}, { provider: "slow/large", modeId: "default" }), {
+    provider: "slow/large",
+  });
+  assert.deepEqual(settingsLostOnProviderChange("claude/opus", "codex/gpt"), [
+    "modeId",
+    "thinkingOptionId",
+    "featureValues",
+  ]);
+  assert.deepEqual(settingsLostOnProviderChange("claude/opus", "claude/sonnet"), []);
+  assert.deepEqual(
+    settingsLostOnProviderChange("opencode/anthropic/opus", "opencode/openai/gpt"),
+    ["thinkingOptionId", "featureValues"],
+    "another vendor behind OpenCode gets its own thinking variants and features",
   );
 });
 
@@ -332,7 +379,10 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
     { seats: ["lead"], agentConfig: { provider: "fast/small", modeId: "plan" }, dryRun: true },
     fake.context,
   );
-  assert.equal(preview.seats[0].stale, "provider slow/large → fast/small, mode default → plan");
+  assert.deepEqual(preview.seats[0].pending, {
+    kind: "replace",
+    reason: "provider slow/large → fast/small, mode default → plan",
+  });
   assert.equal(seat(supervisor.id).agentConfig?.provider, "slow/large", "a dry run saves nothing");
 
   // Edited back before any mail arrives, the seat is current again and nothing happened.
@@ -367,7 +417,7 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   assert.equal(fake.creations.length, 0, "a seat with no mail is not replaced");
   const listed = await call<Seats>(seatListRpc, {}, fake.context);
   assert.equal(
-    listed.seats.find((entry) => entry.id === supervisor.id)?.stale,
+    listed.seats.find((entry) => entry.id === supervisor.id)?.pending?.reason,
     "provider slow/large → fast/small, mode default → build",
   );
 
@@ -430,6 +480,8 @@ test("an in-place change keeps the agent and its context", async (t) => {
 
   // A mode picked in the agent's own chat is drift the seat tolerates.
   fake.runtime.get(supervisor.paseoAgentId)!.currentModeId = "chat-picked";
+  const listed = await call<Seats>(seatListRpc, {}, fake.context);
+  assert.equal(listed.seats[0].pending, null, "drift alone does not change the plan");
   await call(
     seatUpdateRpc,
     { seats: ["lead"], agentConfig: { thinkingOptionId: "low" } },
@@ -470,11 +522,11 @@ test("moving a seat back brings back its earlier agent, or a new one if that can
 
   const preview = await call<Seats>(
     seatUpdateRpc,
-    { seats: ["lead"], agentConfig: { provider: "slow/large", modeId: "plan" }, dryRun: true },
+    { seats: ["lead"], agentConfig: { provider: "slow/large", modeId: "default" }, dryRun: true },
     fake.context,
   );
-  assert.match(preview.seats[0].stale ?? "", /back to occupant 1$/);
-  await move("slow/large", "plan");
+  assert.equal(preview.seats[0].pending?.kind, "revive");
+  await move("slow/large", "default");
   await send("Back on A");
   const back = seat(supervisor.id);
   assert.equal(back.paseoAgentId, supervisor.paseoAgentId);
@@ -485,15 +537,18 @@ test("moving a seat back brings back its earlier agent, or a new one if that can
   );
   assert.equal(fake.runtime.get("replacement-1")!.archived, true);
   assert.equal(fake.runtime.get(supervisor.paseoAgentId)!.archived, false);
-  assert.match(fake.sends.at(-1)!.text, /occupant 1 of the Swarm seat lead again/);
-  // The returning agent is busy with its brief; the mode change and the mail follow its turn.
-  assert.equal(seat(supervisor.id).occupant?.config.modeId, "default");
-  await flushMailbox(fake.context);
-  assert.deepEqual(fake.applied.at(-1), {
-    agentId: supervisor.paseoAgentId,
-    config: { modeId: "plan" },
-  });
-  assert.match(fake.sends.at(-1)!.text, /Back on A/);
+  // The return brief goes first; "On B", which occupant 2 never finished, moves over with the mail.
+  assert.deepEqual(
+    fake.sends
+      .slice(-3)
+      .map((entry) => [entry.agentId, /seat lead again|On B|Back on A/.exec(entry.text)?.[0]]),
+    [
+      [supervisor.paseoAgentId, "seat lead again"],
+      [supervisor.paseoAgentId, "On B"],
+      [supervisor.paseoAgentId, "Back on A"],
+    ],
+  );
+  assert.equal(fake.applied.length, 0);
   assert.equal(fake.creations.length, 1);
 
   // An earlier agent whose session cannot resume is a miss: the seat gets a new agent.
@@ -547,13 +602,10 @@ test("a stale agent finishes its turn before it is replaced, and unfinished mail
   const replaced = seat(worker.id);
   assert.equal(replaced.paseoAgentId, "replacement-1");
   assert.equal(replaced.occupant?.generation, 1);
-  // A reset on the same provider keeps what the previous agent ran.
+  // A new agent boots from the seat alone: the bare provider keeps its model, and the thinking
+  // option the seat never named is left to the provider's default.
   assert.equal(fake.creations[0].config.provider, "slow/large");
-  assert.deepEqual(replaced.occupant?.config, {
-    provider: "slow/large",
-    modeId: "default",
-    thinkingOptionId: "high",
-  });
+  assert.deepEqual(replaced.occupant?.config, { provider: "slow/large", modeId: "default" });
   assert.deepEqual(
     fake.sends
       .slice(1)
@@ -578,7 +630,7 @@ test("a cancelled reset and a failed replacement leave the seat's agent in place
     { seats: ["lead"], cancel: true },
     fake.context,
   );
-  assert.equal(cancelled.seats[0].stale, null);
+  assert.equal(cancelled.seats[0].pending, null);
 
   await call(seatResetRpc, { seats: ["lead"] }, fake.context);
   fake.failCreate("provider unavailable");
@@ -643,7 +695,7 @@ test("a seat whose agent status cannot be read is held, and an edit reports the 
     fake.context,
   );
   assert.equal(updated.seats[0].paseoAgentId, "replacement-1");
-  assert.equal(updated.seats[0].stale, null);
+  assert.equal(updated.seats[0].pending, null);
 });
 
 test("a seat from before seats existed is stamped with what its agent runs", async (t) => {
@@ -661,7 +713,7 @@ test("a seat from before seats existed is stamped with what its agent runs", asy
     { seats: ["lead"], agentConfig: { provider: "slow" } },
     fake.context,
   );
-  assert.equal(result.seats[0].stale, null, "the live agent already runs the wanted provider");
+  assert.equal(result.seats[0].pending, null, "the live agent already runs the wanted provider");
   assert.deepEqual(seat(supervisor.id).occupant?.config, {
     provider: "slow/large",
     modeId: "default",

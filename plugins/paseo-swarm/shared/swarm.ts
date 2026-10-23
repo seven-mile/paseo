@@ -12,7 +12,12 @@ import {
 } from "./models";
 
 // A seat with why its occupant is stale, or null while it is current.
-export const seatSchema = agentRecordSchema.extend({ stale: z.string().nullable() });
+// A seat with the plan its next mail carries out, or null when its agent fits the seat.
+export const seatSchema = agentRecordSchema.extend({
+  pending: z
+    .object({ kind: z.enum(["adjust", "revive", "replace"]), reason: z.string() })
+    .nullable(),
+});
 
 export const boardReadRpc = defineRpc({
   name: "swarm.board.read",

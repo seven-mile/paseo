@@ -96,7 +96,7 @@ const rosterSchema = z.object({
       workspaceId: z.string().nullable(),
       retired: z.boolean(),
       // Why the seat's agent will be replaced when mail next wakes it. Absent on older hosts.
-      stale: z.string().nullable().optional(),
+      pending: z.object({ kind: z.string(), reason: z.string() }).nullable().optional(),
     }),
   ),
 });
@@ -807,7 +807,7 @@ function RosterEntry({
   const metadata = [
     t(`swarm.roles.${agent.roleClass}`),
     statusLabel,
-    agent.stale ? t("swarm.sidebar.staleSeat", { reason: agent.stale }) : null,
+    agent.pending ? t("swarm.sidebar.pendingSeat", { reason: agent.pending.reason }) : null,
   ]
     .filter(Boolean)
     .join(", ");
