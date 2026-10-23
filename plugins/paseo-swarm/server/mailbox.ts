@@ -1,8 +1,10 @@
 import type { PluginHookContext } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
 import type { MailboxMessage, MailboxStatus, MessageKind, SwarmState } from "../shared/models";
-import { mailboxMessageStatus } from "../shared/models";
+import { agentQualifiedName, mailboxMessageStatus } from "../shared/models";
 import { turnDigest } from "./prompts";
+import { planSeat } from "./seat-policy";
+import { occupantRunning, reconcileSeat } from "./seats";
 import { store, type SwarmChange } from "./state";
 
 // Send failures before a message stops being retried.
@@ -211,6 +213,49 @@ async function nextDelivery(queue: MailboxMessage[]): Promise<Delivery | null> {
   return digestDelivery(batched, batchId);
 }
 
+function queuedFor(recipientAgentId: string): MailboxMessage[] {
+  return store
+    .read()
+    .messages.filter(
+      (message) =>
+        message.recipientAgentId === recipientAgentId && mailboxMessageStatus(message) === "queued",
+    );
+}
+
+// Mail is what wakes a seat, so this is where a seat's agent is brought in line with the seat:
+// changed in place, swapped for an earlier or a new agent, never woken while it does not fit.
+// A running agent finishes its turn first. Returns the queue to deliver, or null to hold it.
+// Replacement puts the rows the old agent never finished back in the queue, ahead of the rest.
+async function syncSeat(
+  queue: MailboxMessage[],
+  context: MailboxContext,
+): Promise<MailboxMessage[] | null> {
+  const [head] = queue;
+  const seat = store.read().agents.find((agent) => agent.id === head.recipientAgentId);
+  if (!seat || seat.retired || planSeat(seat).kind === "keep") return queue;
+  // The mail stays queued without spending send attempts, so a provider that is down for a
+  // while does not fail the message; every later flush tries again.
+  const hold = async (problem: string, error: unknown) => {
+    const detail = error instanceof Error ? error.message : String(error);
+    await settle([head], () => ({
+      lastError: `${problem} seat ${agentQualifiedName(seat)}: ${detail}`,
+    }));
+    return null;
+  };
+  try {
+    // Paseo's own status, not runningAgents: a turn end Swarm missed must not hold the seat forever.
+    if (await occupantRunning(seat, context)) return null;
+  } catch (error) {
+    return hold("Could not check the agent in", error);
+  }
+  try {
+    await reconcileSeat(seat, context);
+  } catch (error) {
+    return hold("Could not update the agent in", error);
+  }
+  return queuedFor(seat.id);
+}
+
 let flushing: Promise<unknown> = Promise.resolve();
 
 function serialized<T>(work: () => Promise<T>): Promise<T> {
@@ -231,6 +276,9 @@ export function flushMailbox(context: MailboxContext): Promise<void> {
       queues.set(message.recipientAgentId, queue);
     }
     for (let queue of queues.values()) {
+      const synced = await syncSeat(queue, context);
+      if (!synced) continue;
+      queue = synced;
       while (queue.length > 0) {
         const delivery = await nextDelivery(queue);
         if (!delivery) break;

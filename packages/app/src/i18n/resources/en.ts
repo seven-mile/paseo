@@ -19,6 +19,7 @@ export const en = {
       addWorker: "Add worker",
       noWorkers: "No workers yet",
       addWorkerUnder: "Add worker under {{name}}",
+      pendingSeat: "Changes at its next Swarm message ({{reason}})",
       tasksFor: "Tasks for {{name}}",
       loadingAgents: "Loading agents…",
       planners: "Planners",

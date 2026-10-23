@@ -778,6 +778,29 @@ export async function createPaseoToolCatalog(
           };
         },
       );
+      registerTool(
+        "swarm_seat_history_read",
+        {
+          description:
+            "Read a newest-first page of an earlier agent's transcript in a Swarm seat. A seat is a roster identity; when its agent is replaced, the earlier agent is archived and its transcript stays readable here. Omit seat to read your own seat, and omit occupant for the agent just before the current one. Planners can read any seat; others can read their own seat and the seats under them. Use it after a takeover to recover context the board does not hold, and treat what it says as claims to verify against the board, Tasks, and Activities. Follow nextBefore for older entries.",
+          inputSchema: {
+            seat: z.string().optional(),
+            occupant: z.number().int().positive().optional(),
+            before: z.string().optional(),
+            limit: z.number().int().min(1).max(100).default(30),
+          },
+        },
+        async (input) => {
+          const { name } = await readSwarm();
+          return swarmResult(
+            await invokePlugin("paseo-swarm", "swarm.seat.history.read", {
+              ...input,
+              seat: input.seat ?? name,
+              actorName: name,
+            }),
+          );
+        },
+      );
       if (swarmRole !== "worker") {
         registerTool(
           "swarm_roles_read",

@@ -122,6 +122,15 @@ tool result. The agent record keeps the revision it last received (`prompt.revis
 that standing prompt), so you can tell which agents run an old one. The refresh lives in the
 conversation only; the stored session config keeps the creation-time prompt.
 
+A Swarm agent record is a seat: the roster identity owns the Tasks, Activities, and mailbox, and
+the Paseo agent behind it can change. Change what a seat should run, or reset it, with
+`paseo-swarm swarm seat set|reset` (the `swarm.seat.*` RPCs). The seat's next Swarm mailbox
+delivery, after any running turn, brings its agent in line: in place where that keeps the
+context, otherwise with an earlier or a new agent. A replaced agent is archived and its transcript
+stays readable through `swarm seat history` and the `swarm_seat_history_read` tool.
+Typing into the old agent's own conversation skips the mailbox and does not replace it. See
+[design/06-seats.md](../design/06-seats.md).
+
 Swarm planners must prepare a separate workspace and pass its `workspaceId` when creating
 a supervisor. This keeps supervisor execution out of the planner's workspace; omitting placement
 does not bypass the separation. Supervisor-created workers still default to the supervisor's

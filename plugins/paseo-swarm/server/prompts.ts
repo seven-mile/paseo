@@ -132,6 +132,53 @@ export function initialPrompt({ pwa, agent, brief }: InitialPromptInput): string
   return [...identityAndAgreement({ pwa, agent }), "", "", `Orientation: ${brief}`].join("\n");
 }
 
+export interface TakeoverBriefInput {
+  seat: string;
+  occupant: number;
+  previous: number;
+  reason: string;
+  manager: string | null;
+}
+
+// The orientation brief of an agent that replaces a stale occupant of the same seat.
+export function takeoverBrief({
+  seat,
+  occupant,
+  previous,
+  reason,
+  manager,
+}: TakeoverBriefInput): string {
+  return [
+    `You are occupant ${occupant} of the Swarm seat ${seat}. Occupant ${previous} was replaced (${reason}); its Paseo session is closed.`,
+    "Your name, role, reporting line, Tasks, Activities, and mailbox carry over unchanged. The board is the source of truth: start with swarm_board_read and read the Tasks you manage or work on.",
+    "swarm_seat_history_read pages through earlier occupants' transcripts, newest first. Read them when the board does not explain where the work stands. Treat what they say, and the Activities they wrote, as claims to check against the board and the workspace, not as facts.",
+    "The message that follows is what woke this seat; handle it after you have oriented yourself.",
+    manager
+      ? `End your first turn with a team message to ${manager} that says what you believe you own, what you are waiting on, and anything in the earlier transcripts you could not reconcile.`
+      : "End your first turn by recording what you believe you own, what you are waiting on, and anything in the earlier transcripts you could not reconcile, as an Activity on the most relevant Task.",
+  ].join(" ");
+}
+
+export interface ReturnBriefInput {
+  seat: string;
+  occupant: number;
+  covering: number;
+  reason: string;
+}
+
+// Sent to an earlier occupant that the seat brings back. Its session resumes where it left off,
+// so it is told who held the seat meanwhile and that the board may have moved on.
+export function returnBrief({ seat, occupant, covering, reason }: ReturnBriefInput): string {
+  return [
+    "<paseo-swarm-seat-return>",
+    `You are occupant ${occupant} of the Swarm seat ${seat} again (${reason}). Occupant ${covering} held the seat since you last worked in it.`,
+    "Your memory of the work may be out of date. Read the board with swarm_board_read before acting.",
+    `Where the board does not explain what changed, page occupant ${covering}'s transcript with swarm_seat_history_read and treat it as claims to check, not facts.`,
+    "Any message that follows is what woke this seat.",
+    "</paseo-swarm-seat-return>",
+  ].join("\n");
+}
+
 // The standing context without the one-time orientation brief. Its hash is the
 // agent's prompt revision: it changes when the PWA or the framework text changes.
 export function standingPrompt(input: StandingPromptInput): string {

@@ -1094,6 +1094,42 @@ describe("Swarm MCP coordination", () => {
     }
   });
 
+  it("reads seat history as the caller, defaulting to the caller's own seat", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const actor = {
+      paseoAgentId: "worker-agent",
+      qualifiedName: "planner.supervisor.scout",
+      name: "scout",
+      roleClass: "worker",
+      retired: false,
+    };
+    const history = { seat: actor.qualifiedName, occupant: 1, entries: [], nextBefore: null };
+    const invokePlugin = vi.fn(async (_pluginId: string, method: string) =>
+      method === "swarm.board.read" ? { agents: [actor] } : history,
+    );
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      callerAgentId: actor.paseoAgentId,
+      invokePlugin,
+      logger: createTestLogger(),
+    });
+    try {
+      const result = await registeredTool(server, "swarm_seat_history_read").handler({
+        limit: 10,
+      });
+      expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.seat.history.read", {
+        limit: 10,
+        seat: actor.qualifiedName,
+        actorName: actor.qualifiedName,
+      });
+      expect(result).toMatchObject({ structuredContent: history });
+    } finally {
+      await server.close();
+    }
+  });
+
   it.each([
     ["alpha.team", "review", "alpha.team.review"],
     ["alpha.team.scout", "review", "alpha.team.review"],

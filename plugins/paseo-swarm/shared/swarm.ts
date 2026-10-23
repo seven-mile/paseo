@@ -11,12 +11,20 @@ import {
   taskSchema,
 } from "./models";
 
+// A seat with why its occupant is stale, or null while it is current.
+// A seat with the plan its next mail carries out, or null when its agent fits the seat.
+export const seatSchema = agentRecordSchema.extend({
+  pending: z
+    .object({ kind: z.enum(["adjust", "revive", "replace"]), reason: z.string() })
+    .nullable(),
+});
+
 export const boardReadRpc = defineRpc({
   name: "swarm.board.read",
   input: z.object({ projectId: z.string().min(1).optional() }),
   output: z.object({
     version: z.literal(1),
-    agents: z.array(agentRecordSchema),
+    agents: z.array(seatSchema),
     tasks: z.array(taskSchema),
     activities: z.array(activitySchema),
     statuses: z.array(z.string()).optional(),
@@ -209,5 +217,63 @@ export const mailboxReadRpc = defineRpc({
   }),
   output: z.object({
     messages: z.array(mailboxMessageSchema.extend({ status: mailboxStatusSchema })),
+  }),
+});
+
+export const seatListRpc = defineRpc({
+  name: "swarm.seat.list",
+  input: z.object({
+    projectId: z.string().min(1).optional(),
+    includeRetired: z.boolean().default(false),
+  }),
+  output: z.object({ seats: z.array(seatSchema) }),
+});
+
+// Seats are named by roster id or qualified name. Fields set to null are cleared.
+const seatReferencesSchema = z.array(z.string().min(1)).min(1);
+
+export const seatUpdateRpc = defineRpc({
+  name: "swarm.seat.update",
+  input: z.object({
+    seats: seatReferencesSchema,
+    agentConfig: z.object({
+      provider: z.string().min(1).nullable().optional(),
+      modeId: z.string().min(1).nullable().optional(),
+      thinkingOptionId: z.string().min(1).nullable().optional(),
+      featureValues: z.record(z.string(), z.unknown()).nullable().optional(),
+    }),
+    dryRun: z.boolean().default(false),
+  }),
+  output: z.object({ seats: z.array(seatSchema) }),
+});
+
+export const seatResetRpc = defineRpc({
+  name: "swarm.seat.reset",
+  input: z.object({
+    seats: seatReferencesSchema,
+    // Withdraws a Reset that has not taken effect yet.
+    cancel: z.boolean().default(false),
+    dryRun: z.boolean().default(false),
+  }),
+  output: z.object({ seats: z.array(seatSchema) }),
+});
+
+export const seatHistoryReadRpc = defineRpc({
+  name: "swarm.seat.history.read",
+  input: z.object({
+    seat: z.string().min(1),
+    // Set when an agent reads: planners read any seat, others their own and the seats under them.
+    actorName: z.string().min(1).optional(),
+    // A past occupant's number; defaults to the most recent one.
+    occupant: z.number().int().positive().optional(),
+    before: z.string().min(1).optional(),
+    limit: z.number().int().positive().max(200).default(40),
+  }),
+  output: z.object({
+    seat: z.string(),
+    occupant: z.number().int().positive(),
+    paseoAgentId: z.string(),
+    entries: z.array(z.object({ type: z.string(), text: z.string() })),
+    nextBefore: z.string().nullable(),
   }),
 });
