@@ -12,7 +12,14 @@ import {
   mailboxMessageStatus,
   providerFamily,
 } from "../shared/models";
-import { initialPrompt, promptRevision, returnBrief, takeoverBrief } from "./prompts";
+import {
+  initialPrompt,
+  promptRevision,
+  refreshedPrompt,
+  returnBrief,
+  standingPrompt,
+  takeoverBrief,
+} from "./prompts";
 import { readPwa } from "./pwa";
 import {
   adjustedConfig,
@@ -94,6 +101,7 @@ export async function observedConfig(
 // An agent Paseo no longer has runs no turn; a failed lookup throws, so the caller holds the seat
 // rather than replacing an agent that may be mid-turn.
 export async function occupantRunning(seat: AgentRecord, context: SeatContext): Promise<boolean> {
+  if (seat.paseoAgentId === null) return false;
   const snapshot = (await context.paseo.agents.ref(seat.paseoAgentId).refresh())?.agent;
   return snapshot?.status === "running";
 }
@@ -136,6 +144,14 @@ async function retireOldAgent(paseoAgentId: string, context: SeatContext): Promi
   }
 }
 
+// The Paseo agent in a seat that has one; reserved seats have none until their first mail.
+export function occupantId(seat: AgentRecord): string {
+  if (seat.paseoAgentId === null) {
+    throw new Error(`Seat ${agentQualifiedName(seat)} has no agent yet`);
+  }
+  return seat.paseoAgentId;
+}
+
 function nextOccupantNumber(seat: AgentRecord): number {
   const numbers = (seat.pastOccupants ?? []).map((past) => past.number);
   return Math.max(currentOccupant(seat).number, ...numbers) + 1;
@@ -145,7 +161,7 @@ function nextOccupantNumber(seat: AgentRecord): number {
 // finished go back to the queue, and it is archived once nothing points at it.
 async function rebind(
   stale: AgentRecord,
-  next: { paseoAgentId: string; occupant: Occupant; prompt?: AgentRecord["prompt"] },
+  next: { paseoAgentId: string; occupant: Occupant; prompt: AgentRecord["prompt"] | null },
   reason: string,
   context: SeatContext,
 ): Promise<AgentRecord> {
@@ -155,9 +171,10 @@ async function rebind(
     if (!seat) throw new Error(`Swarm seat disappeared during replacement: ${stale.id}`);
     const retired: PastOccupant = {
       ...currentOccupant(seat),
-      paseoAgentId: seat.paseoAgentId,
+      paseoAgentId: occupantId(seat),
       retiredAt: next.occupant.boundAt,
       reason,
+      ...(seat.prompt ? { prompt: seat.prompt } : {}),
     };
     result = {
       ...seat,
@@ -167,19 +184,19 @@ async function rebind(
         ...(seat.pastOccupants ?? []).filter((past) => past.paseoAgentId !== next.paseoAgentId),
         retired,
       ],
-      ...(next.prompt ? { prompt: next.prompt } : {}),
+      prompt: next.prompt ?? undefined,
       updatedAt: next.occupant.boundAt,
     };
     return [
       { op: "put", collection: "agents", record: result },
-      ...requeueUnconsumed(seat.paseoAgentId).map((record) => ({
+      ...requeueUnconsumed(occupantId(seat)).map((record) => ({
         op: "put" as const,
         collection: "messages" as const,
         record,
       })),
     ];
   });
-  await retireOldAgent(stale.paseoAgentId, context);
+  await retireOldAgent(occupantId(stale), context);
   return result;
 }
 
@@ -216,7 +233,7 @@ async function replaceOccupant(
   if (stale.workspaceId) {
     created = await context.paseo.workspaces.ref(stale.workspaceId).agents.create(create);
   } else {
-    const cwd = (await context.paseo.agents.ref(stale.paseoAgentId).refresh())?.agent.cwd;
+    const cwd = (await context.paseo.agents.ref(occupantId(stale)).refresh())?.agent.cwd;
     if (!cwd) throw new Error(`Seat ${agentQualifiedName(stale)} has no workspace to start in`);
     created = await context.paseo.agents.create({ ...create, cwd });
   }
@@ -233,6 +250,43 @@ async function replaceOccupant(
 // with its context. The return brief is the probe: if Paseo cannot resume that session the send
 // fails, and the caller starts a new agent instead. A session that resumes but fails later, during
 // the return turn, is not caught here; a reset gives the seat a new agent.
+// Starts the first agent of a reserved seat, in the seat's workspace with the role prompt from the
+// current PWA. The mail that woke the seat is its first instruction.
+async function startOccupant(seat: AgentRecord, context: SeatContext): Promise<void> {
+  const config = bootConfig(seat.agentConfig ?? {}, {});
+  if (!config.provider) {
+    throw new Error(`Seat ${agentQualifiedName(seat)} has no provider to start an agent with`);
+  }
+  if (!seat.workspaceId) throw new Error(`Seat ${agentQualifiedName(seat)} has no workspace`);
+  const assembled = assemblePrompt(seat, seat.projectId);
+  const created = await context.paseo.workspaces.ref(seat.workspaceId).agents.create({
+    config: {
+      ...config,
+      provider: config.provider,
+      systemPrompt: standingPrompt({ pwa: assembled.pwa, agent: seat }),
+    },
+    title: seat.name,
+  });
+  const boundAt = now();
+  await store.commit((state) => {
+    const current = state.agents.find((agent) => agent.id === seat.id);
+    if (!current) throw new Error(`Swarm seat disappeared while starting: ${seat.id}`);
+    return [
+      {
+        op: "put",
+        collection: "agents",
+        record: {
+          ...current,
+          paseoAgentId: created.id,
+          occupant: { number: 1, config, generation: current.generation ?? 0, boundAt },
+          prompt: assembled.received,
+          updatedAt: boundAt,
+        },
+      },
+    ];
+  });
+}
+
 async function reviveOccupant(
   stale: AgentRecord,
   past: PastOccupant,
@@ -249,10 +303,11 @@ async function reviveOccupant(
     }),
     { messageId: `seat-return-${stale.id}-${boundAt}` },
   );
-  const { paseoAgentId: _id, retiredAt: _retired, reason: _reason, ...stamp } = past;
+  const { paseoAgentId: _id, retiredAt: _retired, reason: _reason, prompt, ...stamp } = past;
+  // An agent retired before its prompt was recorded counts as stale and gets the current one.
   return rebind(
     stale,
-    { paseoAgentId: past.paseoAgentId, occupant: { ...stamp, boundAt } },
+    { paseoAgentId: past.paseoAgentId, occupant: { ...stamp, boundAt }, prompt: prompt ?? null },
     reason,
     context,
   );
@@ -263,7 +318,7 @@ async function adjustOccupant(
   plan: Extract<SeatPlan, { kind: "adjust" }>,
   context: SeatContext,
 ): Promise<void> {
-  await context.paseo.agents.ref(seat.paseoAgentId).applyConfig(plan.apply);
+  await context.paseo.agents.ref(occupantId(seat)).applyConfig(plan.apply);
   await store.commit((state) => {
     const current = state.agents.find((agent) => agent.id === seat.id);
     if (!current || current.paseoAgentId !== seat.paseoAgentId) return [];
@@ -279,12 +334,49 @@ async function adjustOccupant(
   });
 }
 
+// An agent whose standing prompt predates the current PWA or plugin gets the current one ahead of
+// its next mail, so an upgrade or a PWA edit reaches running agents without a reset. Best effort:
+// a PWA that cannot be read, or a send that fails, leaves the mail to go out as it is, and the next
+// flush tries again.
+export async function refreshStalePrompt(seat: AgentRecord, context: SeatContext): Promise<void> {
+  if (seat.paseoAgentId === null) return;
+  try {
+    const assembled = assemblePrompt(seat, seat.projectId);
+    if (seat.prompt?.revision === assembled.received.revision) return;
+    await context.paseo.agents
+      .ref(seat.paseoAgentId)
+      .send(refreshedPrompt({ pwa: assembled.pwa, agent: seat, changed: true }), {
+        messageId: `prompt-refresh-${seat.paseoAgentId}-${assembled.received.revision}`,
+        activeTurnBehavior: "steer",
+      });
+    await store.commit((state) => {
+      const current = state.agents.find((agent) => agent.id === seat.id);
+      if (!current || current.paseoAgentId !== seat.paseoAgentId) return [];
+      return [
+        {
+          op: "put",
+          collection: "agents",
+          record: { ...current, prompt: assembled.received, updatedAt: now() },
+        },
+      ];
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[paseo-swarm] Could not refresh the prompt of seat ${agentQualifiedName(seat)}: ${detail}`,
+    );
+  }
+}
+
 // Brings the seat's agent in line with the seat, as planSeat decides. The caller makes sure the
 // current agent is not mid-turn.
 export async function reconcileSeat(seat: AgentRecord, context: SeatContext): Promise<void> {
   const plan = planSeat(seat);
   switch (plan.kind) {
     case "keep":
+      return;
+    case "start":
+      await startOccupant(seat, context);
       return;
     case "adjust":
       await adjustOccupant(seat, plan, context);
@@ -336,7 +428,7 @@ function resolveSeats(references: string[]): AgentRecord[] {
 // Seats made before seats existed carry no stamp and no spec. What the live agent runs stands in
 // for both, once, so a seat edit compares against what actually runs and a new agent keeps it.
 async function withOccupantStamp(seat: AgentRecord, context: SeatContext): Promise<AgentRecord> {
-  if (seat.occupant) return seat;
+  if (seat.occupant || seat.paseoAgentId === null) return seat;
   let config: AgentConfig = {};
   try {
     config = await observedConfig(seat.paseoAgentId, context);
@@ -492,24 +584,30 @@ function entryText(item: { type: string } & Record<string, unknown>): string {
   }
 }
 
-// Pages a past occupant's transcript from Paseo's provider-agnostic timeline, newest first.
-// The occupant is archived, so the daemon reads its history without resuming its session.
+// Pages an occupant's transcript from Paseo's provider-agnostic timeline, newest first: the
+// current one by default, or an earlier one by number. Earlier occupants are archived, and the
+// daemon reads their history without resuming their sessions.
 export async function readSeatHistory(
   input: { seat: string; actorName?: string; occupant?: number; before?: string; limit: number },
   context: SeatContext,
 ): Promise<SeatHistory> {
   const seat = findSeat(input.seat, true);
   if (input.actorName) assertCanReadHistory(seat, input.actorName);
-  const past = seat.pastOccupants ?? [];
+  const occupants: Array<{ number: number; paseoAgentId: string }> = [
+    ...(seat.pastOccupants ?? []),
+    ...(seat.paseoAgentId === null
+      ? []
+      : [{ number: currentOccupant(seat).number, paseoAgentId: seat.paseoAgentId }]),
+  ];
   const occupant =
     input.occupant === undefined
-      ? past.at(-1)
-      : past.find((candidate) => candidate.number === input.occupant);
+      ? occupants.at(-1)
+      : occupants.find((candidate) => candidate.number === input.occupant);
   if (!occupant) {
     throw new Error(
       input.occupant === undefined
-        ? `Seat ${agentQualifiedName(seat)} has no earlier occupants`
-        : `Seat ${agentQualifiedName(seat)} has no earlier occupant ${input.occupant}`,
+        ? `Seat ${agentQualifiedName(seat)} has no agent yet`
+        : `Seat ${agentQualifiedName(seat)} has no occupant ${input.occupant}`,
     );
   }
   const cursor = input.before ? (JSON.parse(input.before) as { epoch: string; seq: number }) : null;

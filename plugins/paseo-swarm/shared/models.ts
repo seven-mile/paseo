@@ -10,7 +10,7 @@ const metadataSchema = z.record(z.string(), z.unknown());
 export const slugNameSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 
 // The agent config a seat wants its Paseo agent to run: the provider and settings that
-// swarm_agent_create takes. `provider` is "provider" or "provider/model". A field left out is
+// swarm_seat_create takes. `provider` is "provider" or "provider/model". A field left out is
 // not compared, so a seat can pin only its provider. server/seat-policy.ts decides what a
 // difference from the running agent costs.
 export const agentConfigSchema = z.object({
@@ -32,18 +32,27 @@ export const occupantSchema = z.object({
 });
 export type Occupant = z.infer<typeof occupantSchema>;
 
+const receivedPromptSchema = z.object({
+  revision: z.string(),
+  pwaRevision: z.string(),
+  receivedAt: z.string(),
+});
+
+// Its standing prompt is kept so that, brought back, it gets the current one only if it differs.
 export const pastOccupantSchema = occupantSchema.extend({
   paseoAgentId: z.string(),
   retiredAt: z.string(),
   reason: z.string(),
+  prompt: receivedPromptSchema.optional(),
 });
 export type PastOccupant = z.infer<typeof pastOccupantSchema>;
 
 // An agent record is a seat: its id, name, role, Tasks and mailbox outlive the Paseo agent
 // in paseoAgentId, which is the current occupant and changes when the occupant goes stale.
+// A reserved seat has no occupant yet; its first mail starts one.
 export const agentRecordSchema = z.object({
   id: z.string(),
-  paseoAgentId: z.string(),
+  paseoAgentId: z.string().nullable(),
   name: slugNameSchema,
   qualifiedName: z.string().optional(),
   aliases: z.array(z.string()),
@@ -53,13 +62,12 @@ export const agentRecordSchema = z.object({
   workspaceId: z.string().nullable(),
   projectId: z.string().optional(),
   // The standing prompt the agent last received, at creation or through a refresh.
-  prompt: z
-    .object({ revision: z.string(), pwaRevision: z.string(), receivedAt: z.string() })
-    .optional(),
+  prompt: receivedPromptSchema.optional(),
   // Desired state. Reset bumps generation, so no agent from before the reset is reused.
   agentConfig: agentConfigSchema.optional(),
   generation: z.number().int().nonnegative().optional(),
-  // Absent on records made before seats; read as occupant 1 with an unknown config.
+  // Absent on a reserved seat, and on records made before seats, which read as occupant 1 with an
+  // unknown config.
   occupant: occupantSchema.optional(),
   pastOccupants: z.array(pastOccupantSchema).optional(),
   retired: z.boolean(),

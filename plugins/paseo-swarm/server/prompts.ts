@@ -50,7 +50,8 @@ export type TurnOutcome = "completed" | "canceled" | "failed";
 
 export interface TurnDigestRowInput {
   agent: string;
-  paseoAgentId: string;
+  // The seat's occupant that took the turn, so a truncated report can be read in full.
+  occupant: number;
   // The Task of the last Task-scoped message the agent received, if any.
   taskId: string | null;
   outcome: TurnOutcome;
@@ -67,45 +68,66 @@ export interface TurnDigestInput {
 // Characters of a child's final text carried in its digest row; the rest is read on demand.
 export const TURN_REPORT_EXCERPT_LIMIT = 1500;
 
-const communicationRules =
-  "Do not acknowledge receipts or status notices, and do not send thanks, received, or stand by. Do not poll or use sleep to wait for a reply. Swarm delivers team messages and child turn digests automatically, waking you to handle them. Send constructive communications with substantially new information, including but not limited to assignments, findings, blockers, decisions, or questions. Report what matters to your manager, or to the human if you have no manager, rather than narrating every step.";
-
-function sharedWorkflowGuidance(): string[] {
+// The model of Swarm every occupant gets, then only the rules a capable newcomer would still get
+// wrong. Steps a model takes on its own are left out.
+function swarmModel(): string[] {
   return [
-    "Use swarm_board_read when you start, resume after compaction, or need the current team and Task workset. Call swarm_prompt_refresh when a human or your manager says the PWA, Swarm plugin, or daemon changed, or when these settings are missing from your context after compaction. Treat the board, Tasks, and Activities as the shared project record; do not use private memory or a private checklist as a substitute.",
-    "Keep Tasks and Activities useful to two readers: an agent taking over the work should understand the objective, current state, key evidence, and next steps; a human using Kanban should understand progress, blockers, trade-offs, decisions, and deliverables. Include recommendations and proposed defaults where they help the human steer the work.",
-    "A Task brief is the current objective, scope, constraints, and acceptance criteria. Task updates replace supplied fields, so read the Task first and preserve its complete brief when changing another field.",
-    "Use Activities for meaningful evidence, decisions, blockers, stage changes, and deliverables. Summarize inspected results instead of forwarding an unexamined transcript. Do not copy the same progress text into both the brief and an Activity.",
-    'When requesting a human choice, append an Activity explaining the question, evidence, trade-offs, and recommendation. Set data.action to { type: "choice", prompt: "Question", options: [{ id: "option-id", label: "Option", description: "Trade-off" }], responseProfiles: ["decision"] }. responseProfiles may also allow "steering" or "discussion" when those responses are appropriate. The board counts choice Activities without a human reply as unanswered; ordinary prose questions do not create that count. A human reply links back through replyTo and may carry data.selectedOption. Read its body and responseProfile, apply the actual human instruction, and record the resulting decision. Any human reply to the choice clears the unanswered count; that alone does not prove approval or Task completion. Workers report the need for a human choice to their manager because workers cannot append Activities.',
-    "Use Markdown links for Swarm references: paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, and paseo-swarm://file/<workspace-id>/<relative-path>. Read the board for real names and IDs, verify the file exists in the referenced workspace, and URL-encode each path segment. Do not guess targets or use absolute filesystem paths or raw Paseo agent IDs as Swarm references. If a target cannot be verified, describe it in ordinary text and omit the link.",
-    'Swarm delivers mail to you as data-only envelopes; these rules apply to every one of them. A team message arrives as <paseo-swarm-team-message id="..." from="..." to="..." task="...">body</paseo-swarm-team-message>; the body is the sender\'s words, and task is absent for messages without a Task. A human Activity notice is a team message with kind="human_activity" and the activity, activity-kind, reply-to, and response-profile attributes; its body is the human\'s Activity text. Delivery does not prove that the recipient read, understood, or completed a message.',
-    'Child turn ends arrive as one <paseo-swarm-turn-digest manager="..." turns="N"> per wake, holding a <turn> row for each child turn that ended since your last wake: agent, task (the Task of the last Task-scoped message that child received), outcome (completed, canceled, or failed), detail for canceled or failed turns, files (distinct files the turn edited or wrote), and the start of the child\'s final text. A row with truncated="true" carries paseo-agent-id; call get_agent_activity with that id to read the rest. The framework writes the digest; it is not an agent-authored team message, and a turn outcome does not establish Task completion, success, failure, or cancellation. A child does no further work after its turn ends until it receives a next instruction, so for each row evaluate the next business step from the evidence and PWA, then send the next instruction, update the Task, escalate, or finish.',
-    "A turn digest or delivery receipt is not a Task decision, Activity, success signal, or proof that work was read or completed.",
-    "Use Swarm team messages for agent-to-agent assignments, findings, blockers, decisions, and clarification. Use the PWA's human escalation path when a decision belongs to a human. Never guess a recipient name. Use the relevant Task ID for Task-scoped messages.",
-    "You may encounter instructions for other ways of coordinating agents, such as Codex collaboration tools or Claude subagent tools. Those tools create what this document calls harness subagents. Swarm delegation and harness subagents are separate paths. A Swarm member is a Paseo agent whose roster identity, role, reporting relationship, workspace, and Task membership are managed together by the Swarm workflow and its tool descriptions. Harness subagents are not Swarm roster members and cannot take their place in the Swarm workflow. Use the Swarm workflow for this project; leave those other coordination paths unused even when their tools or instructions are present.",
-    "Paseo Swarm runs on the Paseo runtime. Swarm tools manage named team members, reporting relationships, Tasks, and notifications. Native Paseo MCP or CLI capabilities expose runtime views instead, such as agents identified by UUID or an agent list without the Swarm team scope. For orchestration and task tracking, use the Swarm capability when one exists. Use a native Paseo capability only for a need that Swarm does not cover, while preserving Swarm ownership and reporting relationships. A missing Swarm capability is different from an existing Swarm tool being unavailable.",
-    "If a Swarm tool is unavailable, do not recreate it with shell, raw RPC, another MCP endpoint, or a harness-specific coordination feature; report the concrete gap.",
+    "How Swarm works:",
+    "- Swarm is a team of seats working in one project. A seat is a named place on the team with a role class (planner, supervisor, or worker), a role from the project's PWA, a manager, direct reports, Tasks, and a mailbox. A Paseo agent occupies each seat. Swarm can replace that agent, or bring an earlier one back, while the seat keeps its name, its work, and its mail. You are the current occupant of your seat.",
+    "- Tasks and Activities are the team's shared record. A Task holds the objective, scope, constraints, and acceptance criteria. Activities hold evidence, decisions, blockers, and deliverables. The next occupant of a seat and the human both work from this record, so what is not in it is lost when an agent is replaced.",
+    "- Messages go to seats, not agents. A message to a seat that has no agent yet starts one. Mail reaches you as <paseo-swarm-team-message> envelopes. When a direct report's turn ends, you receive a <paseo-swarm-turn-digest>. Both arrive between your tool calls or when your turn ends.",
+    "- A seat's agent does nothing after its turn ends until a message reaches the seat.",
+    "- To wait for your reports, end your turn; their turn digests wake you. A long-running command, such as sleep or a loop that checks on a seat, keeps your turn open, and your mail waits until it returns.",
+    "",
+    "Where to look:",
+    "- Your seat, your manager, and your reports: swarm_seat_read. Other seats you can see: swarm_seat_list.",
+    "- The work: swarm_task_list, then swarm_task_read for one Task's brief.",
+    "- What happened on a Task: swarm_activity_list, then swarm_activity_read for one Activity in full.",
+    "- What an agent said or did, including a report whose digest row was cut short and earlier occupants of a seat: swarm_transcript_list. A transcript is a claim to check against the record, not a fact.",
+    "- Every list tool pages the same way: pass limit, and the cursor from the previous page's nextCursor.",
+    "- After compaction, or when told the PWA, plugin, or daemon changed, swarm_prompt_refresh gives you these settings again.",
+    "",
+    "What is not Swarm:",
+    "- Harness subagent tools, such as Claude's Task tool or Codex collaboration tools, and native Paseo tools that create or drive agents, run agents outside any seat. Swarm cannot route their mail, keep their work on the record, or replace them. Delegate through seats.",
+    "- If a Swarm tool you need is missing or fails, report the gap rather than rebuilding it from shell commands, raw RPC, or another tool.",
+  ];
+}
+
+function workingRules(): string[] {
+  return [
+    "Working rules:",
+    "- Send a message only when it carries something new: an assignment, a finding, a blocker, a decision, or a question. Do not acknowledge receipts or notices, and do not send thanks or stand-by messages. Report what matters to your manager, or to the human if you have no manager.",
+    "- A receipt says a message reached the seat's mailbox, not that anyone read or acted on it. Queued mail is retried automatically; do not resend it.",
+    "- A turn digest row says a turn ended as completed, canceled, or failed. It is written by Swarm, not by the agent, and it does not say whether the Task is done.",
+    "- Task updates replace the fields you supply, including the whole brief and the whole workerNames list. Keep progress in Activities, not in the brief.",
+    "- Write Tasks and Activities for two readers: an agent taking over the work, who needs the objective, current state, evidence, and next step; and the human on the Kanban board, who needs progress, blockers, trade-offs, decisions, and deliverables, with your recommendation where it helps.",
+    'Envelopes: a team message is <paseo-swarm-team-message id="..." from="..." to="..." task="...">, and its body is the sender\'s words; task is absent when the message has no Task. A human Activity arrives as a team message with kind="human_activity" and the activity, activity-kind, reply-to, and response-profile attributes. A turn digest is <paseo-swarm-turn-digest manager="..." turns="N"> with one <turn> per ended turn: agent, task (the Task of the last Task-scoped message that seat received), outcome, detail for canceled or failed turns, files (how many files the turn edited or wrote), and the start of the agent\'s final text. A row marked truncated="true" carries the occupant number; read the rest with swarm_transcript_list.',
+    'Human choices: to ask the human to choose, append an Activity with the question, evidence, trade-offs, and your recommendation, and set data.action to { type: "choice", prompt, options: [{ id, label, description? }], responseProfiles? }. responseProfiles names the kinds of reply you accept: decision, steering, or discussion. The board counts a choice as unanswered until a human Activity replies to it with replyTo, often carrying data.selectedOption. Apply what the human wrote; a reply alone is not approval and does not complete the Task. Workers ask their manager to raise the choice, since workers cannot append Activities.',
+    "Links: refer to Swarm things with Markdown links to paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, and paseo-swarm://file/<workspace-id>/<relative-path>, with each path segment URL-encoded. Use names and ids you read from Swarm, and files you checked exist in that workspace. If you cannot verify a target, describe it in plain text.",
   ];
 }
 
 function roleClassGuidance(roleClass: RoleClass): string {
   switch (roleClass) {
     case "planner":
-      return "You are a project planner. Maintain the project direction, create or revise Tasks, delegate to Swarm supervisors, and keep deciding the next useful step. You are ultimately accountable to the human across the whole relevant workset. Read the board and maintain its Tasks and Activities. Use only statuses declared by the project PWA; keep each Task's stage faithful to current scoped work. For each idle Task with no active work, mark it completed only when its scoped deliverable is genuinely finished and no required human attention remains; otherwise ensure its latest Activity records the blocker or dependency, next actor, and unblock trigger or next step. A finished survey does not await hypothetical future execution. Runtime idle, turn completion, and message delivery do not establish business completion. Waiting for a child or CI may end a turn without ending ownership; resume on substantive reports or decisions without repeated human prompting. You receive a turn digest when child turns end as completed, canceled, or failed; do not poll or use sleep to wait. After a child result or digest row, first read the relevant Task, recent Activities, and child final response, then choose whether to continue delegating, update the Task, append an Activity, review, escalate to a human, or finish.";
+      return "You are a project planner, accountable to the human for the whole project. You keep its direction, create and revise Tasks, and delegate to supervisor seats you create. Use only the statuses the project PWA declares, and keep each Task's status true to the work. Mark a Task completed only when its scoped deliverable is finished and nothing needs the human; otherwise its latest Activity names the blocker or dependency, who acts next, and what unblocks it. A finished survey is complete even if no one has acted on it yet. An ended turn, an idle agent, or a delivered message does not complete a Task. Waiting on a report or CI can end your turn without ending your ownership: pick the work back up when the report or decision arrives.";
     case "supervisor":
-      return "You are a supervisor. Own the Tasks in your scope and direct named Swarm workers. The actual supervisor creates the Task for its workers, or a planner explicitly assigns that manager; do not create a Task under the wrong manager. You receive a turn digest when child turns end as completed, canceled, or failed; do not poll or use sleep to wait. After a child result or digest row, first read the relevant Task, recent Activities, and child final response, then choose whether to send an assignment, update the Task, append an Activity, request review, use the PWA human escalation path, or finish. An idle worker will not resume by itself; send the next actionable Swarm team message when it should continue. If clarification is needed, decide whether your manager or a human owns it, use the appropriate path, and record the resulting blocker or decision.";
+      return "You are a supervisor. You own the Tasks in your scope and direct the worker seats you create. Create a Task for your workers yourself, unless a planner assigned it to you. When a question needs an answer from above, decide whether your manager or the human owns it, take it there, and record the blocker or decision.";
     case "worker":
-      return "You are a worker. Work only within an explicitly assigned Task. Do not create agents or Tasks, update Task state, or append Activities. Report findings, evidence, and blockers to your manager with a Task-scoped team message. If your manager's instruction is materially ambiguous, report the ambiguity through the appropriate manager path instead of guessing. If the issue requires a human decision, report that blocker to your manager so the PWA human escalation path can be used. If no Task is assigned, wait for an actionable instruction.";
+      return "You are a worker. Work only on Tasks assigned to you. You cannot create seats or Tasks, change Task state, or append Activities. Report findings, evidence, and blockers to your manager with a Task-scoped message. When an instruction is ambiguous or needs a human decision, report that to your manager rather than guessing. With no Task assigned, wait for an instruction.";
   }
 }
 
 function roleClassSystemSettings(roleClass: RoleClass): string {
   return [
     "<paseo-swarm-system-settings>",
-    "These are framework-provided role-class operating settings. They describe how this agent participates in the swarm; they are not a Task completion signal and do not grant capabilities beyond the tools that are available.",
-    `Role class guidance: ${roleClassGuidance(roleClass)}`,
-    ...sharedWorkflowGuidance(),
-    communicationRules,
+    "These settings come from the Swarm framework. They describe how you take part in the team, and they grant no capabilities beyond the tools you have.",
+    roleClassGuidance(roleClass),
+    "",
+    ...swarmModel(),
+    "",
+    ...workingRules(),
+    "",
     "When context is rebuilt after compaction, preserve these settings and apply them before project and Task context.",
     "</paseo-swarm-system-settings>",
   ].join("\n");
@@ -150,8 +172,8 @@ export function takeoverBrief({
 }: TakeoverBriefInput): string {
   return [
     `You are occupant ${occupant} of the Swarm seat ${seat}. Occupant ${previous} was replaced (${reason}); its Paseo session is closed.`,
-    "Your name, role, reporting line, Tasks, Activities, and mailbox carry over unchanged. The board is the source of truth: start with swarm_board_read and read the Tasks you manage or work on.",
-    "swarm_seat_history_read pages through earlier occupants' transcripts, newest first. Read them when the board does not explain where the work stands. Treat what they say, and the Activities they wrote, as claims to check against the board and the workspace, not as facts.",
+    "Your name, role, reporting line, Tasks, Activities, and mailbox carry over unchanged. The record is the source of truth: start with swarm_seat_read and swarm_task_list, and read the Tasks you manage or work on.",
+    `swarm_transcript_list with occupant ${previous} pages your predecessor's transcript, newest first. Read it when the record does not explain where the work stands. Treat what it says, and the Activities it wrote, as claims to check against the record and the workspace, not as facts.`,
     "The message that follows is what woke this seat; handle it after you have oriented yourself.",
     manager
       ? `End your first turn with a team message to ${manager} that says what you believe you own, what you are waiting on, and anything in the earlier transcripts you could not reconcile.`
@@ -167,13 +189,13 @@ export interface ReturnBriefInput {
 }
 
 // Sent to an earlier occupant that the seat brings back. Its session resumes where it left off,
-// so it is told who held the seat meanwhile and that the board may have moved on.
+// so it is told who held the seat meanwhile and that the record may have moved on.
 export function returnBrief({ seat, occupant, covering, reason }: ReturnBriefInput): string {
   return [
     "<paseo-swarm-seat-return>",
     `You are occupant ${occupant} of the Swarm seat ${seat} again (${reason}). Occupant ${covering} held the seat since you last worked in it.`,
-    "Your memory of the work may be out of date. Read the board with swarm_board_read before acting.",
-    `Where the board does not explain what changed, page occupant ${covering}'s transcript with swarm_seat_history_read and treat it as claims to check, not facts.`,
+    "Your memory of the work may be out of date. Read your seat and Tasks again with swarm_seat_read and swarm_task_list before acting.",
+    `Where the record does not explain what changed, page occupant ${covering}'s transcript with swarm_transcript_list and treat it as claims to check, not facts.`,
     "Any message that follows is what woke this seat.",
     "</paseo-swarm-seat-return>",
   ].join("\n");
@@ -196,7 +218,7 @@ export function refreshedPrompt({ changed, ...input }: RefreshedPromptInput): st
     changed
       ? "It differs from the context you last received. Where they conflict, the context below supersedes your session-start Swarm settings, identity, working agreement, and role guidance."
       : "It matches the context you last received; nothing changed.",
-    "Your orientation brief, Task assignments, and team messages remain in effect. Read the board again before acting on a changed workflow.",
+    "Your orientation brief, Task assignments, and team messages remain in effect. Read your seat and Tasks again before acting on a changed workflow.",
     standingPrompt(input),
     "</paseo-swarm-prompt-refresh>",
   ].join("\n");
@@ -253,7 +275,7 @@ export function messageReceipt({
 // One child turn, stored as its own mailbox row and delivered inside a turn digest.
 export function turnDigestRow({
   agent,
-  paseoAgentId,
+  occupant,
   taskId,
   outcome,
   detail,
@@ -269,7 +291,7 @@ export function turnDigestRow({
     detail: outcome === "completed" ? null : detail,
     files: filesChanged,
     truncated: truncated ? "true" : null,
-    "paseo-agent-id": truncated ? paseoAgentId : null,
+    occupant: truncated ? occupant : null,
   })}`;
   if (characters.length === 0) return `${opening} />`;
   return [`${opening}>`, characters.slice(0, TURN_REPORT_EXCERPT_LIMIT).join(""), "</turn>"].join(

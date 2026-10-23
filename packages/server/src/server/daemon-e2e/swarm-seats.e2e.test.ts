@@ -11,7 +11,7 @@ import { createTestPaseoDaemon } from "../test-utils/paseo-daemon.js";
 
 interface Seat {
   name: string;
-  paseoAgentId: string;
+  paseoAgentId: string | null;
   occupant: { number: number };
   pastOccupants?: Array<{ number: number; paseoAgentId: string }>;
 }
@@ -40,9 +40,10 @@ async function waitFor<T>(read: () => Promise<T>, done: (value: T) => boolean): 
   }
 }
 
-// A seat moved to another provider gets a fresh agent on its next Swarm delivery, against a real
-// daemon: the Paseo agent API, archive cascade, and history reads the seat unit tests fake.
-test("a Swarm seat moves to another provider and back to its first agent", async () => {
+// A reserved seat starts its agent on its first message, and a seat moved to another provider gets
+// a fresh agent on its next Swarm delivery, against a real daemon: the Paseo agent API, archiving,
+// and history reads the seat unit tests fake.
+test("a Swarm seat starts on its first message, moves to another provider, and back", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "swarm-seats-e2e-"));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
   execSync("git init -b main", { cwd: root, stdio: "pipe" });
@@ -74,24 +75,38 @@ test("a Swarm seat moves to another provider and back to its first agent", async
 
   const { workspace } = await client.createWorkspace({ source: { kind: "directory", path: root } });
   const config = { provider: "mock/e2e-fast-stream", modeId: "load-test" };
-  const lead = await swarm<Seat>("swarm.agent.create", {
+  const reserved = await swarm<Seat>("swarm.seat.create", {
     ...config,
     name: "lead",
     roleClass: "supervisor",
     role: "supervisor",
     workspaceId: workspace!.id,
   });
-  const dev = await swarm<Seat>("swarm.agent.create", {
+  expect(reserved.paseoAgentId).toBeNull();
+  await swarm<Seat>("swarm.seat.create", {
     ...config,
     name: "dev",
     roleClass: "worker",
     role: "developer",
     reportsTo: "lead",
   });
-  await client.waitForFinish(dev.paseoAgentId, 30_000);
-  expect((await agents()).get(dev.paseoAgentId)?.labels[PARENT_AGENT_ID_LABEL]).toBe(
-    lead.paseoAgentId,
-  );
+  const listSeat = async (name: string) =>
+    (await swarm<{ seats: Seat[] }>("swarm.seat.list", {})).seats.find(
+      (seat) => seat.name === name,
+    )!;
+  const send = (to: string, body: string) =>
+    swarm("swarm.message.send", { recipientName: to, senderName: "human", body });
+  await send("lead", "SEAT_E2E_START");
+  await send("lead.dev", "SEAT_E2E_START");
+  const lead = await listSeat("lead");
+  const dev = await listSeat("dev");
+  const leadAgentId = lead.paseoAgentId!;
+  const devAgentId = dev.paseoAgentId!;
+  expect(lead.occupant.number).toBe(1);
+  await client.waitForFinish(devAgentId, 30_000);
+  // Seat agents have no Paseo parent; the roster's reporting line is Swarm's own.
+  expect((await agents()).get(devAgentId)?.labels[PARENT_AGENT_ID_LABEL]).toBeUndefined();
+  await client.waitForFinish(leadAgentId, 30_000);
 
   await expect(
     swarm("swarm.seat.update", { seats: ["lead"], agentConfig: { provider: "mock-b" } }),
@@ -100,28 +115,22 @@ test("a Swarm seat moves to another provider and back to its first agent", async
     seats: ["lead"],
     agentConfig: { provider: "mock-b/e2e-fast-stream", modeId: "load-test" },
   });
-  await swarm("swarm.message.send", {
-    recipientPaseoAgentId: lead.paseoAgentId,
-    recipientName: "lead",
-    senderName: "human",
-    body: "SEAT_E2E_STATUS",
-  });
+  await send("lead", "SEAT_E2E_STATUS");
 
-  const listSeat = async () =>
-    (await swarm<{ seats: Seat[] }>("swarm.seat.list", {})).seats.find(
-      (seat) => seat.name === "lead",
-    )!;
-  const moved = await waitFor(listSeat, (seat) => seat.occupant.number === 2);
-  expect(moved.pastOccupants?.map((past) => past.paseoAgentId)).toEqual([lead.paseoAgentId]);
+  const moved = await waitFor(
+    () => listSeat("lead"),
+    (seat) => seat.occupant.number === 2,
+  );
+  const movedAgentId = moved.paseoAgentId!;
+  expect(moved.pastOccupants?.map((past) => past.paseoAgentId)).toEqual([leadAgentId]);
   // The seat is rebound first; the old agent is archived and the mail delivered right after.
-  const after = await waitFor(agents, (all) => Boolean(all.get(lead.paseoAgentId)?.archivedAt));
-  expect(after.get(moved.paseoAgentId)?.provider).toBe("mock-b");
-  // The worker was detached before its old manager was archived, so it is still live.
-  expect(after.get(dev.paseoAgentId)?.archivedAt).toBeNull();
-  expect(after.get(dev.paseoAgentId)?.labels[PARENT_AGENT_ID_LABEL]).toBeUndefined();
+  const after = await waitFor(agents, (all) => Boolean(all.get(leadAgentId)?.archivedAt));
+  expect(after.get(movedAgentId)?.provider).toBe("mock-b");
+  // Replacing the manager leaves its worker's agent alone.
+  expect(after.get(devAgentId)?.archivedAt).toBeNull();
   await waitFor(
     () =>
-      client.fetchAgentTimeline(moved.paseoAgentId, {
+      client.fetchAgentTimeline(movedAgentId, {
         direction: "tail",
         limit: 0,
         projection: "canonical",
@@ -137,27 +146,25 @@ test("a Swarm seat moves to another provider and back to its first agent", async
   // path only: it names the earlier occupant and leaves it archived.
   const history = await swarm<{ occupant: number; paseoAgentId: string }>(
     "swarm.seat.history.read",
-    { seat: "lead" },
+    { seat: "lead", occupant: 1 },
   );
-  expect(history).toMatchObject({ occupant: 1, paseoAgentId: lead.paseoAgentId });
-  expect((await agents()).get(lead.paseoAgentId)?.archivedAt).toBeTruthy();
+  expect(history).toMatchObject({ occupant: 1, paseoAgentId: leadAgentId });
+  expect((await agents()).get(leadAgentId)?.archivedAt).toBeTruthy();
 
   // Moving back brings the first agent back with its context.
   await swarm("swarm.seat.update", { seats: ["lead"], agentConfig: config });
-  await swarm("swarm.message.send", {
-    recipientPaseoAgentId: moved.paseoAgentId,
-    recipientName: "lead",
-    senderName: "human",
-    body: "SEAT_E2E_BACK",
-  });
-  const back = await waitFor(listSeat, (seat) => seat.paseoAgentId === lead.paseoAgentId);
+  await send("lead", "SEAT_E2E_BACK");
+  const back = await waitFor(
+    () => listSeat("lead"),
+    (seat) => seat.paseoAgentId === leadAgentId,
+  );
   expect(back.occupant.number).toBe(1);
-  const returned = await waitFor(agents, (all) => Boolean(all.get(moved.paseoAgentId)?.archivedAt));
-  expect(returned.get(lead.paseoAgentId)?.archivedAt).toBeNull();
+  const returned = await waitFor(agents, (all) => Boolean(all.get(movedAgentId)?.archivedAt));
+  expect(returned.get(leadAgentId)?.archivedAt).toBeNull();
   const leadSaw = (text: string) =>
     waitFor(
       () =>
-        client.fetchAgentTimeline(lead.paseoAgentId, {
+        client.fetchAgentTimeline(leadAgentId, {
           direction: "tail",
           limit: 0,
           projection: "canonical",
@@ -170,15 +177,10 @@ test("a Swarm seat moves to another provider and back to its first agent", async
   await leadSaw("SEAT_E2E_BACK");
 
   // A mode change is made on the live agent, which stays in the seat.
-  await client.waitForFinish(lead.paseoAgentId, 30_000);
+  await client.waitForFinish(leadAgentId, 30_000);
   await swarm("swarm.seat.update", { seats: ["lead"], agentConfig: { modeId: "approval-test" } });
-  await swarm("swarm.message.send", {
-    recipientPaseoAgentId: lead.paseoAgentId,
-    recipientName: "lead",
-    senderName: "human",
-    body: "SEAT_E2E_MODE",
-  });
-  await waitFor(agents, (all) => all.get(lead.paseoAgentId)?.currentModeId === "approval-test");
+  await send("lead", "SEAT_E2E_MODE");
+  await waitFor(agents, (all) => all.get(leadAgentId)?.currentModeId === "approval-test");
   await leadSaw("SEAT_E2E_MODE");
-  expect((await listSeat()).paseoAgentId).toBe(lead.paseoAgentId);
+  expect((await listSeat("lead")).paseoAgentId).toBe(leadAgentId);
 }, 120_000);

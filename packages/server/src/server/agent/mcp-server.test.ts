@@ -833,25 +833,49 @@ function createPaseoWorktreeForMcpTest(options: {
 }
 
 describe("Swarm MCP coordination", () => {
-  it("pages caller worksets and reads selected Task and Activity content on demand", async () => {
+  const seat = (qualifiedName: string, roleClass: string, paseoAgentId: string | null) => ({
+    id: `${qualifiedName}-record`,
+    paseoAgentId,
+    name: qualifiedName.split(".").at(-1),
+    qualifiedName,
+    roleClass,
+    role: roleClass,
+    reportsTo: qualifiedName.includes(".") ? qualifiedName.split(".").slice(0, -1).join(".") : null,
+    workspaceId: "workspace",
+    projectId: "parent-project",
+    retired: false,
+    occupant: paseoAgentId ? { number: 1 } : undefined,
+    pending: paseoAgentId ? null : { kind: "start", reason: "no agent yet" },
+  });
+  const swarmServer = async (
+    callerAgentId: string,
+    seats: unknown[],
+    answer: (method: string, input: unknown) => unknown = () => ({}),
+  ) => {
     const { agentManager, agentStorage } = createTestDeps();
-    const actor = {
-      paseoAgentId: "caller",
-      name: "lead",
-      qualifiedName: "lead",
-      roleClass: "planner",
-      reportsTo: null,
-      workspaceId: "workspace",
-      retired: false,
-    };
-    const task = (id: string, managerName: string) => ({
+    const invokePlugin = vi.fn(async (_pluginId: string, method: string, input: unknown) =>
+      method === "swarm.seat.list" ? { seats } : answer(method, input),
+    );
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      callerAgentId,
+      invokePlugin,
+      logger: createTestLogger(),
+    });
+    return { server, invokePlugin };
+  };
+
+  it("pages seats, Tasks, and Activities with one cursor convention", async () => {
+    const task = (id: string, managerName: string, updatedAt: string) => ({
       id,
       title: id,
       managerName,
       workerNames: [],
       brief: "private long brief",
       status: "review",
-      updatedAt: "2026-10-06",
+      updatedAt,
       data: { evidence: "long metadata" },
     });
     const activities = ["older", "newer"].map((id) => ({
@@ -868,143 +892,131 @@ describe("Swarm MCP coordination", () => {
       refs: ["file-reference"],
     }));
     const board = {
-      agents: [actor],
-      tasks: [task("alpha", "lead.team"), task("beta", "lead"), task("other", "another")],
+      tasks: [
+        task("beta", "lead", "2026-10-06"),
+        task("alpha", "lead.team", "2026-10-07"),
+        task("other", "another", "2026-10-08"),
+      ],
       activities,
     };
-    const invokePlugin = vi.fn(async () => board);
-    const server = await createAgentMcpServer({
-      agentManager,
-      agentStorage,
-      providerSnapshotManager: createOpenCodeManager().manager,
-      callerAgentId: actor.paseoAgentId,
-      invokePlugin,
-      logger: createTestLogger(),
-    });
+    const { server } = await swarmServer(
+      "caller",
+      [seat("lead", "planner", "caller"), seat("lead.team", "supervisor", null)],
+      () => board,
+    );
     try {
       const read = async (name: string, input: Record<string, unknown>) =>
         (await invokeToolWithParsedInput(registeredTool(server, name), input)).structuredContent;
-      expect(await read("swarm_board_read", { limit: 1 })).toMatchObject({
-        totalTasks: 2,
-        nextTaskCursor: "alpha",
-        tasks: [{ id: "alpha", activityCount: 2 }],
+      expect(await read("swarm_seat_read", {})).toMatchObject({
+        name: "lead",
+        state: "idle",
+        occupant: 1,
+        reports: ["lead.team"],
+        pending: null,
       });
-      const summary = JSON.stringify(await read("swarm_board_read", {}));
+      expect(await read("swarm_seat_read", { seat: "team" })).toMatchObject({
+        name: "lead.team",
+        manager: "lead",
+        state: "empty",
+        occupant: null,
+        pending: { kind: "start" },
+      });
+      expect(await read("swarm_seat_list", { limit: 1 })).toMatchObject({
+        items: [{ name: "lead" }],
+        total: 2,
+        nextCursor: "lead",
+      });
+      expect(await read("swarm_seat_list", { limit: 1, cursor: "lead" })).toMatchObject({
+        items: [{ name: "lead.team" }],
+        nextCursor: null,
+      });
+      expect(await read("swarm_task_list", { limit: 1 })).toMatchObject({
+        items: [{ id: "alpha", activityCount: 2 }],
+        total: 2,
+        nextCursor: "alpha",
+      });
+      const summary = JSON.stringify(await read("swarm_task_list", {}));
       expect(summary).not.toContain("private long brief");
       expect(summary).not.toContain("long metadata");
-      expect(summary).not.toContain("evidenceevidence");
-      expect(await read("swarm_board_read", { limit: 1, taskCursor: "alpha" })).toMatchObject({
-        tasks: [{ id: "beta" }],
-        nextTaskCursor: null,
+      expect(await read("swarm_task_list", { limit: 1, cursor: "alpha" })).toMatchObject({
+        items: [{ id: "beta" }],
+        nextCursor: null,
       });
-      expect(await read("swarm_board_read", { status: "absent" })).toMatchObject({
-        tasks: [],
-        totalTasks: 0,
+      expect(await read("swarm_task_list", { status: "absent" })).toMatchObject({
+        items: [],
+        total: 0,
       });
-      expect(await read("swarm_task_read", { taskId: "alpha", activityLimit: 1 })).toMatchObject({
-        task: board.tasks[0],
-        totalActivities: 2,
-        nextActivityCursor: "newer",
-        activities: [
-          { id: "newer", bodyPreview: activities[1].body.slice(0, 600), bodyTruncated: true },
-        ],
+      expect(await read("swarm_task_read", { taskId: "alpha" })).toEqual({
+        ...board.tasks[1],
+        activityCount: 2,
       });
-      expect(
-        await read("swarm_task_read", { taskId: "alpha", activityCursor: "newer" }),
-      ).toMatchObject({
-        activities: [{ id: "older" }],
-        nextActivityCursor: null,
+      expect(await read("swarm_activity_list", { taskId: "alpha", limit: 1 })).toMatchObject({
+        items: [{ id: "newer", bodyPreview: activities[1].body.slice(0, 600), truncated: true }],
+        total: 2,
+        nextCursor: "newer",
       });
-      expect(await read("swarm_activity_read", { activityId: "newer" })).toEqual({
-        activity: activities[1],
-      });
+      expect(await read("swarm_activity_list", { taskId: "alpha", cursor: "newer" })).toMatchObject(
+        { items: [{ id: "older" }], nextCursor: null },
+      );
+      expect(await read("swarm_activity_read", { activityId: "newer" })).toEqual(activities[1]);
       await expect(read("swarm_task_read", { taskId: "missing" })).rejects.toThrow("Unknown Task");
-      await expect(read("swarm_board_read", { taskCursor: "missing" })).rejects.toThrow(
+      await expect(read("swarm_task_list", { cursor: "missing" })).rejects.toThrow(
         "Unknown cursor",
       );
-      await expect(read("swarm_board_read", { limit: 51 })).rejects.toThrow();
+      await expect(read("swarm_seat_list", { limit: 51 })).rejects.toThrow();
       expect(board.activities).toEqual(activities);
     } finally {
       await server.close();
     }
   });
+
   it.each(["planner", "supervisor"] as const)(
-    "configures a %s child before its first turn",
+    "reserves a seat under a %s with the settings its first agent starts with",
     async (roleClass) => {
-      const { agentManager, agentStorage } = createTestDeps();
-      const actor = {
-        paseoAgentId: "swarm-parent",
-        name: "parent",
-        qualifiedName: "parent",
-        roleClass,
-        retired: false,
-        reportsTo: null,
-        projectId: "parent-project",
-        workspaceId: "parent-workspace",
-      };
-      const invokePlugin = vi.fn(async (_pluginId: string, method: string) => {
-        if (method === "swarm.board.read") return { agents: [actor] };
-        if (method === "swarm.pwa_roles.read") return [{ slug: "researcher", roleClass: "worker" }];
-        return { name: "child" };
-      });
-      const server = await createAgentMcpServer({
-        agentManager,
-        agentStorage,
-        providerSnapshotManager: createOpenCodeManager().manager,
-        callerAgentId: actor.paseoAgentId,
-        invokePlugin,
-        logger: createTestLogger(),
-      });
+      const { server, invokePlugin } = await swarmServer(
+        "swarm-parent",
+        [seat("parent", roleClass, "swarm-parent")],
+        (method) =>
+          method === "swarm.pwa_roles.read"
+            ? [{ role: "researcher", roleClass: "worker" }]
+            : { name: "child" },
+      );
       try {
-        const rolesResult = await registeredTool(server, "swarm_roles_read").handler({});
-        expect(rolesResult.structuredContent).toEqual({
-          roles: [{ slug: "researcher", roleClass: "worker" }],
+        const roles = await invokeToolWithParsedInput(
+          registeredTool(server, "swarm_role_list"),
+          {},
+        );
+        expect(roles.structuredContent).toEqual({
+          items: [{ role: "researcher", roleClass: "worker" }],
+          total: 1,
+          nextCursor: null,
         });
         expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.pwa_roles.read", {
           roleClass: roleClass === "planner" ? "supervisor" : "worker",
           projectId: "parent-project",
         });
-        await invokeToolWithParsedInput(registeredTool(server, "swarm_agent_create"), {
+        await invokeToolWithParsedInput(registeredTool(server, "swarm_seat_create"), {
           name: "child",
           role: "researcher",
           provider: "codex/gpt-6.1-sol",
-          brief: "Survey the local repository",
           settings: {
             modeId: "auto-review",
             thinkingOptionId: "high",
             features: { fast_mode: true },
           },
-        });
-        expect(invokePlugin).toHaveBeenCalledWith(
-          "paseo-swarm",
-          "swarm.agent.create",
-          expect.objectContaining({
-            provider: "codex/gpt-6.1-sol",
-            modeId: "auto-review",
-            thinkingOptionId: "high",
-            featureValues: { fast_mode: true },
-            actorPaseoAgentId: actor.paseoAgentId,
-            reportsTo: "parent",
-            roleClass: roleClass === "planner" ? "supervisor" : "worker",
-            workspaceId: null,
-          }),
-        );
-        await invokeToolWithParsedInput(registeredTool(server, "swarm_agent_create"), {
-          name: "isolated-child",
-          role: "researcher",
-          provider: "codex/gpt-6.1-sol",
-          brief: "Work in the prepared worktree",
           workspaceId: "isolated-worktree",
         });
-        expect(invokePlugin).toHaveBeenLastCalledWith(
-          "paseo-swarm",
-          "swarm.agent.create",
-          expect.objectContaining({
-            actorPaseoAgentId: actor.paseoAgentId,
-            reportsTo: "parent",
-            workspaceId: "isolated-worktree",
-          }),
-        );
+        expect(invokePlugin).toHaveBeenLastCalledWith("paseo-swarm", "swarm.seat.create", {
+          name: "child",
+          role: "researcher",
+          provider: "codex/gpt-6.1-sol",
+          modeId: "auto-review",
+          thinkingOptionId: "high",
+          featureValues: { fast_mode: true },
+          roleClass: roleClass === "planner" ? "supervisor" : "worker",
+          actorName: "parent",
+          workspaceId: "isolated-worktree",
+        });
       } finally {
         await server.close();
       }
@@ -1014,28 +1026,15 @@ describe("Swarm MCP coordination", () => {
   it.each(["planner", "supervisor", "worker"] as const)(
     "uses the actual %s caller for Task participant changes",
     async (roleClass) => {
-      const { agentManager, agentStorage } = createTestDeps();
-      const actor = {
-        paseoAgentId: "actual-caller",
-        qualifiedName: "planner.supervisor",
-        name: "supervisor",
-        roleClass,
-        retired: false,
-      };
-      const invokePlugin = vi.fn(async (_pluginId: string, method: string) =>
-        method === "swarm.board.read" ? { agents: [actor] } : { id: "review-api" },
+      const { server, invokePlugin } = await swarmServer(
+        "actual-caller",
+        [seat("planner.supervisor", roleClass, "actual-caller")],
+        () => ({ id: "review-api" }),
       );
-      const server = await createAgentMcpServer({
-        agentManager,
-        agentStorage,
-        providerSnapshotManager: createOpenCodeManager().manager,
-        callerAgentId: actor.paseoAgentId,
-        invokePlugin,
-        logger: createTestLogger(),
-      });
       try {
         if (roleClass === "worker") {
           expect(lookupTool(server, "swarm_task_update")).toBeUndefined();
+          expect(lookupTool(server, "swarm_seat_create")).toBeUndefined();
           return;
         }
         await invokeToolWithParsedInput(registeredTool(server, "swarm_task_update"), {
@@ -1046,7 +1045,7 @@ describe("Swarm MCP coordination", () => {
         expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.task.update", {
           taskId: "review-api",
           workerNames: ["reviewer"],
-          actorName: actor.qualifiedName,
+          actorName: "planner.supervisor",
         });
       } finally {
         await server.close();
@@ -1054,36 +1053,42 @@ describe("Swarm MCP coordination", () => {
     },
   );
 
+  it("hides native agent tools from seat occupants only", async () => {
+    const agentTools = ["create_agent", "list_agents", "get_agent_activity", "cancel_agent"];
+    const occupant = await swarmServer("worker-agent", [
+      seat("lead.dev", "worker", "worker-agent"),
+    ]);
+    const outsider = await swarmServer("native-agent", [
+      seat("lead.dev", "worker", "worker-agent"),
+    ]);
+    try {
+      for (const name of agentTools) {
+        expect(lookupTool(occupant.server, name)).toBeUndefined();
+        expect(lookupTool(outsider.server, name)).toBeDefined();
+      }
+      expect(lookupTool(outsider.server, "swarm_seat_read")).toBeUndefined();
+    } finally {
+      await occupant.server.close();
+      await outsider.server.close();
+    }
+  });
+
   it("refreshes the caller's own standing prompt as model-visible text", async () => {
-    const { agentManager, agentStorage } = createTestDeps();
-    const actor = {
-      paseoAgentId: "worker-agent",
-      qualifiedName: "planner.supervisor.scout",
-      name: "scout",
-      roleClass: "worker",
-      retired: false,
-    };
     const refreshed = {
       revision: "next",
       previousRevision: "previous",
       changed: true,
       prompt: "<paseo-swarm-prompt-refresh>Current role guidance</paseo-swarm-prompt-refresh>",
     };
-    const invokePlugin = vi.fn(async (_pluginId: string, method: string) =>
-      method === "swarm.board.read" ? { agents: [actor] } : refreshed,
+    const { server, invokePlugin } = await swarmServer(
+      "worker-agent",
+      [seat("planner.supervisor.scout", "worker", "worker-agent")],
+      () => refreshed,
     );
-    const server = await createAgentMcpServer({
-      agentManager,
-      agentStorage,
-      providerSnapshotManager: createOpenCodeManager().manager,
-      callerAgentId: actor.paseoAgentId,
-      invokePlugin,
-      logger: createTestLogger(),
-    });
     try {
       const result = await registeredTool(server, "swarm_prompt_refresh").handler({});
       expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.agent.refresh_prompt", {
-        paseoAgentId: actor.paseoAgentId,
+        paseoAgentId: "worker-agent",
       });
       expect(result).toMatchObject({
         content: [{ type: "text", text: refreshed.prompt }],
@@ -1094,85 +1099,61 @@ describe("Swarm MCP coordination", () => {
     }
   });
 
-  it("reads seat history as the caller, defaulting to the caller's own seat", async () => {
-    const { agentManager, agentStorage } = createTestDeps();
-    const actor = {
+  it("lists a seat's transcript as the caller, defaulting to the caller's own seat", async () => {
+    const history = {
+      seat: "planner.supervisor.scout",
+      occupant: 2,
       paseoAgentId: "worker-agent",
-      qualifiedName: "planner.supervisor.scout",
-      name: "scout",
-      roleClass: "worker",
-      retired: false,
+      entries: [{ type: "assistant_message", text: "Done" }],
+      nextBefore: "older",
     };
-    const history = { seat: actor.qualifiedName, occupant: 1, entries: [], nextBefore: null };
-    const invokePlugin = vi.fn(async (_pluginId: string, method: string) =>
-      method === "swarm.board.read" ? { agents: [actor] } : history,
+    const { server, invokePlugin } = await swarmServer(
+      "worker-agent",
+      [seat("planner.supervisor.scout", "worker", "worker-agent")],
+      () => history,
     );
-    const server = await createAgentMcpServer({
-      agentManager,
-      agentStorage,
-      providerSnapshotManager: createOpenCodeManager().manager,
-      callerAgentId: actor.paseoAgentId,
-      invokePlugin,
-      logger: createTestLogger(),
-    });
     try {
-      const result = await registeredTool(server, "swarm_seat_history_read").handler({
-        limit: 10,
-      });
+      const result = await invokeToolWithParsedInput(
+        registeredTool(server, "swarm_transcript_list"),
+        { limit: 10, cursor: "newer" },
+      );
       expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.seat.history.read", {
+        seat: "planner.supervisor.scout",
+        actorName: "planner.supervisor.scout",
         limit: 10,
-        seat: actor.qualifiedName,
-        actorName: actor.qualifiedName,
+        before: "newer",
       });
-      expect(result).toMatchObject({ structuredContent: history });
+      expect(result.structuredContent).toEqual({
+        seat: "planner.supervisor.scout",
+        occupant: 2,
+        items: history.entries,
+        total: null,
+        nextCursor: "older",
+      });
     } finally {
       await server.close();
     }
   });
 
-  it.each([
-    ["alpha.team", "review", "alpha.team.review"],
-    ["alpha.team.scout", "review", "alpha.team.review"],
-    ["alpha.team.scout", "team", "alpha.team"],
-    ["alpha.team.scout", "beta.team.review", "beta.team.review"],
-  ])("resolves %s addressing %s to %s", async (sender, reference, expected) => {
-    const { agentManager, agentStorage } = createTestDeps();
-    const agents = ["beta.team.review", "alpha.team.review", "alpha.team", "alpha.team.scout"].map(
-      (qualifiedName) => ({
-        paseoAgentId: qualifiedName,
-        qualifiedName,
-        name: qualifiedName.split(".").at(-1),
-        reportsTo: qualifiedName.split(".").slice(0, -1).join("."),
-        roleClass: qualifiedName.endsWith("team") ? "supervisor" : "worker",
-        retired: false,
-        workspaceId: "test-workspace",
-      }),
+  it("sends a message to a seat as the caller", async () => {
+    const { server, invokePlugin } = await swarmServer(
+      "scout-agent",
+      [seat("alpha.team.scout", "worker", "scout-agent")],
+      () => ({ delivered: true }),
     );
-    const invokePlugin = vi.fn(async (_pluginId: string, method: string) =>
-      method === "swarm.board.read" ? { agents } : { delivered: true },
-    );
-    const server = await createAgentMcpServer({
-      agentManager,
-      agentStorage,
-      providerSnapshotManager: createOpenCodeManager().manager,
-      callerAgentId: sender,
-      invokePlugin,
-      logger: createTestLogger(),
-    });
     try {
       await invokeToolWithParsedInput(registeredTool(server, "swarm_message_send"), {
-        recipient: reference,
+        to: "review",
+        body: "Concrete findings",
+        taskId: "survey",
+      });
+      expect(invokePlugin).toHaveBeenLastCalledWith("paseo-swarm", "swarm.message.send", {
+        recipientName: "review",
+        senderName: "alpha.team.scout",
+        actorName: "alpha.team.scout",
+        taskId: "survey",
         body: "Concrete findings",
       });
-      expect(invokePlugin).toHaveBeenCalledWith(
-        "paseo-swarm",
-        "swarm.message.send",
-        expect.objectContaining({
-          senderName: sender,
-          recipientName: expected,
-          recipientPaseoAgentId: expected,
-        }),
-      );
     } finally {
       await server.close();
     }

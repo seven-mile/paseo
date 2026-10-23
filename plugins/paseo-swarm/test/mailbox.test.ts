@@ -136,7 +136,6 @@ function setup(t: { after(fn: () => void): void }) {
   const send = (context: PluginHandlerContext, body: string) =>
     handlers.get(sendMessageRpc.name)!(
       sendMessageRpc.input.parse({
-        recipientPaseoAgentId: worker.paseoAgentId,
         recipientName: "manager.worker",
         senderName: "manager",
         actorName: "manager",
@@ -152,19 +151,50 @@ function setup(t: { after(fn: () => void): void }) {
   const sendTo = (context: PluginHandlerContext, recipient: AgentRecord, body: string) =>
     handlers.get(sendMessageRpc.name)!(
       sendMessageRpc.input.parse({
-        recipientPaseoAgentId: recipient.paseoAgentId,
         recipientName: recipient.qualifiedName,
         senderName: "outsider",
         body,
       }) as never,
       context,
     ) as Promise<ReturnType<typeof sendMessageRpc.output.parse>>;
-  return { turnStarted, turnEnded, send, sendTo, readMailbox };
+  const sendAs = (context: PluginHandlerContext, sender: string, recipient: string) =>
+    handlers.get(sendMessageRpc.name)!(
+      sendMessageRpc.input.parse({
+        recipientName: recipient,
+        senderName: sender,
+        body: "Findings",
+      }) as never,
+      context,
+    ) as Promise<ReturnType<typeof sendMessageRpc.output.parse>>;
+  return { turnStarted, turnEnded, send, sendTo, sendAs, readMailbox };
 }
 
 async function seed(agents: AgentRecord[]) {
   await store.commit(() => agents.map((record) => ({ op: "put", collection: "agents", record })));
 }
+
+test("a sender names a seat by qualified name, its report, a teammate, or its manager", async (t) => {
+  const { sendAs } = setup(t);
+  const { sends, context } = fakePaseo();
+  const other: AgentRecord = {
+    ...reviewer,
+    id: "other-record",
+    paseoAgentId: "other-agent",
+    qualifiedName: "other.reviewer",
+    reportsTo: "other",
+  };
+  await seed([manager, worker, reviewer, other]);
+  for (const [sender, reference, expected] of [
+    ["manager", "reviewer", "reviewer-agent"],
+    ["manager.worker", "reviewer", "reviewer-agent"],
+    ["manager.worker", "manager", "manager-agent"],
+    ["manager.worker", "other.reviewer", "other-agent"],
+  ]) {
+    await sendAs(context, sender, reference);
+    assert.equal(sends.at(-1)?.agentId, expected, `${sender} -> ${reference}`);
+  }
+  await assert.rejects(sendAs(context, "manager", "nobody"), /Unknown active agent: nobody/);
+});
 
 test("an undeliverable message stays queued, survives a restart, and is retried in order", async (t) => {
   const { turnEnded, send, readMailbox } = setup(t);
@@ -439,7 +469,7 @@ test("child turn ends coalesce into one digest per manager wake", async (t) => {
   assert.match(digest.text, /^<paseo-swarm-turn-digest manager="manager" turns="2">\n/);
   assert.ok(
     digest.text.includes(
-      `<turn agent="manager.reviewer" outcome="completed" files="2" truncated="true" paseo-agent-id="reviewer-agent">\n${"x".repeat(1500)}\n</turn>`,
+      `<turn agent="manager.reviewer" outcome="completed" files="2" truncated="true" occupant="1">\n${"x".repeat(1500)}\n</turn>`,
     ),
   );
   assert.ok(

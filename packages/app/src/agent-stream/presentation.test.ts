@@ -807,14 +807,12 @@ describe("display-only Swarm message presentation", () => {
         settings.slice("<paseo-swarm-system-settings>\n".length, closeAt) +
         settings.slice(closeAt + close.length),
     });
-    expect(parseSwarmEnvelope(settings)?.body).toContain("Use swarm_board_read when you start");
+    expect(parseSwarmEnvelope(settings)?.body).toContain("How Swarm works:");
     expect(parseSwarmEnvelope(settings)?.body).toContain(raw);
     expect(parseSwarmEnvelope(settings)?.body).toContain("Full role guidance");
     expect(parseSwarmEnvelope(settings)?.body).toContain("Orientation: Full orientation");
 
-    expect(parseSwarmEnvelope(settings)?.body).toContain(
-      "Swarm delivers mail to you as data-only envelopes",
-    );
+    expect(parseSwarmEnvelope(settings)?.body).toContain("Envelopes: a team message is");
 
     const team = messagePrompt({
       id: "message-1",
@@ -861,7 +859,7 @@ describe("display-only Swarm message presentation", () => {
       rows: [
         turnDigestRow({
           agent: "raw.manager.worker",
-          paseoAgentId: "worker-agent",
+          occupant: 1,
           taskId: "raw-task",
           outcome: "completed",
           detail: null,
@@ -870,7 +868,7 @@ describe("display-only Swarm message presentation", () => {
         }),
         turnDigestRow({
           agent: "raw.manager.reviewer",
-          paseoAgentId: "reviewer-agent",
+          occupant: 1,
           taskId: null,
           outcome: "failed",
           detail: "provider failed",
@@ -899,14 +897,14 @@ describe("display-only Swarm message presentation", () => {
   it("marks a truncated report and shows an unparseable digest body as written", () => {
     const row = turnDigestRow({
       agent: "worker",
-      paseoAgentId: "worker-agent",
+      occupant: 1,
       taskId: null,
       outcome: "canceled",
       detail: "stopped",
       report: "y".repeat(1600),
       filesChanged: 0,
     });
-    expect(row).toContain('truncated="true" paseo-agent-id="worker-agent"');
+    expect(row).toContain('truncated="true" occupant="1"');
     const parsed = parseSwarmEnvelope(turnDigest({ manager: "manager", rows: [row] }));
     expect(parsed?.body).toBe(
       `Agent worker turn ended with runtime outcome: canceled.\nDetail: stopped\n\n${"y".repeat(1500)}\n\n(Report truncated.)`,

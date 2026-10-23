@@ -11,11 +11,10 @@ import {
   taskSchema,
 } from "./models";
 
-// A seat with why its occupant is stale, or null while it is current.
 // A seat with the plan its next mail carries out, or null when its agent fits the seat.
 export const seatSchema = agentRecordSchema.extend({
   pending: z
-    .object({ kind: z.enum(["adjust", "revive", "replace"]), reason: z.string() })
+    .object({ kind: z.enum(["start", "adjust", "revive", "replace"]), reason: z.string() })
     .nullable(),
 });
 
@@ -75,8 +74,10 @@ export const registerAgentRpc = defineRpc({
   output: agentRecordSchema,
 });
 
-export const createAgentRpc = defineRpc({
-  name: "swarm.agent.create",
+// Reserves a seat. It has no agent until its first mail arrives, which starts one with the seat's
+// agentConfig, so provider is "provider/model".
+export const createSeatRpc = defineRpc({
+  name: "swarm.seat.create",
   input: z.object({
     projectId: z.string().min(1).optional(),
     name: slugNameSchema,
@@ -85,15 +86,15 @@ export const createAgentRpc = defineRpc({
     role: z.string().min(1),
     reportsTo: z.string().nullable().default(null),
     title: z.string().optional(),
-    provider: z.string().default("codex/gpt-6-sol"),
+    provider: z.string().min(1),
     modeId: z.string().optional(),
     thinkingOptionId: z.string().optional(),
     featureValues: z.record(z.string(), z.unknown()).optional(),
-    brief: z.string().default("Wait for an explicit assignment."),
-    actorPaseoAgentId: z.string().nullable().default(null),
+    // The seat that asks, when an agent asks; it becomes the manager unless reportsTo says otherwise.
+    actorName: z.string().nullable().default(null),
     workspaceId: z.string().nullable().default(null),
   }),
-  output: agentRecordSchema,
+  output: seatSchema,
 });
 
 export const prepareAgentRpc = defineRpc({
@@ -192,7 +193,6 @@ export const appendHumanActivityRpc = defineRpc({
 export const sendMessageRpc = defineRpc({
   name: "swarm.message.send",
   input: z.object({
-    recipientPaseoAgentId: z.string().min(1),
     taskId: slugNameSchema.nullable().default(null),
     actorName: z.string().nullable().default(null),
     senderName: z.string().min(1),
@@ -264,7 +264,7 @@ export const seatHistoryReadRpc = defineRpc({
     seat: z.string().min(1),
     // Set when an agent reads: planners read any seat, others their own and the seats under them.
     actorName: z.string().min(1).optional(),
-    // A past occupant's number; defaults to the most recent one.
+    // An occupant number; defaults to the current occupant.
     occupant: z.number().int().positive().optional(),
     before: z.string().min(1).optional(),
     limit: z.number().int().positive().max(200).default(40),
