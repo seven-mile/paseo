@@ -234,7 +234,10 @@ test("an answer during the hold runs the command; a later answer messages the ag
     { agentId: worker.paseoAgentId, requestId: "permission-2", behavior: "allow" },
   ]);
   assert.equal(fake.sends.length, 1);
-  assert.match(fake.sends[0].text, /Rerun exactly that command/);
+  assert.match(
+    fake.sends[0].text,
+    /<paseo-swarm-approval approval="[^"]+"( task="[^"]+")? decision="approved" command="git push origin feature"/,
+  );
 
   const third = gateCall(service, ["push", "origin", "feature"], home);
   await third.done;
@@ -274,7 +277,7 @@ test("a denial during the hold returns the feedback; a later denial is messaged"
   const pending = store.read().approvals.find((approval) => approval.status === "pending")!;
   await service.resolvePermission(pending.permissionId!, { behavior: "deny" }, fake.paseo);
   assert.equal(fake.sends.length, 1);
-  assert.match(fake.sends[0].text, /denied `git push`/);
+  assert.match(fake.sends[0].text, /decision="denied" command="git push"/);
 });
 
 test("a PWA approvals list narrows what is gated", async (t) => {

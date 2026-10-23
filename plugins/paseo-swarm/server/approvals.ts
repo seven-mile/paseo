@@ -264,7 +264,7 @@ export class ApprovalService {
         recipientName: agentQualifiedName(agent),
         senderName: "human",
         taskId: approval.taskId,
-        kind: "runtime",
+        kind: "human_activity",
         render: () => approvalNotification(approval),
       },
       { paseo },
