@@ -20,6 +20,10 @@ export const agentRecordSchema = z.object({
   reportsTo: z.string().nullable(),
   workspaceId: z.string().nullable(),
   projectId: z.string().optional(),
+  // The standing prompt the agent last received, at creation or through a refresh.
+  prompt: z
+    .object({ revision: z.string(), pwaRevision: z.string(), receivedAt: z.string() })
+    .optional(),
   retired: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),

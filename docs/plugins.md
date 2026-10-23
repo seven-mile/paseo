@@ -115,6 +115,13 @@ unreadable snapshot, log line, or legacy file stops every Swarm read and write w
 naming the file until it is repaired or moved aside; nothing is written meanwhile. Only an unterminated final
 log line, left by a crash mid-append, is dropped automatically.
 
+A Swarm agent's system prompt is fixed when its session starts. After you change the PWA or
+reload Swarm, tell the agent to call `swarm_prompt_refresh`: it re-assembles the standing prompt
+(everything except the orientation brief) from the current PWA and plugin and returns it as a
+tool result. The agent record keeps the revision it last received (`prompt.revision`, a hash of
+that standing prompt), so you can tell which agents run an old one. The refresh lives in the
+conversation only; the stored session config keeps the creation-time prompt.
+
 Swarm planners must prepare a separate workspace and pass its `workspaceId` when creating
 a supervisor. This keeps supervisor execution out of the planner's workspace; omitting placement
 does not bypass the separation. Supervisor-created workers still default to the supervisor's
