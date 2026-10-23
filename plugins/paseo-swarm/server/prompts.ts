@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Pwa, RoleClass } from "./pwa";
 
 export type PromptPwa = Pick<
@@ -17,6 +18,15 @@ export interface InitialPromptInput {
   pwa: PromptPwa;
   agent: PromptAgent;
   brief: string;
+}
+
+export interface StandingPromptInput {
+  pwa: PromptPwa;
+  agent: PromptAgent;
+}
+
+export interface RefreshedPromptInput extends StandingPromptInput {
+  changed: boolean;
 }
 
 export interface MessagePromptInput {
@@ -62,7 +72,7 @@ const communicationRules =
 
 function sharedWorkflowGuidance(): string[] {
   return [
-    "Use swarm_board_read when you start, resume after compaction, or need the current team and Task workset. Treat the board, Tasks, and Activities as the shared project record; do not use private memory or a private checklist as a substitute.",
+    "Use swarm_board_read when you start, resume after compaction, or need the current team and Task workset. Call swarm_prompt_refresh when a human or your manager says the PWA, Swarm plugin, or daemon changed, or when these settings are missing from your context after compaction. Treat the board, Tasks, and Activities as the shared project record; do not use private memory or a private checklist as a substitute.",
     "Keep Tasks and Activities useful to two readers: an agent taking over the work should understand the objective, current state, key evidence, and next steps; a human using Kanban should understand progress, blockers, trade-offs, decisions, and deliverables. Include recommendations and proposed defaults where they help the human steer the work.",
     "A Task brief is the current objective, scope, constraints, and acceptance criteria. Task updates replace supplied fields, so read the Task first and preserve its complete brief when changing another field.",
     "Use Activities for meaningful evidence, decisions, blockers, stage changes, and deliverables. Summarize inspected results instead of forwarding an unexamined transcript. Do not copy the same progress text into both the brief and an Activity.",
@@ -101,7 +111,7 @@ function roleClassSystemSettings(roleClass: RoleClass): string {
   ].join("\n");
 }
 
-export function initialPrompt({ pwa, agent, brief }: InitialPromptInput): string {
+function identityAndAgreement({ pwa, agent }: StandingPromptInput): string[] {
   const qualifiedName = agent.qualifiedName ?? agent.name;
   return [
     roleClassSystemSettings(agent.roleClass),
@@ -115,9 +125,33 @@ export function initialPrompt({ pwa, agent, brief }: InitialPromptInput): string
     "",
     `Your role guidance (${pwa.role}):`,
     pwa.roleBody,
-    "",
-    "",
-    `Orientation: ${brief}`,
+  ];
+}
+
+export function initialPrompt({ pwa, agent, brief }: InitialPromptInput): string {
+  return [...identityAndAgreement({ pwa, agent }), "", "", `Orientation: ${brief}`].join("\n");
+}
+
+// The standing context without the one-time orientation brief. Its hash is the
+// agent's prompt revision: it changes when the PWA or the framework text changes.
+export function standingPrompt(input: StandingPromptInput): string {
+  return identityAndAgreement(input).join("\n");
+}
+
+export function promptRevision(input: StandingPromptInput): string {
+  return createHash("sha256").update(standingPrompt(input)).digest("hex");
+}
+
+export function refreshedPrompt({ changed, ...input }: RefreshedPromptInput): string {
+  return [
+    "<paseo-swarm-prompt-refresh>",
+    "The framework re-assembled your standing Swarm context from the current PWA and Swarm plugin.",
+    changed
+      ? "It differs from the context you last received. Where they conflict, the context below supersedes your session-start Swarm settings, identity, working agreement, and role guidance."
+      : "It matches the context you last received; nothing changed.",
+    "Your orientation brief, Task assignments, and team messages remain in effect. Read the board again before acting on a changed workflow.",
+    standingPrompt(input),
+    "</paseo-swarm-prompt-refresh>",
   ].join("\n");
 }
 

@@ -3,7 +3,14 @@ import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { listPwaRoles, readPwa } from "./pwa";
-import { initialPrompt, messagePrompt, messageReceipt, turnDigestRow } from "./prompts";
+import {
+  initialPrompt,
+  messagePrompt,
+  messageReceipt,
+  promptRevision,
+  refreshedPrompt,
+  turnDigestRow,
+} from "./prompts";
 import type { TurnSummary } from "./turns";
 import { flushMailbox, sendThroughMailbox } from "./mailbox";
 import { store } from "./state";
@@ -24,6 +31,7 @@ import {
   prepareAgentRpc,
   bindPreparedAgentRpc,
   mailboxReadRpc,
+  refreshPromptRpc,
 } from "../shared/swarm";
 import type { AgentRecord, SwarmState, Task } from "../shared/models";
 import { agentQualifiedName, mailboxMessageStatus } from "../shared/models";
@@ -196,14 +204,22 @@ function findTask(taskId: string): Task {
   return value;
 }
 
-function rolePrompt(
+// Creation and refresh both assemble from the current PWA, so a refresh gives an
+// agent what a new agent with the same identity would get.
+function assemblePrompt(
   agent: Pick<AgentRecord, "name" | "qualifiedName" | "roleClass" | "role" | "reportsTo">,
-  brief: string,
   projectId?: string,
-): string {
+) {
   const pwa = readPwa(requirePwaSource(projectId), agent.role);
   assertRoleClass(pwa.roleClass, agent.roleClass, agent.role);
-  return initialPrompt({ pwa, agent, brief });
+  return {
+    pwa,
+    received: {
+      revision: promptRevision({ pwa, agent }),
+      pwaRevision: pwa.revision,
+      receivedAt: now(),
+    },
+  };
 }
 
 function assertRoleClass(
@@ -247,9 +263,8 @@ async function assertCreationWorkspace(
 
 function creationConfig(
   input: RpcInput<typeof createAgentRpc>,
-  provisional: Parameters<typeof rolePrompt>[0],
+  systemPrompt: string,
   parent: AgentRecord | null,
-  projectId: string | undefined,
 ) {
   return {
     config: {
@@ -257,7 +272,7 @@ function creationConfig(
       ...(input.modeId ? { modeId: input.modeId } : {}),
       ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
       ...(input.featureValues ? { featureValues: input.featureValues } : {}),
-      systemPrompt: rolePrompt(provisional, input.brief, projectId),
+      systemPrompt,
     },
     title: input.title ?? input.name,
     ...(parent ? { parent: parent.paseoAgentId } : {}),
@@ -406,6 +421,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         role: input.role,
         reportsTo: parent ? agentQualifiedName(parent) : null,
       } as const;
+      const assembled = assemblePrompt(provisional, projectId);
       const paseoAgentId = randomUUID();
       const timestamp = now();
       const reservedAgent: AgentRecord = {
@@ -419,11 +435,16 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         reportsTo: parent ? agentQualifiedName(parent) : null,
         workspaceId,
         projectId,
+        prompt: assembled.received,
         retired: false,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
-      const createConfig = creationConfig(input, provisional, parent, projectId);
+      const createConfig = creationConfig(
+        input,
+        initialPrompt({ pwa: assembled.pwa, agent: provisional, brief: input.brief }),
+        parent,
+      );
       await store.commit(() => [{ op: "put", collection: "agents", record: reservedAgent }]);
       let created;
       try {
@@ -478,6 +499,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       role: input.role,
       reportsTo: parent ? agentQualifiedName(parent) : null,
     } as const;
+    const assembled = assemblePrompt(provisional, projectId);
     const timestamp = now();
     const agent: AgentRecord = {
       id: id("agent"),
@@ -490,11 +512,16 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       reportsTo: parent ? agentQualifiedName(parent) : null,
       workspaceId: null,
       projectId,
+      prompt: assembled.received,
       retired: false,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    const systemPrompt = rolePrompt(provisional, input.brief, projectId);
+    const systemPrompt = initialPrompt({
+      pwa: assembled.pwa,
+      agent: provisional,
+      brief: input.brief,
+    });
     await store.commit(() => [{ op: "put", collection: "agents", record: agent }]);
     return { agentId: agent.paseoAgentId, systemPrompt, agent };
   });
@@ -531,6 +558,31 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       return result;
     },
   );
+
+  server.handle(refreshPromptRpc, async ({ paseoAgentId }) => {
+    const current = findAgentByPaseoId(paseoAgentId);
+    if (!current) throw new Error(`Unknown active Swarm agent: ${paseoAgentId}`);
+    const assembled = assemblePrompt(current, current.projectId);
+    const previousRevision = current.prompt?.revision ?? null;
+    const changed = previousRevision !== assembled.received.revision;
+    await store.commit((state) => {
+      const agent = state.agents.find((candidate) => candidate.id === current.id);
+      if (!agent) throw new Error(`Unknown active Swarm agent: ${paseoAgentId}`);
+      return [
+        {
+          op: "put",
+          collection: "agents",
+          record: { ...agent, prompt: assembled.received, updatedAt: now() },
+        },
+      ];
+    });
+    return {
+      revision: assembled.received.revision,
+      previousRevision,
+      changed,
+      prompt: refreshedPrompt({ pwa: assembled.pwa, agent: current, changed }),
+    };
+  });
 
   server.handle(createTaskRpc, async (input: RpcInput<typeof createTaskRpc>) => {
     const actor = findAgent(input.createdBy);

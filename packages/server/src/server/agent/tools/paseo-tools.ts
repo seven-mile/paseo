@@ -752,6 +752,32 @@ export async function createPaseoToolCatalog(
           return swarmResult({ activity });
         },
       );
+      registerTool(
+        "swarm_prompt_refresh",
+        {
+          description:
+            "Re-read your standing Swarm context, assembled the same way as at your session start but from the current PWA and Swarm plugin: role-class settings, identity, project working agreement, and role guidance. Call it when a human or your manager says the PWA, Swarm plugin, or daemon changed, or when your Swarm settings are missing after compaction. The result says whether the context changed since you last received it; when it changed, it supersedes the corresponding session-start context. Your orientation brief, Task assignments, and team messages stay in effect. Refreshing does not change Tasks, Activities, or your roster identity.",
+        },
+        async () => {
+          if (!callerAgentId) throw new Error("Swarm prompt refresh requires an agent caller");
+          const refreshed = (await invokePlugin("paseo-swarm", "swarm.agent.refresh_prompt", {
+            paseoAgentId: callerAgentId,
+          })) as {
+            revision: string;
+            previousRevision: string | null;
+            changed: boolean;
+            prompt: string;
+          };
+          return {
+            content: [{ type: "text", text: refreshed.prompt }],
+            structuredContent: {
+              revision: refreshed.revision,
+              previousRevision: refreshed.previousRevision,
+              changed: refreshed.changed,
+            },
+          };
+        },
+      );
       if (swarmRole !== "worker") {
         registerTool(
           "swarm_roles_read",
