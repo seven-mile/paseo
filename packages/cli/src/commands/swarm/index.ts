@@ -214,7 +214,7 @@ export const seatHistorySchema: OutputSchema<SeatHistory> = {
   ],
   renderHuman: (result, options) => {
     const history = result.type === "single" ? result.data : result.data[0];
-    const table = renderTable(
+    const table = renderTable<HistoryEntryRow>(
       { type: "list", data: history.entries, schema: historySchema },
       options,
     );
