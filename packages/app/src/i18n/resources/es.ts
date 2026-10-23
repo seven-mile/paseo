@@ -22,6 +22,7 @@ export const es: TranslationResources = {
       addWorker: "Añadir trabajador",
       noWorkers: "Aún no hay trabajadores",
       addWorkerUnder: "Añadir trabajador bajo {{name}}",
+      staleSeat: "Agente nuevo con el próximo mensaje ({{reason}})",
       tasksFor: "Tareas de {{name}}",
       loadingAgents: "Cargando agentes…",
       planners: "Planificadores",

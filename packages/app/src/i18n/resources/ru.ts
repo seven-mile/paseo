@@ -22,6 +22,7 @@ export const ru: TranslationResources = {
       addWorker: "Добавить исполнителя",
       noWorkers: "Исполнителей пока нет",
       addWorkerUnder: "Добавить исполнителя под {{name}}",
+      staleSeat: "Новый агент при следующем сообщении ({{reason}})",
       tasksFor: "Задачи {{name}}",
       loadingAgents: "Загрузка агентов…",
       planners: "Планировщики",

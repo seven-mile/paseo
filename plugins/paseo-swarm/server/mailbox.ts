@@ -1,8 +1,9 @@
 import type { PluginHookContext } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
 import type { MailboxMessage, MailboxStatus, MessageKind, SwarmState } from "../shared/models";
-import { mailboxMessageStatus } from "../shared/models";
+import { agentQualifiedName, mailboxMessageStatus, occupantStaleReason } from "../shared/models";
 import { turnDigest } from "./prompts";
+import { occupantRunning, replaceOccupant } from "./seats";
 import { store, type SwarmChange } from "./state";
 
 // Send failures before a message stops being retried.
@@ -211,6 +212,42 @@ async function nextDelivery(queue: MailboxMessage[]): Promise<Delivery | null> {
   return digestDelivery(batched, batchId);
 }
 
+function queuedFor(recipientAgentId: string): MailboxMessage[] {
+  return store
+    .read()
+    .messages.filter(
+      (message) =>
+        message.recipientAgentId === recipientAgentId && mailboxMessageStatus(message) === "queued",
+    );
+}
+
+// Mail is what wakes a seat, so this is where a stale occupant is replaced: never woken again,
+// and swapped once its current turn ends. Returns the queue to deliver, or null to hold it.
+// Replacement puts the rows the old occupant never finished back in the queue, ahead of the rest.
+async function syncSeat(
+  queue: MailboxMessage[],
+  context: MailboxContext,
+): Promise<MailboxMessage[] | null> {
+  const [head] = queue;
+  const seat = store.read().agents.find((agent) => agent.id === head.recipientAgentId);
+  if (!seat || seat.retired || occupantStaleReason(seat) === null) return queue;
+  // Paseo's own status, not runningAgents: a turn end Swarm missed must not hold the seat forever.
+  if (await occupantRunning(seat, context)) return null;
+  try {
+    await replaceOccupant(seat, context);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const failedAt = new Date().toISOString();
+    await settle([head], (message) => ({
+      attempts: message.attempts + 1,
+      lastError: `Could not replace the agent in seat ${agentQualifiedName(seat)}: ${detail}`,
+      ...(message.attempts + 1 >= MAX_DELIVERY_ATTEMPTS ? { failedAt } : {}),
+    }));
+    return null;
+  }
+  return queuedFor(seat.id);
+}
+
 let flushing: Promise<unknown> = Promise.resolve();
 
 function serialized<T>(work: () => Promise<T>): Promise<T> {
@@ -231,6 +268,9 @@ export function flushMailbox(context: MailboxContext): Promise<void> {
       queues.set(message.recipientAgentId, queue);
     }
     for (let queue of queues.values()) {
+      const synced = await syncSeat(queue, context);
+      if (!synced) continue;
+      queue = synced;
       while (queue.length > 0) {
         const delivery = await nextDelivery(queue);
         if (!delivery) break;

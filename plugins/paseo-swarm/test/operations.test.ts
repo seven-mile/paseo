@@ -20,7 +20,12 @@ import {
   store,
   type SwarmChange,
 } from "../server/state";
-import { emptyState, type AgentRecord, type SwarmState } from "../shared/models";
+import {
+  emptyState,
+  occupantStaleReason,
+  type AgentRecord,
+  type SwarmState,
+} from "../shared/models";
 import {
   boardReadRpc,
   createAgentRpc,
@@ -59,7 +64,10 @@ function readDisk(): string {
 }
 
 function boardOf({ messages: _messages, ...board }: Readonly<SwarmState>) {
-  return board;
+  return {
+    ...board,
+    agents: board.agents.map((agent) => ({ ...agent, stale: occupantStaleReason(agent) })),
+  };
 }
 
 test("supervisors require independent placement, workers keep caller defaults, and foreign occupants are rejected", async () => {
@@ -881,7 +889,9 @@ test("roster reads filter native availability without releasing historical names
       /already exists/,
     );
     available = true;
-    assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, [agent]);
+    assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, [
+      { ...agent, stale: null },
+    ]);
     available = false;
     assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, []);
     fail = true;

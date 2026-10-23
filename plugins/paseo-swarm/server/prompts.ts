@@ -132,6 +132,26 @@ export function initialPrompt({ pwa, agent, brief }: InitialPromptInput): string
   return [...identityAndAgreement({ pwa, agent }), "", "", `Orientation: ${brief}`].join("\n");
 }
 
+export interface TakeoverBriefInput {
+  seat: string;
+  occupant: number;
+  reason: string;
+  manager: string | null;
+}
+
+// The orientation brief of an agent that replaces a stale occupant of the same seat.
+export function takeoverBrief({ seat, occupant, reason, manager }: TakeoverBriefInput): string {
+  return [
+    `You are occupant ${occupant} of the Swarm seat ${seat}. Occupant ${occupant - 1} was replaced (${reason}); its Paseo session is closed and will not resume.`,
+    "Your name, role, reporting line, Tasks, Activities, and mailbox carry over unchanged. The board is the source of truth: start with swarm_board_read and read the Tasks you manage or work on.",
+    "swarm_seat_history_read pages through earlier occupants' transcripts, newest first. Read them when the board does not explain where the work stands. Treat what they say, and the Activities they wrote, as claims to check against the board and the workspace, not as facts.",
+    "The message that follows is what woke this seat; handle it after you have oriented yourself.",
+    manager
+      ? `End your first turn with a team message to ${manager} that says what you believe you own, what you are waiting on, and anything in the earlier transcripts you could not reconcile.`
+      : "End your first turn by recording what you believe you own, what you are waiting on, and anything in the earlier transcripts you could not reconcile, as an Activity on the most relevant Task.",
+  ].join(" ");
+}
+
 // The standing context without the one-time orientation brief. Its hash is the
 // agent's prompt revision: it changes when the PWA or the framework text changes.
 export function standingPrompt(input: StandingPromptInput): string {

@@ -22,6 +22,7 @@ export const ptBR: TranslationResources = {
       addWorker: "Adicionar executor",
       noWorkers: "Ainda não há executores",
       addWorkerUnder: "Adicionar executor sob {{name}}",
+      staleSeat: "Novo agente na próxima mensagem ({{reason}})",
       tasksFor: "Tarefas de {{name}}",
       loadingAgents: "Carregando agentes…",
       planners: "Planejadores",

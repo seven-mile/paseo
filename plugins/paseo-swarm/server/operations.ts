@@ -7,10 +7,18 @@ import {
   initialPrompt,
   messagePrompt,
   messageReceipt,
-  promptRevision,
   refreshedPrompt,
   turnDigestRow,
 } from "./prompts";
+import {
+  assemblePrompt,
+  assertRoleClass,
+  listSeats,
+  readSeatHistory,
+  resetSeats,
+  seatView,
+  updateSeats,
+} from "./seats";
 import type { TurnSummary } from "./turns";
 import { flushMailbox, sendThroughMailbox } from "./mailbox";
 import { store } from "./state";
@@ -32,9 +40,13 @@ import {
   bindPreparedAgentRpc,
   mailboxReadRpc,
   refreshPromptRpc,
+  seatHistoryReadRpc,
+  seatListRpc,
+  seatResetRpc,
+  seatUpdateRpc,
 } from "../shared/swarm";
-import type { AgentRecord, SwarmState, Task } from "../shared/models";
-import { agentQualifiedName, mailboxMessageStatus } from "../shared/models";
+import type { AgentConfig, AgentRecord, SwarmState, Task } from "../shared/models";
+import { agentQualifiedName, currentOccupant, mailboxMessageStatus } from "../shared/models";
 
 const now = () => new Date().toISOString();
 const id = (prefix: string) => `${prefix}-${randomUUID()}`;
@@ -204,34 +216,6 @@ function findTask(taskId: string): Task {
   return value;
 }
 
-// Creation and refresh both assemble from the current PWA, so a refresh gives an
-// agent what a new agent with the same identity would get.
-function assemblePrompt(
-  agent: Pick<AgentRecord, "name" | "qualifiedName" | "roleClass" | "role" | "reportsTo">,
-  projectId?: string,
-) {
-  const pwa = readPwa(requirePwaSource(projectId), agent.role);
-  assertRoleClass(pwa.roleClass, agent.roleClass, agent.role);
-  return {
-    pwa,
-    received: {
-      revision: promptRevision({ pwa, agent }),
-      pwaRevision: pwa.revision,
-      receivedAt: now(),
-    },
-  };
-}
-
-function assertRoleClass(
-  pwaRoleClass: AgentRecord["roleClass"],
-  agentRoleClass: AgentRecord["roleClass"],
-  role: string,
-): void {
-  if (pwaRoleClass !== agentRoleClass) {
-    throw new Error(`Role ${role} belongs to role class ${pwaRoleClass}, not ${agentRoleClass}`);
-  }
-}
-
 async function assertCreationWorkspace(
   actor: AgentRecord | null,
   workspaceId: string | null,
@@ -261,19 +245,23 @@ async function assertCreationWorkspace(
   }
 }
 
+// What a created agent runs, which is also what its seat wants until someone edits the seat.
+function seatConfig(input: RpcInput<typeof createAgentRpc>): AgentConfig {
+  return {
+    provider: input.provider,
+    ...(input.modeId ? { modeId: input.modeId } : {}),
+    ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
+    ...(input.featureValues ? { featureValues: input.featureValues } : {}),
+  };
+}
+
 function creationConfig(
   input: RpcInput<typeof createAgentRpc>,
   systemPrompt: string,
   parent: AgentRecord | null,
 ) {
   return {
-    config: {
-      provider: input.provider,
-      ...(input.modeId ? { modeId: input.modeId } : {}),
-      ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
-      ...(input.featureValues ? { featureValues: input.featureValues } : {}),
-      systemPrompt,
-    },
+    config: { ...seatConfig(input), provider: input.provider, systemPrompt },
     title: input.title ?? input.name,
     ...(parent ? { parent: parent.paseoAgentId } : {}),
   };
@@ -309,7 +297,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     const saved = store.read();
     const board = {
       version: saved.version,
-      agents: saved.agents.filter((agent) => availableIds.has(agent.paseoAgentId)),
+      agents: saved.agents.filter((agent) => availableIds.has(agent.paseoAgentId)).map(seatView),
       tasks: saved.tasks,
       activities: saved.activities,
     };
@@ -436,6 +424,9 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         workspaceId,
         projectId,
         prompt: assembled.received,
+        agentConfig: seatConfig(input),
+        generation: 0,
+        occupant: { number: 1, config: seatConfig(input), generation: 0, boundAt: timestamp },
         retired: false,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -660,7 +651,10 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     }
     let result!: ReturnType<typeof makeActivity>;
     await store.commit((state) => {
-      result = makeActivity({ ...input, actorKind: "agent" }, state);
+      result = makeActivity(
+        { ...input, actorKind: "agent", actorOccupant: currentOccupant(actor).number },
+        state,
+      );
       return [{ op: "put", collection: "activities", record: result }];
     });
     return result;
@@ -781,6 +775,20 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     },
   );
 
+  server.handle(seatListRpc, async (input) => ({ seats: listSeats(input) }));
+  server.handle(seatUpdateRpc, async (input, context) => {
+    const seats = await updateSeats(input, context);
+    // A seat with queued mail wakes now, so a change takes effect without waiting for new mail.
+    if (!input.dryRun) await flushMailbox(context);
+    return { seats };
+  });
+  server.handle(seatResetRpc, async (input, context) => {
+    const seats = await resetSeats(input, context);
+    if (!input.dryRun) await flushMailbox(context);
+    return { seats };
+  });
+  server.handle(seatHistoryReadRpc, async (input, context) => readSeatHistory(input, context));
+
   server.handle(mailboxReadRpc, async (input: RpcInput<typeof mailboxReadRpc>, context) => {
     await flushMailbox(context);
     const messages = [];
@@ -801,6 +809,7 @@ function makeActivity(
     taskId: string;
     actorName: string;
     actorKind: "agent" | "human";
+    actorOccupant?: number;
     replyTo: string | null;
     responseProfile: "decision" | "steering" | "discussion" | null;
     kind: string;
@@ -814,6 +823,7 @@ function makeActivity(
     taskId: input.taskId,
     actorName: input.actorName,
     actorKind: input.actorKind,
+    ...(input.actorOccupant === undefined ? {} : { actorOccupant: input.actorOccupant }),
     replyTo: input.replyTo,
     responseProfile: input.responseProfile,
     kind: input.kind,

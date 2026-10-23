@@ -95,6 +95,8 @@ const rosterSchema = z.object({
       reportsTo: z.string().nullable(),
       workspaceId: z.string().nullable(),
       retired: z.boolean(),
+      // Why the seat's agent will be replaced when mail next wakes it. Absent on older hosts.
+      stale: z.string().nullable().optional(),
     }),
   ),
 });
@@ -802,7 +804,13 @@ function RosterEntry({
   const { t } = useTranslation();
   const isCompact = useIsCompactFormFactor();
   const { runtimeAgent, statusLabel, bucket } = useRosterStatus(serverId, agent.paseoAgentId);
-  const metadata = [t(`swarm.roles.${agent.roleClass}`), statusLabel].filter(Boolean).join(", ");
+  const metadata = [
+    t(`swarm.roles.${agent.roleClass}`),
+    statusLabel,
+    agent.stale ? t("swarm.sidebar.staleSeat", { reason: agent.stale }) : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
   const handlePress = useCallback(() => onOpen(agent), [agent, onOpen]);
   const handleTasks = useCallback(() => onOpenTasks(agent), [agent, onOpenTasks]);
   return (

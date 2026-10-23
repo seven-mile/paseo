@@ -51,6 +51,22 @@ describe("canonical CLI surface", () => {
     expect(help).not.toContain("worktree");
   });
 
+  it("offers Swarm seat management with dry runs for edits", () => {
+    const swarm = createCli().commands.find((command) => command.name() === "swarm");
+    const seat = swarm?.commands.find((command) => command.name() === "seat");
+    expect(seat?.commands.map((command) => command.name())).toEqual([
+      "ls",
+      "set",
+      "reset",
+      "history",
+    ]);
+    for (const name of ["set", "reset"]) {
+      const help = seat?.commands.find((command) => command.name() === name)?.helpInformation();
+      expect(help).toContain("--dry-run");
+      expect(help).toContain("--json");
+    }
+  });
+
   it("offers identical top-level and daemon config reload commands", () => {
     const cli = createCli();
     const reload = cli.commands.find((command) => command.name() === "reload");
