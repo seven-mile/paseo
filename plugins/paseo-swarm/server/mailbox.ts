@@ -231,19 +231,25 @@ async function syncSeat(
   const [head] = queue;
   const seat = store.read().agents.find((agent) => agent.id === head.recipientAgentId);
   if (!seat || seat.retired || occupantStaleReason(seat) === null) return queue;
-  // Paseo's own status, not runningAgents: a turn end Swarm missed must not hold the seat forever.
-  if (await occupantRunning(seat, context)) return null;
+  // The mail stays queued without spending send attempts, so a provider that is down for a
+  // while does not fail the message; every later flush tries the replacement again.
+  const hold = async (problem: string, error: unknown) => {
+    const detail = error instanceof Error ? error.message : String(error);
+    await settle([head], () => ({
+      lastError: `${problem} seat ${agentQualifiedName(seat)}: ${detail}`,
+    }));
+    return null;
+  };
+  try {
+    // Paseo's own status, not runningAgents: a turn end Swarm missed must not hold the seat forever.
+    if (await occupantRunning(seat, context)) return null;
+  } catch (error) {
+    return hold("Could not check the agent in", error);
+  }
   try {
     await replaceOccupant(seat, context);
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    const failedAt = new Date().toISOString();
-    await settle([head], (message) => ({
-      attempts: message.attempts + 1,
-      lastError: `Could not replace the agent in seat ${agentQualifiedName(seat)}: ${detail}`,
-      ...(message.attempts + 1 >= MAX_DELIVERY_ATTEMPTS ? { failedAt } : {}),
-    }));
-    return null;
+    return hold("Could not replace the agent in", error);
   }
   return queuedFor(seat.id);
 }

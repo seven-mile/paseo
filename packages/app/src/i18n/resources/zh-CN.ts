@@ -22,7 +22,7 @@ export const zhCN: TranslationResources = {
       addWorker: "添加工作者",
       noWorkers: "暂无工作者",
       addWorkerUnder: "在 {{name}} 下添加工作者",
-      staleSeat: "下条消息时换新智能体（{{reason}}）",
+      staleSeat: "下一条 Swarm 消息送达前换新智能体（{{reason}}）",
       tasksFor: "{{name}} 的任务",
       loadingAgents: "正在加载智能体…",
       planners: "规划者",

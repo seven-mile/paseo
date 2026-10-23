@@ -22,7 +22,7 @@ export const es: TranslationResources = {
       addWorker: "Añadir trabajador",
       noWorkers: "Aún no hay trabajadores",
       addWorkerUnder: "Añadir trabajador bajo {{name}}",
-      staleSeat: "Agente nuevo con el próximo mensaje ({{reason}})",
+      staleSeat: "Agente nuevo antes del próximo mensaje de Swarm ({{reason}})",
       tasksFor: "Tareas de {{name}}",
       loadingAgents: "Cargando agentes…",
       planners: "Planificadores",

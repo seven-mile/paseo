@@ -9,7 +9,7 @@ import type {
   PluginServerContext,
 } from "@getpaseo/plugin/server";
 import contribute from "../index.server";
-import { flushMailbox, forgetRunningTurns } from "../server/mailbox";
+import { flushMailbox, forgetRunningTurns, MAX_DELIVERY_ATTEMPTS } from "../server/mailbox";
 import { registerOperations } from "../server/operations";
 import { store } from "../server/state";
 import { mailboxMessageStatus, occupantStaleReason, type AgentRecord } from "../shared/models";
@@ -75,28 +75,31 @@ function fakePaseo() {
   const creations: Array<{ workspaceId: string; config: Record<string, unknown> }> = [];
   const timeline: Array<{ seq: number; item: Record<string, unknown> }> = [];
   let failCreate: string | null = null;
+  let failLookup: string | null = null;
   let created = 0;
   const context = {
     signal: new AbortController().signal,
     paseo: {
       agents: {
-        async list() {
+        // One agent per page, so every caller has to follow the cursor.
+        async list(input: { page?: { cursor?: string } }) {
+          const live = [...runtime].filter(([, agent]) => !agent.archived);
+          const index = Number(input.page?.cursor ?? 0);
           return {
-            entries: [...runtime]
-              .filter(([, agent]) => !agent.archived)
-              .map(([id, agent]) => ({
-                agent: {
-                  id,
-                  workspaceId: "workspace",
-                  labels: agent.parent ? { "paseo.parent-agent-id": agent.parent } : {},
-                },
-              })),
-            pageInfo: { nextCursor: null },
+            entries: live.slice(index, index + 1).map(([id, agent]) => ({
+              agent: {
+                id,
+                workspaceId: "workspace",
+                labels: agent.parent ? { "paseo.parent-agent-id": agent.parent } : {},
+              },
+            })),
+            pageInfo: { nextCursor: index + 1 < live.length ? String(index + 1) : null },
           };
         },
         ref(agentId: string) {
           return {
             async refresh() {
+              if (failLookup) throw new Error(failLookup);
               const agent = runtime.get(agentId);
               return agent ? { agent: { id: agentId, workspaceId: "workspace", ...agent } } : null;
             },
@@ -159,6 +162,9 @@ function fakePaseo() {
     timeline,
     failCreate(message: string | null) {
       failCreate = message;
+    },
+    failLookup(message: string | null) {
+      failLookup = message;
     },
   };
 }
@@ -265,17 +271,34 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   const fake = fakePaseo();
   await seed(fake, [supervisor, worker]);
 
+  // The seat's mode belongs to the old provider, so a switch has to say what to do with it.
+  await assert.rejects(
+    call(
+      seatUpdateRpc,
+      { seats: ["lead", "lead.dev"], agentConfig: { provider: "fast" } },
+      fake.context,
+    ),
+    /Changing to provider fast needs .*: lead \(modeId for slow\/large\); lead\.dev \(modeId for slow\/large\)/,
+  );
   const preview = await call<Seats>(
     seatUpdateRpc,
-    { seats: ["lead"], agentConfig: { provider: "fast" }, dryRun: true },
+    { seats: ["lead"], agentConfig: { provider: "fast", modeId: "plan" }, dryRun: true },
     fake.context,
   );
   assert.equal(preview.seats[0].stale, "provider slow/large → fast");
   assert.equal(seat(supervisor.id).agentConfig?.provider, "slow/large", "a dry run saves nothing");
 
   // Edited back before any mail arrives, the seat is current again and nothing happened.
-  await call(seatUpdateRpc, { seats: ["lead"], agentConfig: { provider: "fast" } }, fake.context);
-  await call(seatUpdateRpc, { seats: ["lead"], agentConfig: { provider: "slow" } }, fake.context);
+  await call(
+    seatUpdateRpc,
+    { seats: ["lead"], agentConfig: { provider: "fast", modeId: "plan" } },
+    fake.context,
+  );
+  await call(
+    seatUpdateRpc,
+    { seats: ["lead"], agentConfig: { provider: "slow", modeId: "default" } },
+    fake.context,
+  );
   assert.equal(seat(supervisor.id).paseoAgentId, supervisor.paseoAgentId);
   assert.equal(fake.creations.length, 0);
 
@@ -305,11 +328,8 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   const replaced = seat(supervisor.id);
   assert.equal(replaced.paseoAgentId, "replacement-1");
   assert.equal(occupantStaleReason(replaced), null);
-  assert.deepEqual(replaced.occupant?.config, {
-    provider: "fast",
-    modeId: "default",
-    thinkingOptionId: "high",
-  });
+  // Nothing of the old provider carries over: the cleared mode is not filled in from the old agent.
+  assert.deepEqual(replaced.occupant?.config, { provider: "fast" });
   assert.equal(replaced.occupant?.number, 2);
   assert.deepEqual(
     replaced.pastOccupants?.map((past) => [past.number, past.paseoAgentId, past.reason]),
@@ -371,6 +391,12 @@ test("a stale agent finishes its turn before it is replaced, and unfinished mail
   const replaced = seat(worker.id);
   assert.equal(replaced.paseoAgentId, "replacement-1");
   assert.equal(replaced.occupant?.generation, 1);
+  // A reset on the same provider keeps what the previous agent ran.
+  assert.deepEqual(replaced.occupant?.config, {
+    provider: "slow/large",
+    modeId: "default",
+    thinkingOptionId: "high",
+  });
   assert.deepEqual(
     fake.sends
       .slice(1)
@@ -409,8 +435,13 @@ test("a cancelled reset and a failed replacement leave the seat's agent in place
     },
     fake.context,
   );
+  // A provider that stays down past the send retry limit does not fail the mail.
+  for (let flush = 0; flush < MAX_DELIVERY_ATTEMPTS + 2; flush += 1) {
+    await flushMailbox(fake.context);
+  }
   const [message] = store.read().messages;
   assert.equal(mailboxMessageStatus(message), "queued");
+  assert.equal(message.attempts, 0);
   assert.match(
     message.lastError ?? "",
     /Could not replace the agent in seat lead: provider unavailable/,
@@ -422,6 +453,40 @@ test("a cancelled reset and a failed replacement leave the seat's agent in place
   await flushMailbox(fake.context);
   assert.equal(seat(supervisor.id).paseoAgentId, "replacement-1");
   assert.equal(fake.sends[0].agentId, "replacement-1");
+  assert.equal(mailboxMessageStatus(store.read().messages[0]), "delivered");
+});
+
+test("a seat whose agent status cannot be read is held, and an edit reports the seat it bound", async (t) => {
+  const { call } = setup(t);
+  const fake = fakePaseo();
+  await seed(fake, [supervisor]);
+  await call(seatResetRpc, { seats: ["lead"] }, fake.context);
+
+  fake.failLookup("daemon busy");
+  await call(
+    sendMessageRpc,
+    {
+      recipientPaseoAgentId: supervisor.paseoAgentId,
+      recipientName: "lead",
+      senderName: "human",
+      body: "Hello",
+    },
+    fake.context,
+  );
+  const [message] = store.read().messages;
+  assert.equal(mailboxMessageStatus(message), "queued");
+  assert.equal(message.attempts, 0);
+  assert.match(message.lastError ?? "", /Could not check the agent in seat lead: daemon busy/);
+  assert.equal(fake.creations.length, 0, "an agent that may be mid-turn is not replaced");
+
+  fake.failLookup(null);
+  const updated = await call<Seats>(
+    seatUpdateRpc,
+    { seats: ["lead"], agentConfig: { thinkingOptionId: "high" } },
+    fake.context,
+  );
+  assert.equal(updated.seats[0].paseoAgentId, "replacement-1");
+  assert.equal(updated.seats[0].stale, null);
 });
 
 test("a seat from before seats existed is stamped with what its agent runs", async (t) => {

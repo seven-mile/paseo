@@ -5,6 +5,7 @@ import {
   currentOccupant,
   mailboxMessageStatus,
   occupantStaleReason,
+  providerFamily,
 } from "../shared/models";
 import { initialPrompt, promptRevision, takeoverBrief } from "./prompts";
 import { readPwa } from "./pwa";
@@ -76,23 +77,26 @@ export async function observedConfig(
 }
 
 // True while the seat's Paseo agent runs a turn. A stale occupant finishes that turn first.
+// An agent Paseo no longer has runs no turn; a failed lookup throws, so the caller holds the seat
+// rather than replacing an agent that may be mid-turn.
 export async function occupantRunning(seat: AgentRecord, context: SeatContext): Promise<boolean> {
-  try {
-    const snapshot = (await context.paseo.agents.ref(seat.paseoAgentId).refresh())?.agent;
-    return snapshot?.status === "running";
-  } catch {
-    // An agent Paseo can no longer load runs no turn.
-    return false;
-  }
+  const snapshot = (await context.paseo.agents.ref(seat.paseoAgentId).refresh())?.agent;
+  return snapshot?.status === "running";
 }
 
 // The config a replacement boots with: the seat's wanted fields over what the stale occupant ran.
+// Settings carry over only within one provider; on another provider the seat's own fields apply.
 async function bootConfig(seat: AgentRecord, context: SeatContext): Promise<AgentConfig> {
   const occupant = currentOccupant(seat);
   const previous = seat.occupant
     ? occupant.config
     : await observedConfig(seat.paseoAgentId, context);
-  const config = { ...previous, ...definedConfig(seat.agentConfig ?? {}) };
+  const wanted = definedConfig(seat.agentConfig ?? {});
+  const sameProvider =
+    !wanted.provider ||
+    (previous.provider !== undefined &&
+      providerFamily(previous.provider) === providerFamily(wanted.provider));
+  const config = sameProvider ? { ...previous, ...wanted } : wanted;
   if (!config.provider) {
     throw new Error(`Seat ${agentQualifiedName(seat)} has no provider to start a new agent with`);
   }
@@ -116,12 +120,19 @@ function requeueUnconsumed(paseoAgentId: string): MailboxMessage[] {
 async function retireOldAgent(paseoAgentId: string, context: SeatContext): Promise<void> {
   try {
     // Archiving cascades to Paseo children, which would take a supervisor's workers with it.
-    const page = await context.paseo.agents.list({ filter: { includeArchived: false } });
-    for (const entry of page.entries) {
-      if (entry.agent.labels?.[PARENT_LABEL] === paseoAgentId) {
-        await context.paseo.agents.ref(entry.agent.id).detach();
+    const children: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await context.paseo.agents.list({
+        filter: { includeArchived: false },
+        page: { limit: 200, ...(cursor ? { cursor } : {}) },
+      });
+      for (const entry of page.entries) {
+        if (entry.agent.labels?.[PARENT_LABEL] === paseoAgentId) children.push(entry.agent.id);
       }
-    }
+      cursor = page.pageInfo.nextCursor ?? undefined;
+    } while (cursor);
+    for (const child of children) await context.paseo.agents.ref(child).detach();
     await context.paseo.agents.ref(paseoAgentId).archive();
   } catch (error) {
     // The seat no longer points at it, so nothing will wake it; leave it for manual cleanup.
@@ -270,10 +281,37 @@ export type AgentConfigPatch = {
   [Key in keyof AgentConfig]-?: AgentConfig[Key] | null | undefined;
 };
 
+const PROVIDER_SETTINGS = ["modeId", "thinkingOptionId", "featureValues"] as const;
+
+// A provider change leaves no setting of the old provider in place unless the edit says what the
+// new provider should use. Translating a mode across providers could change what an agent may do
+// without asking, so the operator picks the new value or clears the field.
+function assertProviderSettings(seats: AgentRecord[], patch: Partial<AgentConfigPatch>): void {
+  if (!patch.provider) return;
+  const problems: string[] = [];
+  for (const seat of seats) {
+    const current = seat.agentConfig?.provider ?? currentOccupant(seat).config.provider;
+    if (current && providerFamily(current) === providerFamily(patch.provider)) continue;
+    const kept = PROVIDER_SETTINGS.filter(
+      (field) => seat.agentConfig?.[field] !== undefined && patch[field] === undefined,
+    );
+    if (kept.length > 0) {
+      problems.push(`${agentQualifiedName(seat)} (${kept.join(", ")} for ${current ?? "unknown"})`);
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `Changing to provider ${patch.provider} needs a value for it or a clear (null) for each ` +
+        `setting of the old provider: ${problems.join("; ")}`,
+    );
+  }
+}
+
 export function updateSeats(
   input: { seats: string[]; agentConfig: Partial<AgentConfigPatch>; dryRun: boolean },
   context: SeatContext,
 ): Promise<SeatView[]> {
+  assertProviderSettings(resolveSeats(input.seats), input.agentConfig);
   return editSeats(
     input.seats,
     input.dryRun,

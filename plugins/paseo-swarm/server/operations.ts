@@ -18,6 +18,7 @@ import {
   resetSeats,
   seatView,
   updateSeats,
+  type SeatView,
 } from "./seats";
 import type { TurnSummary } from "./turns";
 import { flushMailbox, sendThroughMailbox } from "./mailbox";
@@ -776,16 +777,20 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   );
 
   server.handle(seatListRpc, async (input) => ({ seats: listSeats(input) }));
+  // A seat with queued mail wakes on the flush, so a change takes effect without waiting for new
+  // mail; the seats are read again so the reply shows any agent that replacement just bound.
+  const afterFlush = async (seats: SeatView[], context: PluginHandlerContext) => {
+    await flushMailbox(context);
+    const ids = new Set(seats.map((seat) => seat.id));
+    return listSeats({ includeRetired: true }).filter((seat) => ids.has(seat.id));
+  };
   server.handle(seatUpdateRpc, async (input, context) => {
     const seats = await updateSeats(input, context);
-    // A seat with queued mail wakes now, so a change takes effect without waiting for new mail.
-    if (!input.dryRun) await flushMailbox(context);
-    return { seats };
+    return { seats: input.dryRun ? seats : await afterFlush(seats, context) };
   });
   server.handle(seatResetRpc, async (input, context) => {
     const seats = await resetSeats(input, context);
-    if (!input.dryRun) await flushMailbox(context);
-    return { seats };
+    return { seats: input.dryRun ? seats : await afterFlush(seats, context) };
   });
   server.handle(seatHistoryReadRpc, async (input, context) => readSeatHistory(input, context));
 

@@ -1,6 +1,7 @@
 import { Command } from "commander";
-import type { CommandOptions, ListResult, OutputSchema } from "../../output/index.js";
-import { withOutput } from "../../output/index.js";
+import type { CommandOptions, ListResult, OutputSchema, SingleResult } from "../../output/index.js";
+import { renderTable, withOutput } from "../../output/index.js";
+
 import { connectToDaemon } from "../../utils/client.js";
 import { addJsonAndDaemonHostOptions } from "../../utils/command-options.js";
 
@@ -195,11 +196,37 @@ function positiveInteger(value: string | undefined, flag: string): number | unde
   return parsed;
 }
 
+export interface SeatHistory {
+  seat: string;
+  occupant: number;
+  paseoAgentId: string;
+  entries: HistoryEntryRow[];
+  nextBefore: string | null;
+}
+
+// JSON and YAML get the whole page, cursor included; the table shows the entries.
+export const seatHistorySchema: OutputSchema<SeatHistory> = {
+  idField: "paseoAgentId",
+  columns: [
+    { header: "SEAT", field: "seat" },
+    { header: "OCCUPANT", field: "occupant" },
+    { header: "AGENT", field: "paseoAgentId" },
+  ],
+  renderHuman: (result, options) => {
+    const history = result.type === "single" ? result.data : result.data[0];
+    const table = renderTable(
+      { type: "list", data: history.entries, schema: historySchema },
+      options,
+    );
+    return history.nextBefore ? `${table}\nOlder entries: --before '${history.nextBefore}'` : table;
+  },
+};
+
 async function runHistory(
   seat: string,
   options: HistoryOptions,
   _command: Command,
-): Promise<ListResult<HistoryEntryRow>> {
+): Promise<SingleResult<SeatHistory>> {
   const occupant = positiveInteger(options.occupant, "--occupant");
   const limit = positiveInteger(options.limit, "--limit");
   const history = (await invokeSwarm(options, "swarm.seat.history.read", {
@@ -207,11 +234,8 @@ async function runHistory(
     ...(occupant ? { occupant } : {}),
     ...(options.before ? { before: options.before } : {}),
     ...(limit ? { limit } : {}),
-  })) as { entries: HistoryEntryRow[]; nextBefore: string | null };
-  if (history.nextBefore && options.format !== "json" && !options.json) {
-    process.stderr.write(`Older entries: --before '${history.nextBefore}'\n`);
-  }
-  return { type: "list", data: history.entries, schema: historySchema };
+  })) as SeatHistory;
+  return { type: "single", data: history, schema: seatHistorySchema };
 }
 
 export function createSwarmCommand(): Command {
@@ -219,7 +243,7 @@ export function createSwarmCommand(): Command {
   const seat = swarm
     .command("seat")
     .description(
-      "Manage Swarm seats: the roster identities whose Paseo agents can be replaced. A seat whose agent no longer matches it gets a fresh agent the next time mail wakes it.",
+      "Manage Swarm seats: the roster identities whose Paseo agents can be replaced. A seat whose agent no longer matches it gets a fresh agent before its next Swarm mailbox delivery, after any running turn. Typing into the agent's own conversation does not replace it.",
     );
   addJsonAndDaemonHostOptions(
     seat
@@ -231,9 +255,14 @@ export function createSwarmCommand(): Command {
   addJsonAndDaemonHostOptions(
     seat
       .command("set")
-      .description("Change the agent config seats want; mismatched agents are replaced on wake")
+      .description(
+        "Change the agent config seats want; a mismatched agent is replaced before the seat's next Swarm mailbox delivery",
+      )
       .argument("<seats...>", "Seat qualified names or roster IDs")
-      .option("--provider <provider>", "Provider, or provider/model")
+      .option(
+        "--provider <provider>",
+        "Provider, or provider/model. A different provider needs --mode, --thinking, and --features for it, or --clear, for each one the seat sets",
+      )
       .option("--mode <id>", "Mode ID")
       .option("--thinking <id>", "Thinking option ID")
       .option("--features <json>", "Feature values as a JSON object")
@@ -246,7 +275,9 @@ export function createSwarmCommand(): Command {
   addJsonAndDaemonHostOptions(
     seat
       .command("reset")
-      .description("Replace seats' agents with fresh ones on their next wake, keeping their config")
+      .description(
+        "Replace seats' agents with fresh ones before their next Swarm mailbox delivery, keeping their config",
+      )
       .argument("<seats...>", "Seat qualified names or roster IDs")
       .option("--cancel", "Withdraw a reset that has not taken effect")
       .option("--dry-run", "Show the result without saving it"),

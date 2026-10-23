@@ -15,19 +15,25 @@ The occupant carries a stamp of what it booted with: its number in the seat, its
 
 ## The rule
 
-A stale occupant is never woken again. The seat's next wake boots a fresh occupant.
+Swarm never delivers mail to a stale occupant. The seat's next Swarm mailbox delivery boots a fresh occupant first.
 
-Mail is what wakes a seat, so the rule lives in mailbox delivery (`syncSeat` in `plugins/paseo-swarm/server/mailbox.ts`). Before delivering to a seat whose occupant is stale:
+The rule lives in mailbox delivery (`syncSeat` in `plugins/paseo-swarm/server/mailbox.ts`), which carries team messages, human Activities, and turn digests. Someone typing into the stale agent's own conversation addresses that Paseo agent directly: it skips the mailbox, wakes the old agent, and does not replace it. Before delivering to a seat whose occupant is stale:
 
-1. If the occupant is mid-turn, the seat's mail is held. The occupant finishes its turn, and the turn end flushes the mailbox again.
+1. If the occupant is mid-turn, the seat's mail is held. The occupant finishes its turn, and the turn end flushes the mailbox again. If Paseo cannot report the occupant's status, the mail is held too, since replacing an agent that may be mid-turn would cut that turn off.
 2. Otherwise Swarm creates a new Paseo agent in the seat's workspace, with the role prompt assembled from the current PWA and a takeover brief, then rebinds the seat to it.
 3. Rows the old occupant was handed but never finished a turn on go back to the queue, ahead of newer mail.
 4. Children whose Paseo parent is the old occupant are detached, then the old occupant is archived. Archiving cascades to Paseo children, which would take a supervisor's workers with it.
 5. The held mail is delivered to the new occupant, which starts its first turn.
 
-If creating the new agent fails, the head message records the error and stays queued like any failed send, and the old occupant stays bound but is still not woken.
+If creating the new agent fails, the head message records the error in `lastError` and stays queued without spending its send attempts, so a provider that is down for an hour does not fail the mail. Every later flush tries again. The old occupant stays bound but gets no mail.
 
-A seat with no mail stays stale until something wakes it. A seat edit flushes the mailbox, so seats with queued mail switch right away.
+A seat with no mail stays stale until mail arrives. A seat edit flushes the mailbox, so seats with queued mail switch right away.
+
+## Config across providers
+
+A replacement boots with the seat's `agentConfig`. Within one provider (`claude` and `claude/opus` are one provider), fields the seat leaves out come from what the previous occupant ran, so a reset keeps the mode and thinking option. Across providers nothing is inherited: modes, thinking options, and feature values are defined per provider.
+
+Changing a seat to another provider fails while the seat still sets a mode, thinking option, or feature values for the old one. Pass the new provider's value, or clear the field. Swarm does not map modes across providers, because a mapped mode could let an agent do things without asking that it had to ask for before. A cleared field gives the new agent its provider's default, and the provider rejects an unsupported value when the agent is created, which shows up as the mail's `lastError`.
 
 ## Recovery
 
@@ -41,7 +47,7 @@ Workspace facts such as git status are not fed to the new agent. They live in th
 
 The takeover brief tells the occupant its number, why its predecessor was replaced, that the board is the source of truth, that transcripts are claims to check, and that its first turn ends with a takeover report to its manager (or an Activity, for a planner). Activities record `actorOccupant`, so the work of a degraded occupant can be found after the fact.
 
-Because each occupant starts a new provider session, nothing provider-specific carries over. A provider that encrypts reasoning content cannot poison its successor on another provider.
+Because each occupant starts a new provider session, no conversation state carries over. A provider that encrypts reasoning content cannot poison its successor on another provider.
 
 ## Interfaces
 
@@ -61,13 +67,14 @@ Agents read history for their own seat and the seats under them; planners read a
 ## Example: moving a swarm from provider A to provider B
 
 1. `paseo-swarm swarm seat ls` shows every seat with what it wants and what it runs.
-2. `paseo-swarm swarm seat set <seats...> --provider b --dry-run` shows which seats would be replaced and why. Drop `--dry-run` to apply.
-3. Seats with queued mail switch at once. Each other seat switches on its next message, after its current turn. Supervisors and workers switch independently, and a manager learns of a worker's takeover from the worker's takeover report.
-4. If provider B misbehaves, `seat set` back to `a`. Seats that have not woken yet were never touched. Seats that already switched get a fresh A agent on their next wake, which is the same operation, not a rollback.
+2. `paseo-swarm swarm seat set <seats...> --provider b --mode <b-mode> --dry-run` shows which seats would be replaced and why. Pass `--thinking` or `--clear thinking` the same way for seats that set one. Drop `--dry-run` to apply.
+3. Seats with queued mail switch at once. Each other seat switches before its next mailbox delivery, after its current turn. Supervisors and workers switch independently, and a manager learns of a worker's takeover from the worker's takeover report.
+4. If provider B misbehaves, `seat set` back to `a`. Seats that have not woken yet were never touched. Seats that already switched get a fresh A agent before their next delivery, which is the same operation, not a rollback.
 
 ## Decisions
 
-- **Lazy, at wake.** Replacing at the moment of edit would interrupt running turns or race them. At wake, the old occupant is idle by construction, and the edit stays reversible until then.
+- **Lazy, at delivery.** Replacing at the moment of edit would interrupt running turns or race them. At delivery, the old occupant is idle by construction, and the edit stays reversible until then.
+- **Mailbox only.** Native sends to an agent stay as they are; routing them through seats is a larger change to how the app addresses agents.
 - **No batch, rollback, or freeze.** A bulk edit is many seat edits. Reverting is another edit. Holding mail while an occupant is mid-turn is the only pause the model needs.
 - **Per-seat config, not a swarm-wide policy.** A swarm-wide runtime policy hardwires which settings exist. Desired state per seat lets a person or an operator agent express any policy as seat edits.
 - **Workers are not special.** A worker seat keeps its name, Task membership, and mailbox the same way a supervisor does.

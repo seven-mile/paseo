@@ -124,9 +124,10 @@ conversation only; the stored session config keeps the creation-time prompt.
 
 A Swarm agent record is a seat: the roster identity owns the Tasks, Activities, and mailbox, and
 the Paseo agent behind it can change. Change what a seat should run, or reset it, with
-`paseo-swarm swarm seat set|reset` (the `swarm.seat.*` RPCs). The seat's agent is replaced when mail
-next wakes it, after any running turn; the old agent is archived and its transcript stays readable
-through `swarm seat history` and the `swarm_seat_history_read` tool. See
+`paseo-swarm swarm seat set|reset` (the `swarm.seat.*` RPCs). The seat's agent is replaced before
+the seat's next Swarm mailbox delivery, after any running turn; the old agent is archived and its
+transcript stays readable through `swarm seat history` and the `swarm_seat_history_read` tool.
+Typing into the old agent's own conversation skips the mailbox and does not replace it. See
 [design/06-seats.md](../design/06-seats.md).
 
 Swarm planners must prepare a separate workspace and pass its `workspaceId` when creating

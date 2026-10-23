@@ -73,6 +73,12 @@ export function currentOccupant(agent: Pick<AgentRecord, "occupant" | "createdAt
   return agent.occupant ?? { number: 1, config: {}, generation: 0, boundAt: agent.createdAt };
 }
 
+// "claude/opus" belongs to provider "claude". Modes, thinking options and feature values are
+// defined per provider, so they mean nothing to another one.
+export function providerFamily(provider: string): string {
+  return provider.split("/")[0];
+}
+
 // "claude" matches any Claude model; "claude/opus" matches only that model.
 function providerMatches(wanted: string, actual: string | undefined): boolean {
   if (actual === undefined) return false;
