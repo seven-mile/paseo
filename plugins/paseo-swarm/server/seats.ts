@@ -97,6 +97,10 @@ async function bootConfig(seat: AgentRecord, context: SeatContext): Promise<Agen
     (previous.provider !== undefined &&
       providerFamily(previous.provider) === providerFamily(wanted.provider));
   const config = sameProvider ? { ...previous, ...wanted } : wanted;
+  // Paseo creates agents from "provider/model"; a seat that pins only its provider keeps the model.
+  if (sameProvider && wanted.provider && !wanted.provider.includes("/") && previous.provider) {
+    config.provider = previous.provider;
+  }
   if (!config.provider) {
     throw new Error(`Seat ${agentQualifiedName(seat)} has no provider to start a new agent with`);
   }
@@ -262,8 +266,9 @@ async function editSeats(
   for (const seat of resolveSeats(references)) {
     stamped.set(seat.id, await withOccupantStamp(seat, context));
   }
-  validate([...stamped.values()]);
-  if (dryRun) return [...stamped.values()].map((seat) => seatView(edit(seat)));
+  const preview = [...stamped.values()].map(edit);
+  validate(preview);
+  if (dryRun) return preview.map(seatView);
   const timestamp = now();
   const results: AgentRecord[] = [];
   await store.commit((state) => {
@@ -290,16 +295,24 @@ function changesProvider(seat: AgentRecord, provider: string): boolean {
   return !current || providerFamily(current) !== providerFamily(provider);
 }
 
-// Mode names do not transfer between providers: Claude's "auto" approves through a classifier,
-// while Codex's "auto" asks, and its classifier mode is "auto-review". A provider change therefore
-// names its mode, since a guessed one could stall an agent or let it act without asking.
-function assertProviderMode(seats: AgentRecord[], patch: Partial<AgentConfigPatch>): void {
-  if (!patch.provider || typeof patch.modeId === "string") return;
-  const switching = seats.filter((seat) => changesProvider(seat, patch.provider!));
-  if (switching.length === 0) return;
+// A replacement inherits settings only from an occupant of the same provider. A seat that wants
+// another provider names its model, which Paseo needs to create the agent, and its mode, since mode
+// names do not transfer: Claude's "auto" approves through a classifier, while Codex's "auto" asks
+// and its classifier mode is "auto-review". A guessed mode could stall an agent or let it act
+// without asking.
+function assertBootable(seats: AgentRecord[]): void {
+  const incomplete = seats.filter((seat) => {
+    const wanted = seat.agentConfig?.provider;
+    const running = currentOccupant(seat).config.provider;
+    if (!wanted || (running && providerFamily(running) === providerFamily(wanted))) return false;
+    return !wanted.includes("/") || !seat.agentConfig?.modeId;
+  });
+  if (incomplete.length === 0) return;
   throw new Error(
-    `Changing to provider ${patch.provider} needs a mode for it: ` +
-      switching.map(agentQualifiedName).join(", "),
+    "Moving a seat to another provider needs provider/model and a mode for it: " +
+      incomplete
+        .map((seat) => `${agentQualifiedName(seat)} (${seat.agentConfig?.provider})`)
+        .join(", "),
   );
 }
 
@@ -325,7 +338,7 @@ export function updateSeats(
       return { ...seat, agentConfig: agentConfig as AgentConfig };
     },
     context,
-    (seats) => assertProviderMode(seats, patch),
+    assertBootable,
   );
 }
 

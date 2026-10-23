@@ -278,20 +278,20 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
       { seats: ["lead", "lead.dev"], agentConfig: { provider: "fast" } },
       fake.context,
     ),
-    /Changing to provider fast needs a mode for it: lead, lead\.dev/,
+    /needs provider\/model and a mode for it: lead \(fast\), lead\.dev \(fast\)/,
   );
   const preview = await call<Seats>(
     seatUpdateRpc,
-    { seats: ["lead"], agentConfig: { provider: "fast", modeId: "plan" }, dryRun: true },
+    { seats: ["lead"], agentConfig: { provider: "fast/small", modeId: "plan" }, dryRun: true },
     fake.context,
   );
-  assert.equal(preview.seats[0].stale, "provider slow/large → fast");
+  assert.equal(preview.seats[0].stale, "provider slow/large → fast/small");
   assert.equal(seat(supervisor.id).agentConfig?.provider, "slow/large", "a dry run saves nothing");
 
   // Edited back before any mail arrives, the seat is current again and nothing happened.
   await call(
     seatUpdateRpc,
-    { seats: ["lead"], agentConfig: { provider: "fast", modeId: "plan" } },
+    { seats: ["lead"], agentConfig: { provider: "fast/small", modeId: "plan" } },
     fake.context,
   );
   await call(
@@ -309,19 +309,19 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   );
   await call(
     seatUpdateRpc,
-    { seats: [supervisor.id], agentConfig: { provider: "fast", modeId: "build" } },
+    { seats: [supervisor.id], agentConfig: { provider: "fast/small", modeId: "build" } },
     fake.context,
   );
   assert.deepEqual(
     seat(supervisor.id).agentConfig,
-    { provider: "fast", modeId: "build" },
+    { provider: "fast/small", modeId: "build" },
     "the old provider's thinking option is dropped",
   );
   assert.equal(fake.creations.length, 0, "a seat with no mail is not replaced");
   const listed = await call<Seats>(seatListRpc, {}, fake.context);
   assert.equal(
     listed.seats.find((entry) => entry.id === supervisor.id)?.stale,
-    "provider slow/large → fast",
+    "provider slow/large → fast/small",
   );
 
   await call(
@@ -339,14 +339,14 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   assert.equal(replaced.paseoAgentId, "replacement-1");
   assert.equal(occupantStaleReason(replaced), null);
   // Nothing of the old provider carries over, including the thinking option the old agent ran.
-  assert.deepEqual(replaced.occupant?.config, { provider: "fast", modeId: "build" });
+  assert.deepEqual(replaced.occupant?.config, { provider: "fast/small", modeId: "build" });
   assert.equal(replaced.occupant?.number, 2);
   assert.deepEqual(
     replaced.pastOccupants?.map((past) => [past.number, past.paseoAgentId, past.reason]),
-    [[1, supervisor.paseoAgentId, "provider slow/large → fast"]],
+    [[1, supervisor.paseoAgentId, "provider slow/large → fast/small"]],
   );
   assert.equal(fake.creations[0].workspaceId, "workspace");
-  assert.equal(fake.creations[0].config.provider, "fast");
+  assert.equal(fake.creations[0].config.provider, "fast/small");
   assert.equal("parent" in fake.creations[0], false);
   assert.match(String(fake.creations[0].config.systemPrompt), /occupant 2 of the Swarm seat lead/);
   // The worker is detached first so archiving the old supervisor does not take it along.
@@ -387,6 +387,12 @@ test("a stale agent finishes its turn before it is replaced, and unfinished mail
   await send("Steered into the running turn");
   assert.equal(fake.sends.length, 1);
 
+  // A seat that pins only its provider keeps the model its agent runs.
+  await call(
+    seatUpdateRpc,
+    { seats: ["lead.dev"], agentConfig: { provider: "slow" } },
+    fake.context,
+  );
   await call(seatResetRpc, { seats: ["lead.dev"] }, fake.context);
   await send("Held until the turn ends");
   assert.equal(fake.sends.length, 1, "a stale agent is never woken again");
@@ -402,6 +408,7 @@ test("a stale agent finishes its turn before it is replaced, and unfinished mail
   assert.equal(replaced.paseoAgentId, "replacement-1");
   assert.equal(replaced.occupant?.generation, 1);
   // A reset on the same provider keeps what the previous agent ran.
+  assert.equal(fake.creations[0].config.provider, "slow/large");
   assert.deepEqual(replaced.occupant?.config, {
     provider: "slow/large",
     modeId: "default",

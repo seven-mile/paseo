@@ -261,7 +261,7 @@ export function createSwarmCommand(): Command {
       .argument("<seats...>", "Seat qualified names or roster IDs")
       .option(
         "--provider <provider>",
-        "Provider, or provider/model. Switching to another provider needs --mode; thinking and features fall back to its defaults unless you pass them",
+        "provider/model, or a bare provider to keep the current model. Moving to another provider needs provider/model and --mode; thinking and features fall back to its defaults unless you pass them",
       )
       .option("--mode <id>", "Mode ID")
       .option("--thinking <id>", "Thinking option ID")
