@@ -1,13 +1,19 @@
 import type { PluginHookContext } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
-import type { MailboxMessage, MessageKind, SwarmState } from "../shared/models";
+import type { MailboxMessage, MailboxStatus, MessageKind, SwarmState } from "../shared/models";
 import { mailboxMessageStatus } from "../shared/models";
+import { turnDigest } from "./prompts";
 import { store, type SwarmChange } from "./state";
 
 // Send failures before a message stops being retried.
 export const MAX_DELIVERY_ATTEMPTS = 5;
 // Settled (consumed or failed) messages kept for inspection; older ones are pruned.
 export const SETTLED_MESSAGE_LIMIT = 1000;
+
+// Turn rows wait while their manager is mid-turn, so a burst of child turn ends reaches the
+// manager as one digest when its turn ends. A manager whose turn end Swarm never observes gets
+// the digest steered into its turn after this long, as every turn notice was before digests.
+export const DIGEST_HOLD_LIMIT_MS = 2 * 60_000;
 
 // The daemon reports this when an earlier send with the same messageId was
 // started but its outcome was never recorded, e.g. the daemon stopped mid-send.
@@ -71,56 +77,138 @@ function findMessage(id: string): MailboxMessage {
   return message;
 }
 
-async function settle(id: string, change: Partial<MailboxMessage>): Promise<MailboxMessage> {
-  let result!: MailboxMessage;
-  await store.commit((state) => {
-    const current = state.messages.find((candidate) => candidate.id === id);
-    if (!current) throw new Error(`Unknown Swarm message: ${id}`);
-    result = { ...current, ...change };
-    return [putMessage(result)];
-  });
-  return result;
+// Paseo agents with a turn in progress, from turn hooks and from sends that start or steer a
+// turn. In memory only: after a restart every agent counts as idle, so held rows go out.
+const runningAgents = new Set<string>();
+
+export function noteTurnStarted(paseoAgentId: string): void {
+  runningAgents.add(paseoAgentId);
 }
 
-async function deliverOne(message: MailboxMessage, context: MailboxContext) {
-  const recipient = store.read().agents.find((agent) => agent.id === message.recipientAgentId);
+export function noteTurnEnded(paseoAgentId: string): void {
+  runningAgents.delete(paseoAgentId);
+}
+
+// For tests: the module outlives a single test's store.
+export function forgetRunningTurns(): void {
+  runningAgents.clear();
+}
+
+// One send to the daemon: a single message, or every turn row of a digest.
+interface Delivery {
+  messages: MailboxMessage[];
+  messageId: string;
+  prompt: string;
+}
+
+async function settle(
+  messages: MailboxMessage[],
+  change: (current: MailboxMessage) => Partial<MailboxMessage>,
+): Promise<MailboxStatus> {
+  const ids = new Set(messages.map((message) => message.id));
+  let status!: MailboxStatus;
+  await store.commit((state) => {
+    const current = state.messages.filter((candidate) => ids.has(candidate.id));
+    if (current.length !== ids.size) throw new Error("Unknown Swarm message in delivery");
+    const settled = current.map((message) => Object.assign({}, message, change(message)));
+    status = mailboxMessageStatus(settled[0]);
+    return settled.map(putMessage);
+  });
+  return status;
+}
+
+async function deliver(delivery: Delivery, context: MailboxContext): Promise<MailboxStatus> {
+  const [head] = delivery.messages;
+  const recipient = store.read().agents.find((agent) => agent.id === head.recipientAgentId);
   if (!recipient || recipient.retired) {
-    return settle(message.id, {
-      lastError: `Recipient is no longer an active Swarm agent: ${message.recipientName}`,
+    return settle(delivery.messages, () => ({
+      lastError: `Recipient is no longer an active Swarm agent: ${head.recipientName}`,
       failedAt: new Date().toISOString(),
-    });
+    }));
   }
+  const wasRunning = runningAgents.has(recipient.paseoAgentId);
+  // Marked before the send so a turn end that races the send's reply still clears it.
+  runningAgents.add(recipient.paseoAgentId);
   try {
     // messageId makes the daemon deduplicate a retry of a send that already landed.
-    await context.paseo.agents.ref(recipient.paseoAgentId).send(message.prompt, {
-      messageId: message.id,
+    await context.paseo.agents.ref(recipient.paseoAgentId).send(delivery.prompt, {
+      messageId: delivery.messageId,
       activeTurnBehavior: "steer",
     });
-    return settle(message.id, {
+    const deliveredAt = new Date().toISOString();
+    return settle(delivery.messages, (message) => ({
       attempts: message.attempts + 1,
       lastError: null,
-      deliveredAt: new Date().toISOString(),
+      deliveredAt,
       deliveredToPaseoAgentId: recipient.paseoAgentId,
-    });
+    }));
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    const attempts = message.attempts + 1;
     if (detail === OUTCOME_UNKNOWN) {
       // Resending under a new id could deliver it twice; the earlier send most
       // likely reached the agent, so record it as delivered and say why.
-      return settle(message.id, {
-        attempts,
+      const deliveredAt = new Date().toISOString();
+      return settle(delivery.messages, (message) => ({
+        attempts: message.attempts + 1,
         lastError: "Delivery outcome unknown after an interrupted send; not resent.",
-        deliveredAt: new Date().toISOString(),
+        deliveredAt,
         deliveredToPaseoAgentId: recipient.paseoAgentId,
-      });
+      }));
     }
-    return settle(message.id, {
-      attempts,
+    // The send started no turn, so the agent is as busy as it was before.
+    if (!wasRunning) runningAgents.delete(recipient.paseoAgentId);
+    const failedAt = new Date().toISOString();
+    return settle(delivery.messages, (message) => ({
+      attempts: message.attempts + 1,
       lastError: detail,
-      ...(attempts >= MAX_DELIVERY_ATTEMPTS ? { failedAt: new Date().toISOString() } : {}),
-    });
+      ...(message.attempts + 1 >= MAX_DELIVERY_ATTEMPTS ? { failedAt } : {}),
+    }));
   }
+}
+
+function digestDelivery(rows: MailboxMessage[], batchId: string): Delivery {
+  return {
+    messages: rows,
+    messageId: batchId,
+    prompt: turnDigest({ manager: rows[0].recipientName, rows: rows.map((row) => row.prompt) }),
+  };
+}
+
+// The next send for one recipient's queue, or null while its turn rows are held. A digest's
+// rows are fixed under a batch id before the first send, so a retry resends the same digest
+// under the same messageId; rows that arrive later go in the next digest.
+async function nextDelivery(queue: MailboxMessage[]): Promise<Delivery | null> {
+  const [head] = queue;
+  if (head.kind !== "runtime") {
+    return { messages: [head], messageId: head.id, prompt: head.prompt };
+  }
+  if (head.batchId) {
+    return digestDelivery(
+      queue.filter((message) => message.batchId === head.batchId),
+      head.batchId,
+    );
+  }
+  let end = 0;
+  while (end < queue.length && queue[end].kind === "runtime" && !queue[end].batchId) end += 1;
+  const rows = queue.slice(0, end);
+  // A later message wakes the manager anyway, so the rows ahead of it go first.
+  const followedByMessage = end < queue.length;
+  const recipient = store.read().agents.find((agent) => agent.id === head.recipientAgentId);
+  const held =
+    !followedByMessage &&
+    recipient !== undefined &&
+    runningAgents.has(recipient.paseoAgentId) &&
+    Date.now() - Date.parse(head.createdAt) < DIGEST_HOLD_LIMIT_MS;
+  if (held) return null;
+  const batchId = `digest-${randomUUID()}`;
+  const ids = new Set(rows.map((row) => row.id));
+  await store.commit((state) =>
+    state.messages
+      .filter((message) => ids.has(message.id))
+      .map((message) => putMessage({ ...message, batchId })),
+  );
+  const batched = store.read().messages.filter((message) => ids.has(message.id));
+  return digestDelivery(batched, batchId);
 }
 
 let flushing: Promise<unknown> = Promise.resolve();
@@ -131,18 +219,25 @@ function serialized<T>(work: () => Promise<T>): Promise<T> {
   return result;
 }
 
-// Delivers queued messages oldest first. A recipient whose send fails keeps its
-// later messages queued too, so each agent receives its mail in order.
+// Delivers queued messages oldest first. A recipient whose send fails, or whose turn rows are
+// held, keeps its later messages queued too, so each agent receives its mail in order.
 export function flushMailbox(context: MailboxContext): Promise<void> {
   return serialized(async () => {
-    const blocked = new Set<string>();
-    const queued = store
-      .read()
-      .messages.filter((message) => mailboxMessageStatus(message) === "queued");
-    for (const message of queued) {
-      if (blocked.has(message.recipientAgentId)) continue;
-      const result = await deliverOne(message, context);
-      if (mailboxMessageStatus(result) === "queued") blocked.add(message.recipientAgentId);
+    const queues = new Map<string, MailboxMessage[]>();
+    for (const message of store.read().messages) {
+      if (mailboxMessageStatus(message) !== "queued") continue;
+      const queue = queues.get(message.recipientAgentId) ?? [];
+      queue.push(message);
+      queues.set(message.recipientAgentId, queue);
+    }
+    for (let queue of queues.values()) {
+      while (queue.length > 0) {
+        const delivery = await nextDelivery(queue);
+        if (!delivery) break;
+        if ((await deliver(delivery, context)) === "queued") break;
+        const sent = new Set(delivery.messages.map((message) => message.id));
+        queue = queue.filter((message) => !sent.has(message.id));
+      }
     }
   });
 }

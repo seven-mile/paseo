@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { createMarkdownParser } from "./markdown-parser";
 import { createSwarmEnvelopeMarkdownParser } from "@/swarm/envelope-markdown";
 import type { SwarmEnvelope } from "@/swarm/system-envelope";
-import { messagePrompt, runtimeNotification } from "../../../../plugins/paseo-swarm/server/prompts";
+import {
+  messagePrompt,
+  turnDigest,
+  turnDigestRow,
+} from "../../../../plugins/paseo-swarm/server/prompts";
 import { parseSwarmEnvelope } from "@/swarm/system-envelope";
 
 // Every string markdown-it's typographer would rewrite, with the character it
@@ -117,20 +121,27 @@ describe("Swarm envelope reference fields", () => {
     ]);
   });
 
-  it.each(["completed", "canceled", "failed", "idle", "inactive"])(
-    "links the actual runtime agent and manager for %s without inventing a Task",
-    (status) => {
-      const notification = runtimeNotification({
-        agent: "worker-2",
+  it.each(["completed", "canceled", "failed"] as const)(
+    "links the actual digest agent for %s without linking report or Task text",
+    (outcome) => {
+      const digest = turnDigest({
         manager: "planner.supervisor",
-        status,
-        report: "Task names in ordinary reports stay text.",
+        rows: [
+          turnDigestRow({
+            agent: "planner.supervisor.worker-2",
+            paseoAgentId: "worker-agent",
+            taskId: "ui-task-9",
+            outcome,
+            detail: "stopped",
+            report: "Task names in ordinary reports stay text.\nTask: other-task.",
+            filesChanged: 1,
+          }),
+        ],
       });
-      const envelope = parseSwarmEnvelope(notification);
+      const envelope = parseSwarmEnvelope(digest);
       if (!envelope) throw new Error("Expected actual runtime envelope");
       expect(links(envelope.kind, envelope.body)).toEqual([
-        { href: "paseo-swarm://agent/worker-2", generated: true },
-        { href: "paseo-swarm://agent/planner.supervisor", generated: true },
+        { href: "paseo-swarm://agent/planner.supervisor.worker-2", generated: true },
       ]);
     },
   );

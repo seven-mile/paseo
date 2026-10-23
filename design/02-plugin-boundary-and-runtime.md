@@ -28,6 +28,10 @@ Team message、人工 Activity 通知和向上的 runtime 通知都先写入接�
 
 状态按顺序推进：queued（尚未投递）→ delivered（Paseo 已接受，记录 `deliveredToPaseoAgentId`）→ consumed（该 Paseo agent 之后有一个 turn 以 completed 结束）。连续失败到上限或接收者已 retired 时记为 failed，不再重试。同一接收者的消息按创建顺序投递，前一条失败时后面的保持 queued。Plugin 拿不到常驻的 Paseo API，所以重试发生在下一次发送、任意 agent 的 turn 结束和 `swarm.mailbox.read` 时；daemon 重启后遗留的 queued 消息也在这些时机补投。Daemon 只记下 send 已开始而不知结果（`agent_request_outcome_unknown`）时，消息按 delivered 记录并写明原因，不换 id 重发，避免重复投递。
 
+向上的 runtime 通知按 manager 合并成 turn digest。每个 child turn 结束写一行 mailbox 记录（agent、最近一条 Task-scoped 消息的 Task、outcome、失败或取消的 detail、改动文件数、最终回复的前 1,500 个字符；截断时附 Paseo agent id，manager 用 `get_agent_activity` 读全文）。Manager 空闲时立即投递；manager 正在跑 turn 时这些行先留在 mailbox，等它的 turn 结束后作为一个 `<paseo-swarm-turn-digest>` 一次投递，所以一次 burst 只唤醒 manager 一次。投递前先给这批行写同一个 `batchId`，它也是 daemon `messageId`，重试时原样重发；之后到达的行进入下一个 digest。Manager 是否在跑 turn 来自 `agent.turn_started`/`agent.turn_ended` hook 和 Swarm 自己的 send，只存在内存里：daemon 重启后视为空闲。没有 timer，所以如果一直没看到 manager 的 turn 结束，被扣住的行超过 2 分钟就在下一次 flush 时 steer 进去；排在它们后面的 team message 也会先把它们带出去，保证顺序。
+
+所有信封只携带数据：`<paseo-swarm-team-message id from to task …>` 和 `<paseo-swarm-turn-digest manager turns>`，字段放在属性里，正文就是发送者原文或 child 的最终回复。信封的含义（送达不代表已读、turn outcome 不代表 Task 完成、不要回执、manager 必须决定下一步）只在 system settings 里写一次，不再在每条消息里重复。App 的 `packages/app/src/swarm/system-envelope.ts` 把属性还原成可读的字段行，旧格式的无属性信封仍按原样显示。
+
 Paseo hook 是 live wakeup。Plugin 启动和重连时重新读取 roster、Tasks、Paseo agents 和 Workspaces，补齐当前事实；不能把漏掉某次 hook 当作永久状态。
 
 ## Activity 与人类交互
