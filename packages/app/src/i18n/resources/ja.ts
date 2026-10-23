@@ -22,7 +22,7 @@ export const ja: TranslationResources = {
       addWorker: "ワーカーを追加",
       noWorkers: "ワーカーはまだいません",
       addWorkerUnder: "{{name}} の下にワーカーを追加",
-      staleSeat: "次の Swarm メッセージの前に新しいエージェントへ交代（{{reason}}）",
+      staleSeat: "次の Swarm メッセージで変更（{{reason}}）",
       tasksFor: "{{name}} のタスク",
       loadingAgents: "エージェントを読み込み中…",
       planners: "プランナー",

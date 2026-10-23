@@ -925,6 +925,27 @@ test("agent handles delegate create, send, timeline refetch, archive, and local 
   await client.close();
 });
 
+test("agent handles change a live agent's config in one request", async () => {
+  const { client, ws } = await connectClient();
+  const agent = client.agents.ref("agent_sdk");
+
+  const applyPromise = agent.applyConfig({ modeId: "plan", thinkingOptionId: "high" });
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request).toMatchObject({
+    type: "agent.config.apply.request",
+    agentId: "agent_sdk",
+    config: { modeId: "plan", thinkingOptionId: "high" },
+  });
+  ws.message(
+    sessionMessage({
+      type: "agent.config.apply.response",
+      payload: { requestId: request.requestId, agentId: "agent_sdk", accepted: true, error: null },
+    }),
+  );
+  await expect(applyPromise).resolves.toBeUndefined();
+  await client.close();
+});
+
 test("agent handles list the session's own commands through the existing daemon RPC", async () => {
   const { client, ws } = await connectClient();
   const agent = client.agents.ref("agent_sdk");

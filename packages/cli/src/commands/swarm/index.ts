@@ -33,8 +33,8 @@ interface SeatRow {
   occupant: number;
   agent: string;
   wants: string;
-  runs: string;
-  stale: string;
+  applied: string;
+  pending: string;
 }
 
 interface HistoryEntryRow {
@@ -60,8 +60,8 @@ function toSeatRow(seat: Seat): SeatRow {
     occupant: seat.occupant?.number ?? 1,
     agent: seat.paseoAgentId,
     wants: configSummary(seat.agentConfig),
-    runs: configSummary(seat.occupant?.config),
-    stale: seat.stale ?? "-",
+    applied: configSummary(seat.occupant?.config),
+    pending: seat.stale ?? "-",
   };
 }
 
@@ -73,8 +73,12 @@ const seatSchema: OutputSchema<SeatRow> = {
     { header: "OCCUPANT", field: "occupant", align: "right" },
     { header: "AGENT", field: "agent" },
     { header: "WANTS", field: "wants" },
-    { header: "RUNS", field: "runs" },
-    { header: "STALE", field: "stale", color: (value) => (value === "-" ? undefined : "yellow") },
+    { header: "APPLIED", field: "applied" },
+    {
+      header: "PENDING",
+      field: "pending",
+      color: (value) => (value === "-" ? undefined : "yellow"),
+    },
   ],
 };
 
@@ -243,12 +247,14 @@ export function createSwarmCommand(): Command {
   const seat = swarm
     .command("seat")
     .description(
-      "Manage Swarm seats: the roster identities whose Paseo agents can be replaced. A seat whose agent no longer matches it gets a fresh agent before its next Swarm mailbox delivery, after any running turn. Typing into the agent's own conversation does not replace it.",
+      "Manage Swarm seats: the roster identities whose Paseo agents can be replaced. A seat's next Swarm mailbox delivery, after any running turn, brings its agent in line with the seat: in place where the context survives, otherwise with an earlier or a new agent. Changes made in the agent's own chat are left alone until then.",
     );
   addJsonAndDaemonHostOptions(
     seat
       .command("ls")
-      .description("List seats with the config they want, what their agent runs, and staleness")
+      .description(
+        "List seats with the config they want, what Swarm last gave their agent, and the change pending",
+      )
       .option("--project <id>", "Only seats in this project")
       .option("-a, --all", "Include retired seats"),
   ).action(withOutput(runLs));
@@ -256,7 +262,7 @@ export function createSwarmCommand(): Command {
     seat
       .command("set")
       .description(
-        "Change the agent config seats want; a mismatched agent is replaced before the seat's next Swarm mailbox delivery",
+        "Change the agent config seats want; their agents follow at each seat's next Swarm mailbox delivery",
       )
       .argument("<seats...>", "Seat qualified names or roster IDs")
       .option(

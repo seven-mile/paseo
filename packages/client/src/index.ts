@@ -3,6 +3,7 @@ export type { OwnedSubscription, SubscriptionObserver } from "./connection/index
 import type { DaemonClientConfig } from "./daemon-client.js";
 import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
 import type {
+  AgentConfigApply,
   AgentSnapshotPayload,
   CreationSnapshot,
   CreateAgentRequestMessage,
@@ -374,6 +375,11 @@ export interface PaseoAgentHandle {
    * rejecting.
    */
   commands(options?: PaseoAgentCommandsOptions): Promise<PaseoAgentCommandsResult>;
+  /**
+   * Changes model, mode, thinking, or feature values on the live agent in one request; omitted
+   * fields are left alone. Gated on `server_info.features.agentConfigApply`.
+   */
+  applyConfig(config: AgentConfigApply): Promise<void>;
   archive(): Promise<{ archivedAt: string }>;
   detach(): Promise<void>;
   subscribe(handler: (update: PaseoAgentUpdate) => void): () => void;
@@ -966,6 +972,9 @@ function createAgentHandleFactory(
         return result;
       },
       commands: (options) => daemonClient.listCommands({ agentId: id, ...options }),
+      applyConfig: async (config) => {
+        await daemonClient.applyAgentConfig(id, config);
+      },
       archive: async () => {
         const result = await daemonClient.archiveAgent(id);
         if (current) {

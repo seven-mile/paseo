@@ -22,7 +22,7 @@ export const ar: TranslationResources = {
       addWorker: "إضافة عامل",
       noWorkers: "لا يوجد عمال بعد",
       addWorkerUnder: "إضافة عامل تحت {{name}}",
-      staleSeat: "وكيل جديد قبل رسالة Swarm التالية ({{reason}})",
+      staleSeat: "يتغير عند رسالة Swarm التالية ({{reason}})",
       tasksFor: "مهام {{name}}",
       loadingAgents: "جارٍ تحميل الوكلاء…",
       planners: "المخططون",

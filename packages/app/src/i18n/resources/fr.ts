@@ -22,7 +22,7 @@ export const fr: TranslationResources = {
       addWorker: "Ajouter un exécutant",
       noWorkers: "Aucun exécutant",
       addWorkerUnder: "Ajouter un exécutant sous {{name}}",
-      staleSeat: "Nouvel agent avant le prochain message Swarm ({{reason}})",
+      staleSeat: "Change au prochain message Swarm ({{reason}})",
       tasksFor: "Tâches de {{name}}",
       loadingAgents: "Chargement des agents…",
       planners: "Planificateurs",

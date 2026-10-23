@@ -12,6 +12,7 @@ import type {
 import contribute from "../index.server";
 import { forgetRunningTurns } from "../server/mailbox";
 import { notifyManager, registerOperations } from "../server/operations";
+import { seatPendingChange } from "../server/seat-policy";
 import {
   getConfigPath,
   getEventLogPath,
@@ -20,12 +21,7 @@ import {
   store,
   type SwarmChange,
 } from "../server/state";
-import {
-  emptyState,
-  occupantStaleReason,
-  type AgentRecord,
-  type SwarmState,
-} from "../shared/models";
+import { emptyState, type AgentRecord, type SwarmState } from "../shared/models";
 import {
   boardReadRpc,
   createAgentRpc,
@@ -66,7 +62,7 @@ function readDisk(): string {
 function boardOf({ messages: _messages, ...board }: Readonly<SwarmState>) {
   return {
     ...board,
-    agents: board.agents.map((agent) => ({ ...agent, stale: occupantStaleReason(agent) })),
+    agents: board.agents.map((agent) => ({ ...agent, stale: seatPendingChange(agent) })),
   };
 }
 

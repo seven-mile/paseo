@@ -1,9 +1,10 @@
 import type { PluginHookContext } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
 import type { MailboxMessage, MailboxStatus, MessageKind, SwarmState } from "../shared/models";
-import { agentQualifiedName, mailboxMessageStatus, occupantStaleReason } from "../shared/models";
+import { agentQualifiedName, mailboxMessageStatus } from "../shared/models";
 import { turnDigest } from "./prompts";
-import { occupantRunning, replaceOccupant } from "./seats";
+import { planSeat } from "./seat-policy";
+import { occupantRunning, reconcileSeat } from "./seats";
 import { store, type SwarmChange } from "./state";
 
 // Send failures before a message stops being retried.
@@ -221,18 +222,19 @@ function queuedFor(recipientAgentId: string): MailboxMessage[] {
     );
 }
 
-// Mail is what wakes a seat, so this is where a stale occupant is replaced: never woken again,
-// and swapped once its current turn ends. Returns the queue to deliver, or null to hold it.
-// Replacement puts the rows the old occupant never finished back in the queue, ahead of the rest.
+// Mail is what wakes a seat, so this is where a seat's agent is brought in line with the seat:
+// changed in place, swapped for an earlier or a new agent, never woken while it does not fit.
+// A running agent finishes its turn first. Returns the queue to deliver, or null to hold it.
+// Replacement puts the rows the old agent never finished back in the queue, ahead of the rest.
 async function syncSeat(
   queue: MailboxMessage[],
   context: MailboxContext,
 ): Promise<MailboxMessage[] | null> {
   const [head] = queue;
   const seat = store.read().agents.find((agent) => agent.id === head.recipientAgentId);
-  if (!seat || seat.retired || occupantStaleReason(seat) === null) return queue;
+  if (!seat || seat.retired || planSeat(seat).kind === "keep") return queue;
   // The mail stays queued without spending send attempts, so a provider that is down for a
-  // while does not fail the message; every later flush tries the replacement again.
+  // while does not fail the message; every later flush tries again.
   const hold = async (problem: string, error: unknown) => {
     const detail = error instanceof Error ? error.message : String(error);
     await settle([head], () => ({
@@ -247,10 +249,14 @@ async function syncSeat(
     return hold("Could not check the agent in", error);
   }
   try {
-    await replaceOccupant(seat, context);
+    await reconcileSeat(seat, context);
   } catch (error) {
-    return hold("Could not replace the agent in", error);
+    return hold("Could not update the agent in", error);
   }
+  // A returning agent may still need changes in place; it is busy with its return brief, and
+  // the end of that turn flushes the mailbox again.
+  const updated = store.read().agents.find((agent) => agent.id === seat.id);
+  if (updated && planSeat(updated).kind !== "keep") return null;
   return queuedFor(seat.id);
 }
 

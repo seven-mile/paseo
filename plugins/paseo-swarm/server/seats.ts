@@ -1,14 +1,20 @@
 import type { PluginHookContext } from "@getpaseo/plugin/server";
-import type { AgentConfig, AgentRecord, MailboxMessage, PastOccupant } from "../shared/models";
+import type {
+  AgentConfig,
+  AgentRecord,
+  MailboxMessage,
+  Occupant,
+  PastOccupant,
+} from "../shared/models";
 import {
   agentQualifiedName,
   currentOccupant,
   mailboxMessageStatus,
-  occupantStaleReason,
   providerFamily,
 } from "../shared/models";
-import { initialPrompt, promptRevision, takeoverBrief } from "./prompts";
+import { initialPrompt, promptRevision, returnBrief, takeoverBrief } from "./prompts";
 import { readPwa } from "./pwa";
+import { adjustedConfig, planSeat, seatPendingChange, type SeatPlan } from "./seat-policy";
 import { requirePwaSource } from "./source";
 import { store } from "./state";
 
@@ -84,23 +90,18 @@ export async function occupantRunning(seat: AgentRecord, context: SeatContext): 
   return snapshot?.status === "running";
 }
 
-// The config a replacement boots with: the seat's wanted fields over what the stale occupant ran.
+// The config a replacement boots with: the seat's fields over what the previous occupant ran.
 // Settings carry over only within one provider; on another provider the seat's own fields apply.
 async function bootConfig(seat: AgentRecord, context: SeatContext): Promise<AgentConfig> {
-  const occupant = currentOccupant(seat);
   const previous = seat.occupant
-    ? occupant.config
+    ? seat.occupant.config
     : await observedConfig(seat.paseoAgentId, context);
   const wanted = definedConfig(seat.agentConfig ?? {});
   const sameProvider =
     !wanted.provider ||
     (previous.provider !== undefined &&
       providerFamily(previous.provider) === providerFamily(wanted.provider));
-  const config = sameProvider ? { ...previous, ...wanted } : wanted;
-  // Paseo creates agents from "provider/model"; a seat that pins only its provider keeps the model.
-  if (sameProvider && wanted.provider && !wanted.provider.includes("/") && previous.provider) {
-    config.provider = previous.provider;
-  }
+  const config = sameProvider ? adjustedConfig(wanted, previous) : wanted;
   if (!config.provider) {
     throw new Error(`Seat ${agentQualifiedName(seat)} has no provider to start a new agent with`);
   }
@@ -145,24 +146,71 @@ async function retireOldAgent(paseoAgentId: string, context: SeatContext): Promi
   }
 }
 
-// Boots a fresh Paseo agent for a stale seat and rebinds the seat to it. The caller makes sure
-// the old occupant is not mid-turn. The new agent runs in the seat's workspace with the role
-// prompt from the current PWA; the mail that woke the seat is delivered to it afterwards.
-export async function replaceOccupant(
+function nextOccupantNumber(seat: AgentRecord): number {
+  const numbers = (seat.pastOccupants ?? []).map((past) => past.number);
+  return Math.max(currentOccupant(seat).number, ...numbers) + 1;
+}
+
+// Moves the seat to another Paseo agent: the current one becomes a past occupant, rows it never
+// finished go back to the queue, and it is archived once nothing points at it.
+async function rebind(
   stale: AgentRecord,
+  next: { paseoAgentId: string; occupant: Occupant; prompt?: AgentRecord["prompt"] },
+  reason: string,
   context: SeatContext,
 ): Promise<AgentRecord> {
-  const reason = occupantStaleReason(stale) ?? "replaced";
-  const old = currentOccupant(stale);
+  let result!: AgentRecord;
+  await store.commit((state) => {
+    const seat = state.agents.find((agent) => agent.id === stale.id);
+    if (!seat) throw new Error(`Swarm seat disappeared during replacement: ${stale.id}`);
+    const retired: PastOccupant = {
+      ...currentOccupant(seat),
+      paseoAgentId: seat.paseoAgentId,
+      retiredAt: next.occupant.boundAt,
+      reason,
+    };
+    result = {
+      ...seat,
+      paseoAgentId: next.paseoAgentId,
+      occupant: next.occupant,
+      pastOccupants: [
+        ...(seat.pastOccupants ?? []).filter((past) => past.paseoAgentId !== next.paseoAgentId),
+        retired,
+      ],
+      ...(next.prompt ? { prompt: next.prompt } : {}),
+      updatedAt: next.occupant.boundAt,
+    };
+    return [
+      { op: "put", collection: "agents", record: result },
+      ...requeueUnconsumed(seat.paseoAgentId).map((record) => ({
+        op: "put" as const,
+        collection: "messages" as const,
+        record,
+      })),
+    ];
+  });
+  await retireOldAgent(stale.paseoAgentId, context);
+  return result;
+}
+
+// Boots a fresh Paseo agent for the seat and rebinds the seat to it. The new agent runs in the
+// seat's workspace with the role prompt from the current PWA; the mail that woke the seat is
+// delivered to it afterwards.
+async function replaceOccupant(
+  stale: AgentRecord,
+  reason: string,
+  context: SeatContext,
+): Promise<AgentRecord> {
   const config = await bootConfig(stale, context);
   const assembled = assemblePrompt(stale, stale.projectId);
-  const number = old.number + 1;
+  const number = nextOccupantNumber(stale);
   const systemPrompt = initialPrompt({
     pwa: assembled.pwa,
     agent: stale,
     brief: takeoverBrief({
       seat: agentQualifiedName(stale),
       occupant: number,
+      previous: currentOccupant(stale).number,
       reason,
       manager: stale.reportsTo,
     }),
@@ -179,42 +227,96 @@ export async function replaceOccupant(
     if (!cwd) throw new Error(`Seat ${agentQualifiedName(stale)} has no workspace to start in`);
     created = await context.paseo.agents.create({ ...create, cwd });
   }
-  const timestamp = now();
-  let result!: AgentRecord;
-  await store.commit((state) => {
-    const seat = state.agents.find((agent) => agent.id === stale.id);
-    if (!seat) throw new Error(`Swarm seat disappeared during replacement: ${stale.id}`);
-    const past: PastOccupant = {
-      ...old,
-      paseoAgentId: seat.paseoAgentId,
-      retiredAt: timestamp,
+  const occupant = { number, config, generation: stale.generation ?? 0, boundAt: now() };
+  return rebind(
+    stale,
+    { paseoAgentId: created.id, occupant, prompt: assembled.received },
+    reason,
+    context,
+  );
+}
+
+// Brings back an earlier occupant, whose session resumes with its context. The return brief is
+// the probe: if Paseo cannot resume that session the send fails, and the caller starts a new
+// agent instead. Changes the earlier occupant needs in place follow on the next delivery.
+async function reviveOccupant(
+  stale: AgentRecord,
+  past: PastOccupant,
+  reason: string,
+  context: SeatContext,
+): Promise<AgentRecord> {
+  const boundAt = now();
+  await context.paseo.agents.ref(past.paseoAgentId).send(
+    returnBrief({
+      seat: agentQualifiedName(stale),
+      occupant: past.number,
+      covering: currentOccupant(stale).number,
       reason,
-    };
-    result = {
-      ...seat,
-      paseoAgentId: created.id,
-      occupant: { number, config, generation: seat.generation ?? 0, boundAt: timestamp },
-      pastOccupants: [...(seat.pastOccupants ?? []), past],
-      prompt: assembled.received,
-      updatedAt: timestamp,
-    };
+    }),
+    { messageId: `seat-return-${stale.id}-${boundAt}` },
+  );
+  const { paseoAgentId: _id, retiredAt: _retired, reason: _reason, ...stamp } = past;
+  return rebind(
+    stale,
+    { paseoAgentId: past.paseoAgentId, occupant: { ...stamp, boundAt } },
+    reason,
+    context,
+  );
+}
+
+async function adjustOccupant(
+  seat: AgentRecord,
+  plan: Extract<SeatPlan, { kind: "adjust" }>,
+  context: SeatContext,
+): Promise<void> {
+  await context.paseo.agents.ref(seat.paseoAgentId).applyConfig(plan.apply);
+  await store.commit((state) => {
+    const current = state.agents.find((agent) => agent.id === seat.id);
+    if (!current || current.paseoAgentId !== seat.paseoAgentId) return [];
+    const occupant = currentOccupant(current);
+    const config = adjustedConfig(definedConfig(current.agentConfig ?? {}), occupant.config);
     return [
-      { op: "put", collection: "agents", record: result },
-      ...requeueUnconsumed(seat.paseoAgentId).map((record) => ({
-        op: "put" as const,
-        collection: "messages" as const,
-        record,
-      })),
+      {
+        op: "put",
+        collection: "agents",
+        record: { ...current, occupant: { ...occupant, config }, updatedAt: now() },
+      },
     ];
   });
-  await retireOldAgent(stale.paseoAgentId, context);
-  return result;
+}
+
+// Brings the seat's agent in line with the seat, as planSeat decides. The caller makes sure the
+// current agent is not mid-turn.
+export async function reconcileSeat(seat: AgentRecord, context: SeatContext): Promise<void> {
+  const plan = planSeat(seat);
+  switch (plan.kind) {
+    case "keep":
+      return;
+    case "adjust":
+      await adjustOccupant(seat, plan, context);
+      return;
+    case "revive":
+      try {
+        await reviveOccupant(seat, plan.occupant, plan.reason, context);
+        return;
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[paseo-swarm] Could not bring back occupant ${plan.occupant.number} of seat ${agentQualifiedName(seat)}: ${detail}`,
+        );
+      }
+      await replaceOccupant(seat, plan.reason, context);
+      return;
+    case "replace":
+      await replaceOccupant(seat, plan.reason, context);
+      return;
+  }
 }
 
 export type SeatView = AgentRecord & { stale: string | null };
 
 export function seatView(seat: AgentRecord): SeatView {
-  return { ...seat, stale: occupantStaleReason(seat) };
+  return { ...seat, stale: seatPendingChange(seat) };
 }
 
 export function listSeats(input: { projectId?: string; includeRetired: boolean }): SeatView[] {

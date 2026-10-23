@@ -11,7 +11,8 @@ export const slugNameSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 
 // The agent config a seat wants its Paseo agent to run: the provider and settings that
 // swarm_agent_create takes. `provider` is "provider" or "provider/model". A field left out is
-// not compared, so a seat can pin only its provider.
+// not compared, so a seat can pin only its provider. server/seat-policy.ts decides what a
+// difference from the running agent costs.
 export const agentConfigSchema = z.object({
   provider: z.string().min(1).optional(),
   modeId: z.string().min(1).optional(),
@@ -20,7 +21,8 @@ export const agentConfigSchema = z.object({
 });
 export type AgentConfig = z.infer<typeof agentConfigSchema>;
 
-// The Paseo agent currently bound to a seat, stamped with what it booted with.
+// The Paseo agent currently bound to a seat, stamped with the config it runs: what it booted with,
+// plus changes made in place since, from a seat edit or from its own chat.
 export const occupantSchema = z.object({
   number: z.number().int().positive(),
   config: agentConfigSchema,
@@ -53,7 +55,7 @@ export const agentRecordSchema = z.object({
   prompt: z
     .object({ revision: z.string(), pwaRevision: z.string(), receivedAt: z.string() })
     .optional(),
-  // Desired state. Reset bumps generation; an occupant whose stamp differs is stale.
+  // Desired state. Reset bumps generation, so no agent from before the reset is reused.
   agentConfig: agentConfigSchema.optional(),
   generation: z.number().int().nonnegative().optional(),
   // Absent on records made before seats; read as occupant 1 with an unknown config.
@@ -77,48 +79,6 @@ export function currentOccupant(agent: Pick<AgentRecord, "occupant" | "createdAt
 // defined per provider, so they mean nothing to another one.
 export function providerFamily(provider: string): string {
   return provider.split("/")[0];
-}
-
-// "claude" matches any Claude model; "claude/opus" matches only that model.
-function providerMatches(wanted: string, actual: string | undefined): boolean {
-  if (actual === undefined) return false;
-  if (wanted.includes("/")) return wanted === actual;
-  return actual === wanted || actual.startsWith(`${wanted}/`);
-}
-
-function sameValues(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
-  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
-  return [...keys].every((key) => JSON.stringify(left[key]) === JSON.stringify(right[key]));
-}
-
-// Why the seat's occupant no longer matches the seat, or null while it is current. Computed,
-// never stored, so editing a seat back before it wakes makes it current again with nothing lost.
-export function occupantStaleReason(
-  agent: Pick<AgentRecord, "agentConfig" | "generation" | "occupant" | "createdAt">,
-): string | null {
-  const occupant = currentOccupant(agent);
-  if ((agent.generation ?? 0) !== occupant.generation) return "reset";
-  const wanted = agent.agentConfig ?? {};
-  const booted = occupant.config;
-  if (wanted.provider !== undefined && !providerMatches(wanted.provider, booted.provider)) {
-    return `provider ${booted.provider ?? "unknown"} → ${wanted.provider}`;
-  }
-  if (wanted.modeId !== undefined && wanted.modeId !== booted.modeId) {
-    return `mode ${booted.modeId ?? "unknown"} → ${wanted.modeId}`;
-  }
-  if (
-    wanted.thinkingOptionId !== undefined &&
-    wanted.thinkingOptionId !== booted.thinkingOptionId
-  ) {
-    return `thinking ${booted.thinkingOptionId ?? "unknown"} → ${wanted.thinkingOptionId}`;
-  }
-  if (
-    wanted.featureValues !== undefined &&
-    !sameValues(wanted.featureValues, booted.featureValues ?? {})
-  ) {
-    return "features changed";
-  }
-  return null;
 }
 
 export const taskSchema = z.object({

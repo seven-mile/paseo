@@ -42,7 +42,7 @@ async function waitFor<T>(read: () => Promise<T>, done: (value: T) => boolean): 
 
 // A seat moved to another provider gets a fresh agent on its next Swarm delivery, against a real
 // daemon: the Paseo agent API, archive cascade, and history reads the seat unit tests fake.
-test("a Swarm seat moves its role to an agent on another provider", async () => {
+test("a Swarm seat moves to another provider and back to its first agent", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "swarm-seats-e2e-"));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
   execSync("git init -b main", { cwd: root, stdio: "pipe" });
@@ -141,4 +141,37 @@ test("a Swarm seat moves its role to an agent on another provider", async () => 
   );
   expect(history).toMatchObject({ occupant: 1, paseoAgentId: lead.paseoAgentId });
   expect((await agents()).get(lead.paseoAgentId)?.archivedAt).toBeTruthy();
+
+  // Moving back brings the first agent back, then changes its mode in place.
+  await swarm("swarm.seat.update", {
+    seats: ["lead"],
+    agentConfig: { provider: "mock/e2e-fast-stream", modeId: "approval-test" },
+  });
+  await swarm("swarm.message.send", {
+    recipientPaseoAgentId: moved.paseoAgentId,
+    recipientName: "lead",
+    senderName: "human",
+    body: "SEAT_E2E_BACK",
+  });
+  const back = await waitFor(listSeat, (seat) => seat.paseoAgentId === lead.paseoAgentId);
+  expect(back.occupant.number).toBe(1);
+  const returned = await waitFor(
+    agents,
+    (all) =>
+      all.get(lead.paseoAgentId)?.currentModeId === "approval-test" &&
+      Boolean(all.get(moved.paseoAgentId)?.archivedAt),
+  );
+  expect(returned.get(lead.paseoAgentId)?.archivedAt).toBeNull();
+  await waitFor(
+    () =>
+      client.fetchAgentTimeline(lead.paseoAgentId, {
+        direction: "tail",
+        limit: 0,
+        projection: "canonical",
+      }),
+    (timeline) =>
+      timeline.entries.some(
+        (entry) => entry.item.type === "user_message" && entry.item.text.includes("SEAT_E2E_BACK"),
+      ),
+  );
 }, 120_000);
