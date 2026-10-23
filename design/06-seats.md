@@ -33,7 +33,7 @@ A seat with no mail stays stale until mail arrives. A seat edit flushes the mail
 
 A replacement boots with the seat's `agentConfig`. Within one provider (`claude` and `claude/opus` are one provider), fields the seat leaves out come from what the previous occupant ran, so a reset keeps the mode and thinking option. Across providers nothing is inherited: modes, thinking options, and feature values are defined per provider.
 
-Changing a seat to another provider fails while the seat still sets a mode, thinking option, or feature values for the old one. Pass the new provider's value, or clear the field. Swarm does not map modes across providers, because a mapped mode could let an agent do things without asking that it had to ask for before. A cleared field gives the new agent its provider's default, and the provider rejects an unsupported value when the agent is created, which shows up as the mail's `lastError`.
+Changing a seat to another provider requires a mode for the new one, and drops the old provider's thinking option and feature values, so the new agent gets its provider's defaults for those unless the edit sets them. Mode names do not transfer: Claude's `auto` approves through a classifier, while Codex's `auto` asks and its classifier mode is `auto-review`; Copilot and OpenCode use other names again. Copying a name across could stall an agent or let it act without asking. The provider rejects an unsupported value when the agent is created, which shows up as the mail's `lastError`.
 
 ## Recovery
 
@@ -67,7 +67,7 @@ Agents read history for their own seat and the seats under them; planners read a
 ## Example: moving a swarm from provider A to provider B
 
 1. `paseo-swarm swarm seat ls` shows every seat with what it wants and what it runs.
-2. `paseo-swarm swarm seat set <seats...> --provider b --mode <b-mode> --dry-run` shows which seats would be replaced and why. Pass `--thinking` or `--clear thinking` the same way for seats that set one. Drop `--dry-run` to apply.
+2. `paseo-swarm swarm seat set <seats...> --provider b --mode <b-mode> --dry-run` shows which seats would be replaced and why. Add `--thinking` to pick B's thinking option. Drop `--dry-run` to apply.
 3. Seats with queued mail switch at once. Each other seat switches before its next mailbox delivery, after its current turn. Supervisors and workers switch independently, and a manager learns of a worker's takeover from the worker's takeover report.
 4. If provider B misbehaves, `seat set` back to `a`. Seats that have not woken yet were never touched. Seats that already switched get a fresh A agent before their next delivery, which is the same operation, not a rollback.
 

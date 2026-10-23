@@ -256,11 +256,13 @@ async function editSeats(
   dryRun: boolean,
   edit: (seat: AgentRecord) => AgentRecord,
   context: SeatContext,
+  validate: (seats: AgentRecord[]) => void = () => {},
 ): Promise<SeatView[]> {
   const stamped = new Map<string, AgentRecord>();
   for (const seat of resolveSeats(references)) {
     stamped.set(seat.id, await withOccupantStamp(seat, context));
   }
+  validate([...stamped.values()]);
   if (dryRun) return [...stamped.values()].map((seat) => seatView(edit(seat)));
   const timestamp = now();
   const results: AgentRecord[] = [];
@@ -283,47 +285,47 @@ export type AgentConfigPatch = {
 
 const PROVIDER_SETTINGS = ["modeId", "thinkingOptionId", "featureValues"] as const;
 
-// A provider change leaves no setting of the old provider in place unless the edit says what the
-// new provider should use. Translating a mode across providers could change what an agent may do
-// without asking, so the operator picks the new value or clears the field.
-function assertProviderSettings(seats: AgentRecord[], patch: Partial<AgentConfigPatch>): void {
-  if (!patch.provider) return;
-  const problems: string[] = [];
-  for (const seat of seats) {
-    const current = seat.agentConfig?.provider ?? currentOccupant(seat).config.provider;
-    if (current && providerFamily(current) === providerFamily(patch.provider)) continue;
-    const kept = PROVIDER_SETTINGS.filter(
-      (field) => seat.agentConfig?.[field] !== undefined && patch[field] === undefined,
-    );
-    if (kept.length > 0) {
-      problems.push(`${agentQualifiedName(seat)} (${kept.join(", ")} for ${current ?? "unknown"})`);
-    }
-  }
-  if (problems.length > 0) {
-    throw new Error(
-      `Changing to provider ${patch.provider} needs a value for it or a clear (null) for each ` +
-        `setting of the old provider: ${problems.join("; ")}`,
-    );
-  }
+function changesProvider(seat: AgentRecord, provider: string): boolean {
+  const current = seat.agentConfig?.provider ?? currentOccupant(seat).config.provider;
+  return !current || providerFamily(current) !== providerFamily(provider);
+}
+
+// Mode names do not transfer between providers: Claude's "auto" approves through a classifier,
+// while Codex's "auto" asks, and its classifier mode is "auto-review". A provider change therefore
+// names its mode, since a guessed one could stall an agent or let it act without asking.
+function assertProviderMode(seats: AgentRecord[], patch: Partial<AgentConfigPatch>): void {
+  if (!patch.provider || typeof patch.modeId === "string") return;
+  const switching = seats.filter((seat) => changesProvider(seat, patch.provider!));
+  if (switching.length === 0) return;
+  throw new Error(
+    `Changing to provider ${patch.provider} needs a mode for it: ` +
+      switching.map(agentQualifiedName).join(", "),
+  );
 }
 
 export function updateSeats(
   input: { seats: string[]; agentConfig: Partial<AgentConfigPatch>; dryRun: boolean },
   context: SeatContext,
 ): Promise<SeatView[]> {
-  assertProviderSettings(resolveSeats(input.seats), input.agentConfig);
+  const patch = input.agentConfig;
   return editSeats(
     input.seats,
     input.dryRun,
     (seat) => {
       const agentConfig: Record<string, unknown> = { ...seat.agentConfig };
-      for (const [key, value] of Object.entries(input.agentConfig)) {
+      // The old provider's thinking option and feature values mean nothing to the new one; the
+      // new agent gets its provider's defaults unless the edit sets them.
+      if (patch.provider && changesProvider(seat, patch.provider)) {
+        for (const field of PROVIDER_SETTINGS) delete agentConfig[field];
+      }
+      for (const [key, value] of Object.entries(patch)) {
         if (value === null) delete agentConfig[key];
         else if (value !== undefined) agentConfig[key] = value;
       }
       return { ...seat, agentConfig: agentConfig as AgentConfig };
     },
     context,
+    (seats) => assertProviderMode(seats, patch),
   );
 }
 

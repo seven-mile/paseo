@@ -271,14 +271,14 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   const fake = fakePaseo();
   await seed(fake, [supervisor, worker]);
 
-  // The seat's mode belongs to the old provider, so a switch has to say what to do with it.
+  // Mode names mean different things across providers, so a switch has to name its mode.
   await assert.rejects(
     call(
       seatUpdateRpc,
       { seats: ["lead", "lead.dev"], agentConfig: { provider: "fast" } },
       fake.context,
     ),
-    /Changing to provider fast needs .*: lead \(modeId for slow\/large\); lead\.dev \(modeId for slow\/large\)/,
+    /Changing to provider fast needs a mode for it: lead, lead\.dev/,
   );
   const preview = await call<Seats>(
     seatUpdateRpc,
@@ -304,8 +304,18 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
 
   await call(
     seatUpdateRpc,
-    { seats: [supervisor.id], agentConfig: { provider: "fast", modeId: null } },
+    { seats: ["lead"], agentConfig: { thinkingOptionId: "high" } },
     fake.context,
+  );
+  await call(
+    seatUpdateRpc,
+    { seats: [supervisor.id], agentConfig: { provider: "fast", modeId: "build" } },
+    fake.context,
+  );
+  assert.deepEqual(
+    seat(supervisor.id).agentConfig,
+    { provider: "fast", modeId: "build" },
+    "the old provider's thinking option is dropped",
   );
   assert.equal(fake.creations.length, 0, "a seat with no mail is not replaced");
   const listed = await call<Seats>(seatListRpc, {}, fake.context);
@@ -328,8 +338,8 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   const replaced = seat(supervisor.id);
   assert.equal(replaced.paseoAgentId, "replacement-1");
   assert.equal(occupantStaleReason(replaced), null);
-  // Nothing of the old provider carries over: the cleared mode is not filled in from the old agent.
-  assert.deepEqual(replaced.occupant?.config, { provider: "fast" });
+  // Nothing of the old provider carries over, including the thinking option the old agent ran.
+  assert.deepEqual(replaced.occupant?.config, { provider: "fast", modeId: "build" });
   assert.equal(replaced.occupant?.number, 2);
   assert.deepEqual(
     replaced.pastOccupants?.map((past) => [past.number, past.paseoAgentId, past.reason]),
