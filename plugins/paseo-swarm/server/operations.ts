@@ -250,7 +250,7 @@ async function assertCreationWorkspace(
 function seatConfig(input: RpcInput<typeof createSeatRpc>): AgentConfig {
   return {
     provider: input.provider,
-    ...(input.modeId ? { modeId: input.modeId } : {}),
+    modeId: input.modeId,
     ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
     ...(input.featureValues ? { featureValues: input.featureValues } : {}),
   };

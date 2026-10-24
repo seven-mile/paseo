@@ -920,7 +920,7 @@ export async function createPaseoToolCatalog(
         registerTool(
           "swarm_seat_create",
           {
-            description: `Create a ${childRoleClass} seat that reports to you, with a role from swarm_role_list. The seat has no agent until its first message, which starts one with the provider and settings given here. provider is provider/model. A planner gives each supervisor a workspace of its own: prepare one and pass its workspaceId. A supervisor's workers share its workspace unless given another, and every agent in that workspace must be the supervisor or one of its reports.`,
+            description: `Create a ${childRoleClass} seat that reports to you, with a role from swarm_role_list. The seat has no agent until its first message, which starts one with the provider and settings given here. provider is provider/model, and settings.modeId is required: the provider's own mode id. A planner gives each supervisor a workspace of its own: prepare one and pass its workspaceId. A supervisor's workers share its workspace unless given another, and every agent in that workspace must be the supervisor or one of its reports.`,
             inputSchema: {
               name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
               role: z.string().min(1),
@@ -931,6 +931,11 @@ export async function createPaseoToolCatalog(
           },
           async (input) => {
             const { name } = await readSwarm();
+            if (!input.settings?.modeId) {
+              throw new Error(
+                "swarm_seat_create needs settings.modeId, the provider's own mode id. Check list_providers or inspect_provider and the PWA's preferredSeatModes.",
+              );
+            }
             return swarmResult(
               await invokePlugin("paseo-swarm", "swarm.seat.create", {
                 name: input.name,

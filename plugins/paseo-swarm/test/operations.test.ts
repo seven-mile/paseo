@@ -186,6 +186,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
             workspaceId: "supervisor-workspace",
             actorName: "planner",
             provider: "codex/gpt-6.1-sol",
+            modeId: "auto-review",
             reportsTo: "planner",
           }),
         ),
@@ -202,6 +203,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
             projectId: "other",
             actorName: "planner",
             provider: "codex/gpt-6.1-sol",
+            modeId: "auto-review",
             reportsTo: "planner",
           }),
         ),
@@ -222,6 +224,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
               role: "supervisor",
               actorName: "planner",
               provider: "codex/gpt-6.1-sol",
+              modeId: "auto-review",
               reportsTo: "planner",
               workspaceId,
             }),
@@ -255,8 +258,24 @@ test("supervisors require independent placement, workers keep caller defaults, a
         actorName: "planner.supervisor",
         reportsTo: "planner.supervisor",
         provider: "codex/gpt-6.1-sol",
+        modeId: "auto",
       }),
     )) as AgentRecord;
+    // The PWA prefers auto-review for codex; an explicit "auto" stays a literal mode id.
+    assert.deepEqual(store.read().agents.find((agent) => agent.id === worker.id)?.agentConfig, {
+      provider: "codex/gpt-6.1-sol",
+      modeId: "auto",
+    });
+    assert.throws(
+      () =>
+        createSeatRpc.input.parse({
+          name: "no-mode",
+          roleClass: "worker",
+          role: "researcher",
+          provider: "codex/gpt-6.1-sol",
+        }),
+      /explicit modeId/,
+    );
     assert.equal(worker.workspaceId, supervisor.workspaceId);
     assert.equal(workspaceCreations.length, 0);
     // A new seat has no agent until its first message starts one, with no Paseo parent.
@@ -307,6 +326,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
           actorName: actor.qualifiedName,
           reportsTo: actor.qualifiedName,
           provider: "codex/gpt-6.1-sol",
+          modeId: "auto-review",
           roleClass: actor.roleClass === "planner" ? "supervisor" : "worker",
           role: actor.roleClass === "planner" ? "supervisor" : "researcher",
           workspaceId,
@@ -903,6 +923,7 @@ test("roster reads filter native availability without releasing historical names
           roleClass: "planner",
           role: "planner",
           provider: "codex/gpt-6.1-sol",
+          modeId: "auto-review",
         }),
       /already exists/,
     );

@@ -1027,6 +1027,13 @@ describe("Swarm MCP coordination", () => {
           actorName: "parent",
           workspaceId: "isolated-worktree",
         });
+        await expect(
+          invokeToolWithParsedInput(registeredTool(server, "swarm_seat_create"), {
+            name: "no-mode",
+            role: "researcher",
+            provider: "codex/gpt-6.1-sol",
+          }),
+        ).rejects.toThrow(/settings\.modeId/);
       } finally {
         await server.close();
       }

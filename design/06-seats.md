@@ -80,6 +80,8 @@ People and operators manage seats through plugin RPCs; agents work through daemo
 | `swarm.seat.reset`        | `paseo-swarm swarm seat reset`   |                                      |
 | `swarm.seat.history.read` | `paseo-swarm swarm seat history` | `swarm_transcript_list`              |
 
+`create` requires both `provider` (`provider/model`) and a provider-native `modeId`; `update` rejects a `provider` without a `modeId` in the same request. Neither reinterprets `default` or `auto`.
+
 `update` and `reset` take several seats and a `dryRun` flag, and return each seat with its pending plan as `pending: { kind, reason } | null`, so `--json` and `--dry-run` show whether the next mail starts, adjusts, revives, or replaces. A field set to `null` in `update` stops being compared. `reset --cancel` withdraws a reset that has not taken effect. In-place changes go through the agent handle's `applyConfig` in the Paseo client SDK.
 
 Agents read transcripts for their own seat and the seats under them; planners read any seat. Agents cannot edit seats in this version.
