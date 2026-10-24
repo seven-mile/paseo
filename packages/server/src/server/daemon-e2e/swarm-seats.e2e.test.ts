@@ -178,7 +178,7 @@ test("a Swarm seat starts on its first message, moves to another provider, and b
 
   await expect(
     swarm("swarm.seat.update", { seats: ["lead"], agentConfig: { provider: "mock-b" } }),
-  ).rejects.toThrow(/needs provider\/model, and a mode when the seat moves/);
+  ).rejects.toThrow(/also needs modeId in the same request/);
   await swarm("swarm.seat.update", {
     seats: ["lead"],
     agentConfig: { provider: "mock-b/e2e-fast-stream", modeId: "load-test" },
