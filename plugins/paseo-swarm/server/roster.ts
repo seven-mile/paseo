@@ -259,6 +259,9 @@ function reservedSeat(
   if (!wanted.agentConfig.provider?.includes("/")) {
     throw new Error(`A new seat needs agent.provider as provider/model: ${wanted.qualifiedName}`);
   }
+  if (!wanted.agentConfig.modeId) {
+    throw new Error(`A new seat needs agent.modeId, the provider's own mode: ${wanted.qualifiedName}`);
+  }
   return {
     id: `agent-${randomUUID()}`,
     swarmId: swarm.id,

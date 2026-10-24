@@ -56,7 +56,7 @@ A rename or a move is a retirement plus a new seat. The plan lists the Tasks tha
 
 - a seat would change role class. An agent's tools come from its role class when its session opens, so a prompt cannot change them. Give the new role a new seat name.
 - a retirement would leave an active seat reporting to a retired one.
-- the directory cannot run: a missing role, a bad file, a team the rules above forbid, or a new seat without `provider/model`.
+- the directory cannot run: a missing role, a bad file, a team the rules above forbid, or a new seat without `provider/model` and a `modeId`.
 
 Retiring leaves the occupant and its workspace as they are, so a restore can bring the agent back. A retired seat's agent loses its Swarm tools at its next call, since the daemon looks up the caller's seat on each one.
 

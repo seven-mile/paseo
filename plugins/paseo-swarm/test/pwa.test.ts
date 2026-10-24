@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { listPwaRoles, pwaFilesRevision, readPwa, readPwaFiles } from "../server/pwa";
+import { initialPrompt } from "../server/prompts";
 
 function fixture(): string {
   const directory = mkdtempSync(join(tmpdir(), "pwa-"));
@@ -113,6 +114,51 @@ test("readPwaFiles reads PWA.md and role files only, and the revision covers eve
     );
     rmSync(join(directory, "PWA.md"));
     assert.throws(() => readPwaFiles(directory), /Missing PWA.md.*ENOENT/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("preferredSeatModes is optional, parsed, and shown only to managers", () => {
+  const directory = fixture();
+  try {
+    assert.deepEqual(readPwa(readPwaFiles(directory), "developer").preferredSeatModes, {});
+    const agent = (roleClass: "supervisor" | "worker") => ({
+      name: "seat",
+      roleClass,
+      role: roleClass === "worker" ? "developer" : "supervisor",
+      reportsTo: null,
+    });
+    const prompt = (roleClass: "supervisor" | "worker") =>
+      initialPrompt({
+        pwa: readPwa(readPwaFiles(directory), roleClass === "worker" ? "developer" : "supervisor"),
+        agent: agent(roleClass),
+        brief: "Go",
+      });
+    // Framework guidance reaches managers once, and no one sees preferences nobody configured.
+    assert.equal(prompt("supervisor").split("Provisioning seats:").length, 2);
+    assert.doesNotMatch(prompt("worker"), /Provisioning seats:/);
+    assert.doesNotMatch(prompt("supervisor"), /preferred seat modes/i);
+
+    writeFileSync(
+      join(directory, "PWA.md"),
+      "---\nversion: 1\nproject: Example\npreferredSeatModes: { codex: full-access, claude: auto }\n---\n\nGlobal guidance.\n",
+    );
+    assert.deepEqual(readPwa(readPwaFiles(directory), "developer").preferredSeatModes, {
+      codex: "full-access",
+      claude: "auto",
+    });
+    assert.match(
+      prompt("supervisor"),
+      /preferred seat modes[^\n]*codex: full-access, claude: auto/,
+    );
+    assert.doesNotMatch(prompt("worker"), /preferred seat modes/i);
+
+    writeFileSync(
+      join(directory, "PWA.md"),
+      "---\nversion: 1\nproject: Example\npreferredSeatModes: [codex]\n---\n\nGlobal guidance.\n",
+    );
+    assert.throws(() => readPwa(readPwaFiles(directory), "developer"), /preferredSeatModes/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

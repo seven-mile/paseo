@@ -21,6 +21,7 @@ export interface Pwa {
   projectBody: string;
   roleBody: string;
   statuses: string[];
+  preferredSeatModes: Record<string, string>;
   revision: string;
 }
 
@@ -130,6 +131,16 @@ export function readPwa(files: PwaFiles, role: string): Pwa {
     throw new Error("PWA.md frontmatter field statuses must be an array of strings");
   }
 
+  const preferredSeatModes = pwa.preferredSeatModes === undefined ? {} : pwa.preferredSeatModes;
+  if (
+    !preferredSeatModes ||
+    typeof preferredSeatModes !== "object" ||
+    Array.isArray(preferredSeatModes) ||
+    Object.values(preferredSeatModes).some((mode) => typeof mode !== "string" || mode.trim() === "")
+  ) {
+    throw new Error("PWA.md frontmatter field preferredSeatModes must map provider to a mode");
+  }
+
   const revision = createHash("sha256")
     .update(pwaSource)
     .update("\0")
@@ -143,6 +154,7 @@ export function readPwa(files: PwaFiles, role: string): Pwa {
     projectBody: pwaDocument.body,
     roleBody: roleDocument.body,
     statuses: [...statuses],
+    preferredSeatModes: { ...(preferredSeatModes as Record<string, string>) },
     revision,
   };
 }

@@ -693,6 +693,11 @@ export async function updateSeats(
   context: SeatContext,
 ): Promise<SeatView[]> {
   const patch = input.agentConfig;
+  if (patch.provider && !patch.modeId) {
+    throw new Error(
+      `Setting provider ${patch.provider} also needs modeId in the same request: modes are provider-specific and are never carried over.`,
+    );
+  }
   const edit = (seat: AgentRecord): AgentRecord => {
     const agentConfig: Record<string, unknown> = { ...seat.agentConfig };
     if (patch.provider) {

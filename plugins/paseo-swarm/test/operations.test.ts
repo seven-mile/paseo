@@ -184,6 +184,7 @@ test("seats are placed when their first agent starts: supervisors in worktrees o
             workspaceId: "supervisor-workspace",
             actorName: "planner",
             provider: "codex/gpt-6.1-sol",
+            modeId: "auto-review",
             reportsTo: "planner",
           }),
         ),
@@ -200,6 +201,7 @@ test("seats are placed when their first agent starts: supervisors in worktrees o
             projectId: "other",
             actorName: "planner",
             provider: "codex/gpt-6.1-sol",
+            modeId: "auto-review",
             reportsTo: "planner",
           }),
         ),
@@ -217,6 +219,7 @@ test("seats are placed when their first agent starts: supervisors in worktrees o
             role: "supervisor",
             actorName: "planner",
             provider: "codex/gpt-6.1-sol",
+            modeId: "auto-review",
             reportsTo: "planner",
             workspaceId: "planner-workspace",
           }),
@@ -249,10 +252,26 @@ test("seats are placed when their first agent starts: supervisors in worktrees o
         actorName: "planner.supervisor",
         reportsTo: "planner.supervisor",
         provider: "codex/gpt-6.1-sol",
+        modeId: "auto",
       }),
     )) as AgentRecord;
     // A worker is placed with its manager when its first agent starts.
     assert.equal(worker.workspaceId, null);
+    // The PWA prefers auto-review for codex; an explicit "auto" stays a literal mode id.
+    assert.deepEqual(store.read().agents.find((agent) => agent.id === worker.id)?.agentConfig, {
+      provider: "codex/gpt-6.1-sol",
+      modeId: "auto",
+    });
+    assert.throws(
+      () =>
+        createSeatRpc.input.parse({
+          name: "no-mode",
+          roleClass: "worker",
+          role: "researcher",
+          provider: "codex/gpt-6.1-sol",
+        }),
+      /explicit modeId/,
+    );
     assert.equal(workspaceCreations.length, 0);
     // A new seat has no agent until its first message starts one, with no Paseo parent.
     assert.equal(supervisor.paseoAgentId, null);
@@ -382,6 +401,7 @@ test("seats are placed when their first agent starts: supervisors in worktrees o
           actorName: actor.qualifiedName,
           reportsTo: actor.qualifiedName,
           provider: "codex/gpt-6.1-sol",
+          modeId: "auto-review",
           roleClass: actor.roleClass === "planner" ? "supervisor" : "worker",
           role: actor.roleClass === "planner" ? "supervisor" : "researcher",
           workspaceId,
@@ -937,6 +957,7 @@ test("board reads keep seats whose occupants are archived or unavailable without
           roleClass: "planner",
           role: "planner",
           provider: "codex/gpt-6.1-sol",
+          modeId: "auto-review",
         }),
       /already exists/,
     );

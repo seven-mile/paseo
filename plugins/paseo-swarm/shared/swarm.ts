@@ -23,6 +23,9 @@ export const seatSchema = agentRecordSchema.extend({
     .nullable(),
 });
 
+const SEAT_MODE_REQUIRED =
+  "A seat needs an explicit modeId, the provider's own mode id, chosen so the agent can work without routine approvals.";
+
 // What `up` does to a swarm's accepted state, or would do. Refusals stop the whole plan.
 export const rosterPlanSchema = z.object({
   reserve: z.array(z.object({ seat: z.string(), role: z.string() })),
@@ -134,7 +137,7 @@ export const pwaRolesReadRpc = defineRpc({
 });
 
 // Reserves a seat. It has no agent until its first mail arrives, which starts one with the seat's
-// agentConfig, so provider is "provider/model".
+// agentConfig, so provider is "provider/model" and modeId is that provider's own mode id.
 export const createSeatRpc = defineRpc({
   name: "swarm.seat.create",
   input: z.object({
@@ -147,7 +150,7 @@ export const createSeatRpc = defineRpc({
     reportsTo: z.string().nullable().default(null),
     title: z.string().optional(),
     provider: z.string().min(1),
-    modeId: z.string().optional(),
+    modeId: z.string({ error: SEAT_MODE_REQUIRED }).min(1, SEAT_MODE_REQUIRED),
     thinkingOptionId: z.string().optional(),
     featureValues: z.record(z.string(), z.unknown()).optional(),
     // The seat that asks, when an agent asks; it becomes the manager unless reportsTo says otherwise.
