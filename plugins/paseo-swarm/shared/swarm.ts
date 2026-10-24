@@ -225,6 +225,8 @@ export const seatListRpc = defineRpc({
   input: z.object({
     projectId: z.string().min(1).optional(),
     includeRetired: z.boolean().default(false),
+    // Only the seat this Paseo agent occupies, or is arriving in while its session opens.
+    paseoAgentId: z.string().min(1).optional(),
   }),
   output: z.object({ seats: z.array(seatSchema) }),
 });

@@ -5,6 +5,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import { afterEach, expect, test } from "vitest";
+import type {
+  AgentLaunchContext,
+  AgentPersistenceHandle,
+  AgentSessionConfig,
+} from "../agent/agent-sdk-types.js";
+import { MockLoadTestAgentClient } from "../agent/providers/mock-load-test-agent.js";
 import { BuiltinPluginLoader } from "../plugins/builtin/index.js";
 import { DaemonClient } from "../test-utils/daemon-client.js";
 import { createTestPaseoDaemon } from "../test-utils/paseo-daemon.js";
@@ -14,6 +20,39 @@ interface Seat {
   paseoAgentId: string | null;
   occupant: { number: number };
   pastOccupants?: Array<{ number: number; paseoAgentId: string }>;
+}
+
+// A mock provider that takes Paseo tools as a native catalog when its session opens, as OpenCode and
+// OMP do, and records the tool names each launch of each agent got.
+class NativeToolsMockClient extends MockLoadTestAgentClient {
+  override readonly capabilities = {
+    ...new MockLoadTestAgentClient().capabilities,
+    supportsNativePaseoTools: true,
+  };
+  readonly launches = new Map<string, string[][]>();
+
+  private record(launchContext: AgentLaunchContext | undefined): void {
+    if (!launchContext) return;
+    const tools = [...(launchContext.paseoTools?.tools.keys() ?? [])];
+    this.launches.set(launchContext.agentId, [
+      ...(this.launches.get(launchContext.agentId) ?? []),
+      tools,
+    ]);
+  }
+
+  override async createSession(config: AgentSessionConfig, launchContext?: AgentLaunchContext) {
+    this.record(launchContext);
+    return super.createSession(config, launchContext);
+  }
+
+  override async resumeSession(
+    handle: AgentPersistenceHandle,
+    overrides?: Partial<AgentSessionConfig>,
+    launchContext?: AgentLaunchContext,
+  ) {
+    this.record(launchContext);
+    return super.resumeSession(handle, overrides, launchContext);
+  }
 }
 
 const cleanups: Array<() => Promise<unknown>> = [];
@@ -42,8 +81,34 @@ async function waitFor<T>(read: () => Promise<T>, done: (value: T) => boolean): 
 
 // A reserved seat starts its agent on its first message, and a seat moved to another provider gets
 // a fresh agent on its next Swarm delivery, against a real daemon: the Paseo agent API, archiving,
-// and history reads the seat unit tests fake.
+// and history reads the seat unit tests fake. Each agent a seat starts or brings back opens its
+// session with the seat's Swarm tools and without native agent-driving ones.
 test("a Swarm seat starts on its first message, moves to another provider, and back", async () => {
+  const mockA = new NativeToolsMockClient();
+  const mockB = new NativeToolsMockClient();
+  // The tools the latest launch of an agent opened its session with.
+  const launchTools = (agentId: string) =>
+    (mockA.launches.get(agentId) ?? mockB.launches.get(agentId) ?? []).at(-1) ?? [];
+  const launchCount = (agentId: string) =>
+    (mockA.launches.get(agentId)?.length ?? 0) + (mockB.launches.get(agentId)?.length ?? 0);
+  const expectSeatTools = (agentId: string, roleClass: "supervisor" | "worker") => {
+    const tools = launchTools(agentId);
+    expect(tools).toEqual(expect.arrayContaining(["swarm_seat_read", "swarm_message_send"]));
+    for (const native of [
+      "create_agent",
+      "send_agent_prompt",
+      "get_agent_activity",
+      "create_heartbeat",
+      "create_schedule",
+      "run_schedule_once",
+    ]) {
+      expect(tools).not.toContain(native);
+    }
+    expect(tools).toContain("create_terminal");
+    const managerTools = ["swarm_seat_create", "create_workspace"];
+    if (roleClass === "supervisor") expect(tools).toEqual(expect.arrayContaining(managerTools));
+    else for (const tool of managerTools) expect(tools).not.toContain(tool);
+  };
   const root = await mkdtemp(path.join(os.tmpdir(), "swarm-seats-e2e-"));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
   execSync("git init -b main", { cwd: root, stdio: "pipe" });
@@ -56,6 +121,7 @@ test("a Swarm seat starts on its first message, moves to another provider, and b
     pluginsEnabled: true,
     builtinPlugins: new BuiltinPluginLoader(undefined, ["paseo-swarm"]),
     providerOverrides: { "mock-b": { extends: "mock", label: "Mock B" } },
+    agentClients: { mock: mockA, "mock-b": mockB },
   });
   cleanups.push(() => daemon.close());
   setEnv("PASEO_HOME", daemon.paseoHome);
@@ -103,6 +169,8 @@ test("a Swarm seat starts on its first message, moves to another provider, and b
   const leadAgentId = lead.paseoAgentId!;
   const devAgentId = dev.paseoAgentId!;
   expect(lead.occupant.number).toBe(1);
+  expectSeatTools(leadAgentId, "supervisor");
+  expectSeatTools(devAgentId, "worker");
   await client.waitForFinish(devAgentId, 30_000);
   // Seat agents have no Paseo parent; the roster's reporting line is Swarm's own.
   expect((await agents()).get(devAgentId)?.labels[PARENT_AGENT_ID_LABEL]).toBeUndefined();
@@ -110,7 +178,7 @@ test("a Swarm seat starts on its first message, moves to another provider, and b
 
   await expect(
     swarm("swarm.seat.update", { seats: ["lead"], agentConfig: { provider: "mock-b" } }),
-  ).rejects.toThrow(/needs provider\/model and a mode/);
+  ).rejects.toThrow(/needs provider\/model, and a mode when the seat moves/);
   await swarm("swarm.seat.update", {
     seats: ["lead"],
     agentConfig: { provider: "mock-b/e2e-fast-stream", modeId: "load-test" },
@@ -126,6 +194,7 @@ test("a Swarm seat starts on its first message, moves to another provider, and b
   // The seat is rebound first; the old agent is archived and the mail delivered right after.
   const after = await waitFor(agents, (all) => Boolean(all.get(leadAgentId)?.archivedAt));
   expect(after.get(movedAgentId)?.provider).toBe("mock-b");
+  expectSeatTools(movedAgentId, "supervisor");
   // Replacing the manager leaves its worker's agent alone.
   expect(after.get(devAgentId)?.archivedAt).toBeNull();
   await waitFor(
@@ -153,6 +222,7 @@ test("a Swarm seat starts on its first message, moves to another provider, and b
 
   // Moving back brings the first agent back with its context.
   await swarm("swarm.seat.update", { seats: ["lead"], agentConfig: config });
+  const leadLaunches = launchCount(leadAgentId);
   await send("lead", "SEAT_E2E_BACK");
   const back = await waitFor(
     () => listSeat("lead"),
@@ -175,6 +245,9 @@ test("a Swarm seat starts on its first message, moves to another provider, and b
         ),
     );
   await leadSaw("SEAT_E2E_BACK");
+  // The archived agent's session reopened for its return turn, already in the seat.
+  expect(launchCount(leadAgentId)).toBeGreaterThan(leadLaunches);
+  expectSeatTools(leadAgentId, "supervisor");
 
   // A mode change is made on the live agent, which stays in the seat.
   await client.waitForFinish(leadAgentId, 30_000);

@@ -16,6 +16,7 @@ import {
   listSeats,
   readSeatHistory,
   resetSeats,
+  seatOfAgent,
   seatView,
   updateSeats,
   type SeatView,
@@ -135,35 +136,16 @@ function findAgent(reference: string, scopeName?: string): AgentRecord {
   throw new Error(`Unknown active agent: ${reference}`);
 }
 
-// A message recipient as a sender names it: a qualified name, one of the sender's reports, a
-// seat on the sender's team, or the sender's manager by its local name.
-function findRecipient(reference: string, senderName: string): AgentRecord {
-  const agents = store.read().agents.filter((candidate) => !candidate.retired);
-  const sender = agents.find((candidate) => agentQualifiedName(candidate) === senderName);
-  const named = (qualifiedName: string | null | undefined) =>
-    qualifiedName
-      ? agents.find((candidate) => agentQualifiedName(candidate) === qualifiedName)
-      : undefined;
-  const manager = named(sender?.reportsTo);
-  const recipient =
-    named(reference) ??
-    named(`${senderName}.${reference}`) ??
-    named(sender?.reportsTo ? `${sender.reportsTo}.${reference}` : null) ??
-    (manager?.name === reference ? manager : undefined);
-  return recipient ?? findAgent(reference);
-}
-
-function findAgentByPaseoId(paseoAgentId: string): AgentRecord | undefined {
-  return store
-    .read()
-    .agents.find((candidate) => candidate.paseoAgentId === paseoAgentId && !candidate.retired);
-}
-
 function resolveTaskWorkers(workerNames: string[], manager: AgentRecord): string[] {
   return workerNames.map((workerName) => {
     const worker = findAgent(workerName, agentQualifiedName(manager));
     if (worker.roleClass !== "worker") {
       throw new Error(`Task worker must have role class worker: ${worker.name}`);
+    }
+    if (worker.reportsTo !== agentQualifiedName(manager)) {
+      throw new Error(
+        `Task worker ${agentQualifiedName(worker)} does not report to ${agentQualifiedName(manager)}`,
+      );
     }
     return agentQualifiedName(worker);
   });
@@ -452,9 +434,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   );
 
   server.handle(prepareAgentRpc, async (input: RpcInput<typeof prepareAgentRpc>, context) => {
-    const actor = input.actorPaseoAgentId
-      ? (findAgentByPaseoId(input.actorPaseoAgentId) ?? null)
-      : null;
+    const actor = input.actorPaseoAgentId ? (seatOfAgent(input.actorPaseoAgentId) ?? null) : null;
     if (input.actorPaseoAgentId && !actor) {
       throw new Error(`Unknown active Paseo actor: ${input.actorPaseoAgentId}`);
     }
@@ -532,7 +512,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   );
 
   server.handle(refreshPromptRpc, async ({ paseoAgentId }) => {
-    const current = findAgentByPaseoId(paseoAgentId);
+    const current = seatOfAgent(paseoAgentId);
     if (!current) throw new Error(`Unknown active Swarm agent: ${paseoAgentId}`);
     const assembled = assemblePrompt(current, current.projectId);
     const previousRevision = current.prompt?.revision ?? null;
@@ -698,7 +678,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
           `Message sender ${input.senderName} does not match actor ${input.actorName}`,
         );
       }
-      const recipient = findRecipient(input.recipientName, input.senderName);
+      const recipient = findAgent(input.recipientName);
       const recipientReference = agentQualifiedName(recipient);
       if (input.taskId) {
         const task = findTask(input.taskId);

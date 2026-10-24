@@ -847,14 +847,23 @@ describe("Swarm MCP coordination", () => {
     occupant: paseoAgentId ? { number: 1 } : undefined,
     pending: paseoAgentId ? null : { kind: "start", reason: "no agent yet" },
   });
+  // The plugin's seat list, which narrows to the caller's seat when asked by Paseo agent id. Null
+  // seats stand for a plugin that cannot answer.
+  const seatList = (seats: Array<{ paseoAgentId: string | null }> | null, input: unknown) => {
+    if (!seats) throw new Error("Plugin is not available: paseo-swarm");
+    const { paseoAgentId } = input as { paseoAgentId?: string };
+    return { seats: paseoAgentId ? seats.filter((s) => s.paseoAgentId === paseoAgentId) : seats };
+  };
   const swarmServer = async (
     callerAgentId: string,
-    seats: unknown[],
+    seats: Array<{ paseoAgentId: string | null }> | null,
     answer: (method: string, input: unknown) => unknown = () => ({}),
+    stored: Record<string, { labels: Record<string, string> }> = {},
   ) => {
-    const { agentManager, agentStorage } = createTestDeps();
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    spies.agentStorage.get.mockImplementation(async (id: string) => stored[id] ?? null);
     const invokePlugin = vi.fn(async (_pluginId: string, method: string, input: unknown) =>
-      method === "swarm.seat.list" ? { seats } : answer(method, input),
+      method === "swarm.seat.list" ? seatList(seats, input) : answer(method, input),
     );
     const server = await createAgentMcpServer({
       agentManager,
@@ -907,9 +916,10 @@ describe("Swarm MCP coordination", () => {
     try {
       const read = async (name: string, input: Record<string, unknown>) =>
         (await invokeToolWithParsedInput(registeredTool(server, name), input)).structuredContent;
+      // Paseo has no record of the caller's agent here, so its state is unknown rather than idle.
       expect(await read("swarm_seat_read", {})).toMatchObject({
         name: "lead",
-        state: "idle",
+        state: "unknown",
         occupant: 1,
         reports: ["lead.team"],
         pending: null,
@@ -1053,23 +1063,59 @@ describe("Swarm MCP coordination", () => {
     },
   );
 
-  it("hides native agent tools from seat occupants only", async () => {
-    const agentTools = ["create_agent", "list_agents", "get_agent_activity", "cancel_agent"];
-    const occupant = await swarmServer("worker-agent", [
-      seat("lead.dev", "worker", "worker-agent"),
-    ]);
-    const outsider = await swarmServer("native-agent", [
-      seat("lead.dev", "worker", "worker-agent"),
-    ]);
+  it("gives seat occupants work tools and no native agent or scheduling tools", async () => {
+    const bypassTools = [
+      "create_agent",
+      "list_agents",
+      "get_agent_activity",
+      "cancel_agent",
+      "create_heartbeat",
+      "create_schedule",
+      "run_schedule_once",
+    ];
+    const seats = [
+      seat("lead", "supervisor", "lead-agent"),
+      seat("lead.dev", "worker", "dev-agent"),
+    ];
+    const supervisor = await swarmServer("lead-agent", seats);
+    const worker = await swarmServer("dev-agent", seats);
+    const outsider = await swarmServer("native-agent", seats);
     try {
-      for (const name of agentTools) {
-        expect(lookupTool(occupant.server, name)).toBeUndefined();
+      for (const name of bypassTools) {
+        expect(lookupTool(supervisor.server, name)).toBeUndefined();
+        expect(lookupTool(worker.server, name)).toBeUndefined();
         expect(lookupTool(outsider.server, name)).toBeDefined();
       }
+      for (const occupant of [supervisor, worker]) {
+        expect(lookupTool(occupant.server, "create_terminal")).toBeDefined();
+        expect(lookupTool(occupant.server, "swarm_seat_read")).toBeDefined();
+      }
+      expect(lookupTool(supervisor.server, "create_workspace")).toBeDefined();
+      expect(lookupTool(worker.server, "create_workspace")).toBeUndefined();
       expect(lookupTool(outsider.server, "swarm_seat_read")).toBeUndefined();
     } finally {
-      await occupant.server.close();
+      await supervisor.server.close();
+      await worker.server.close();
       await outsider.server.close();
+    }
+  });
+
+  it("keeps native agent tools from a Swarm agent whose seat cannot be looked up", async () => {
+    const failingSwarmServer = (callerAgentId: string) =>
+      swarmServer(callerAgentId, null, undefined, {
+        "seat-agent": { labels: { "paseo-swarm.seat": "lead-record" } },
+        "native-agent": { labels: {} },
+      });
+    const seatAgent = await failingSwarmServer("seat-agent");
+    const nativeAgent = await failingSwarmServer("native-agent");
+    try {
+      expect(lookupTool(seatAgent.server, "create_agent")).toBeUndefined();
+      expect(lookupTool(seatAgent.server, "create_terminal")).toBeDefined();
+      expect(lookupTool(seatAgent.server, "swarm_seat_read")).toBeUndefined();
+      expect(lookupTool(nativeAgent.server, "create_agent")).toBeDefined();
+    } finally {
+      await seatAgent.server.close();
+      await nativeAgent.server.close();
     }
   });
 
@@ -1135,25 +1181,48 @@ describe("Swarm MCP coordination", () => {
     }
   });
 
-  it("sends a message to a seat as the caller", async () => {
+  it("names seats by local name within the caller's team and by qualified name beyond it", async () => {
     const { server, invokePlugin } = await swarmServer(
       "scout-agent",
-      [seat("alpha.team.scout", "worker", "scout-agent")],
+      [
+        seat("alpha", "planner", "alpha-agent"),
+        seat("alpha.team", "supervisor", "team-agent"),
+        seat("alpha.team.scout", "worker", "scout-agent"),
+        seat("alpha.team.review", "worker", "review-agent"),
+        seat("alpha.other", "supervisor", "other-agent"),
+        seat("alpha.other.audit", "worker", "audit-agent"),
+      ],
       () => ({ delivered: true }),
     );
-    try {
-      await invokeToolWithParsedInput(registeredTool(server, "swarm_message_send"), {
-        to: "review",
+    const send = (to: string) =>
+      invokeToolWithParsedInput(registeredTool(server, "swarm_message_send"), {
+        to,
         body: "Concrete findings",
         taskId: "survey",
       });
+    const read = async (name: string) =>
+      (
+        (
+          await invokeToolWithParsedInput(registeredTool(server, "swarm_seat_read"), {
+            seat: name,
+          })
+        ).structuredContent as { name: string }
+      ).name;
+    try {
+      await send("review");
       expect(invokePlugin).toHaveBeenLastCalledWith("paseo-swarm", "swarm.message.send", {
-        recipientName: "review",
+        recipientName: "alpha.team.review",
         senderName: "alpha.team.scout",
         actorName: "alpha.team.scout",
         taskId: "survey",
         body: "Concrete findings",
       });
+      expect(await read("review")).toBe("alpha.team.review");
+      expect(await read("team")).toBe("alpha.team");
+      expect(await read("alpha.other.audit")).toBe("alpha.other.audit");
+      // audit is unique in the roster but not on the caller's team, so its local name does not reach it.
+      await expect(send("audit")).rejects.toThrow("Unknown Swarm seat: audit");
+      await expect(read("audit")).rejects.toThrow("Unknown Swarm seat: audit");
     } finally {
       await server.close();
     }

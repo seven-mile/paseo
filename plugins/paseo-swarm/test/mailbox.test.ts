@@ -157,44 +157,12 @@ function setup(t: { after(fn: () => void): void }) {
       }) as never,
       context,
     ) as Promise<ReturnType<typeof sendMessageRpc.output.parse>>;
-  const sendAs = (context: PluginHandlerContext, sender: string, recipient: string) =>
-    handlers.get(sendMessageRpc.name)!(
-      sendMessageRpc.input.parse({
-        recipientName: recipient,
-        senderName: sender,
-        body: "Findings",
-      }) as never,
-      context,
-    ) as Promise<ReturnType<typeof sendMessageRpc.output.parse>>;
-  return { turnStarted, turnEnded, send, sendTo, sendAs, readMailbox };
+  return { turnStarted, turnEnded, send, sendTo, readMailbox };
 }
 
 async function seed(agents: AgentRecord[]) {
   await store.commit(() => agents.map((record) => ({ op: "put", collection: "agents", record })));
 }
-
-test("a sender names a seat by qualified name, its report, a teammate, or its manager", async (t) => {
-  const { sendAs } = setup(t);
-  const { sends, context } = fakePaseo();
-  const other: AgentRecord = {
-    ...reviewer,
-    id: "other-record",
-    paseoAgentId: "other-agent",
-    qualifiedName: "other.reviewer",
-    reportsTo: "other",
-  };
-  await seed([manager, worker, reviewer, other]);
-  for (const [sender, reference, expected] of [
-    ["manager", "reviewer", "reviewer-agent"],
-    ["manager.worker", "reviewer", "reviewer-agent"],
-    ["manager.worker", "manager", "manager-agent"],
-    ["manager.worker", "other.reviewer", "other-agent"],
-  ]) {
-    await sendAs(context, sender, reference);
-    assert.equal(sends.at(-1)?.agentId, expected, `${sender} -> ${reference}`);
-  }
-  await assert.rejects(sendAs(context, "manager", "nobody"), /Unknown active agent: nobody/);
-});
 
 test("an undeliverable message stays queued, survives a restart, and is retried in order", async (t) => {
   const { turnEnded, send, readMailbox } = setup(t);

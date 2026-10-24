@@ -3,11 +3,15 @@ import { z } from "zod";
 import {
   activityPreviews,
   pageSwarmItems,
+  resolveSeat,
+  resolveSeatAccess,
   seatDetail,
   seatName,
   seatSummary,
+  seatToolAllowed,
   visibleSeats,
   visibleTasks,
+  type SeatAccess,
   type SeatState,
   type SwarmBoard,
   type SwarmSeat,
@@ -617,28 +621,7 @@ export async function createPaseoToolCatalog(
   };
 
   const tools = new Map<string, PaseoToolDefinition>();
-  let swarmRole: "planner" | "supervisor" | "worker" | null = null;
-  // Native tools that create, read, or drive a Paseo agent by id. A seat's occupant works through
-  // seats instead, so it never reaches another seat's agent around Swarm.
-  const swarmBypassTools = new Set([
-    "create_agent",
-    "send_agent_prompt",
-    "list_agents",
-    "get_agent_status",
-    "get_agent_activity",
-    "update_agent",
-    "set_agent_mode",
-    "cancel_agent",
-    "archive_agent",
-    "kill_agent",
-    "list_pending_permissions",
-    "respond_to_permission",
-  ]);
-  const workerManagementTools = new Set([
-    "create_workspace",
-    "archive_workspace",
-    "create_schedule",
-  ]);
+  let seatAccess: SeatAccess = null;
   const registerTool = (
     name: string,
     config: PaseoToolConfig,
@@ -648,10 +631,7 @@ export async function createPaseoToolCatalog(
     if (!isPaseoToolEnabled(options.paseoToolPolicy, name)) {
       return;
     }
-    if (swarmRole && swarmBypassTools.has(name)) {
-      return;
-    }
-    if (swarmRole === "worker" && workerManagementTools.has(name)) {
+    if (!seatToolAllowed(seatAccess, name)) {
       return;
     }
     tools.set(name, {
@@ -665,28 +645,31 @@ export async function createPaseoToolCatalog(
   };
   const invokePlugin = options.invokePlugin;
   if (invokePlugin) {
-    const readSeats = async () =>
-      ((await invokePlugin("paseo-swarm", "swarm.seat.list", {})) as { seats: SwarmSeat[] }).seats;
-    swarmRole = await (async (): Promise<"planner" | "supervisor" | "worker" | null> => {
-      if (!callerAgentId) return null;
-      try {
-        return (
-          (await readSeats()).find((seat) => seat.paseoAgentId === callerAgentId && !seat.retired)
-            ?.roleClass ?? null
-        );
-      } catch {
-        return null;
-      }
-    })();
+    const readSeats = async (filter: { paseoAgentId?: string } = {}) =>
+      ((await invokePlugin("paseo-swarm", "swarm.seat.list", filter)) as { seats: SwarmSeat[] })
+        .seats;
+    // The plugin decides which seat an agent sits in, including an agent it is still starting or
+    // bringing back, whose session opens before the seat binds it.
+    const seatOfCaller = async () =>
+      callerAgentId ? (await readSeats({ paseoAgentId: callerAgentId })).at(0) : undefined;
+    seatAccess = await resolveSeatAccess({
+      seatOfCaller,
+      callerLabels: async () =>
+        callerAgentId ? (await agentStorage.get(callerAgentId))?.labels : undefined,
+      onLookupError: (error, access) =>
+        childLogger.warn(
+          { err: error, callerAgentId, seatAccess: access },
+          "Could not look up the caller's Swarm seat",
+        ),
+    });
+    const swarmRole = seatAccess === "unresolved" ? null : seatAccess;
     if (!swarmRole) {
-      // An unregistered Paseo agent must not receive Swarm tools, even if it can
+      // An agent outside any seat must not receive Swarm tools, even if it can
       // reach the native catalog.
     } else {
       // The caller's seat, every seat, and the seat's name, read fresh for each call.
       const readSwarm = async () => {
-        if (!callerAgentId) throw new Error("Swarm tools require an agent caller");
-        const seats = await readSeats();
-        const actor = seats.find((seat) => seat.paseoAgentId === callerAgentId && !seat.retired);
+        const [seats, actor] = await Promise.all([readSeats(), seatOfCaller()]);
         if (!actor) throw new Error(`This agent no longer occupies a Swarm seat: ${callerAgentId}`);
         return { seats, actor, name: seatName(actor) };
       };
@@ -700,23 +683,18 @@ export async function createPaseoToolCatalog(
         content: [{ type: "text", text: JSON.stringify(value) }],
         structuredContent: value,
       });
-      const seatState = (seat: SwarmSeat): SeatState => {
+      // What Paseo reports for the seat's agent: its live lifecycle, or the last status it stored
+      // for an agent that is not loaded.
+      const seatState = async (seat: SwarmSeat): Promise<SeatState> => {
         if (seat.paseoAgentId === null) return "empty";
-        return agentManager.getAgent(seat.paseoAgentId)?.lifecycle === "running"
-          ? "running"
-          : "idle";
-      };
-      const findSeat = (seats: SwarmSeat[], reference: string, actor: SwarmSeat) => {
-        const active = seats.filter((seat) => !seat.retired);
-        const named = (qualifiedName: string | null) =>
-          qualifiedName ? active.find((seat) => seatName(seat) === qualifiedName) : undefined;
-        const seat =
-          named(reference) ??
-          named(`${seatName(actor)}.${reference}`) ??
-          named(actor.reportsTo ? `${actor.reportsTo}.${reference}` : null) ??
-          active.find((candidate) => candidate.name === reference);
-        if (!seat) throw new Error(`Unknown Swarm seat: ${reference}`);
-        return seat;
+        const live = agentManager.getAgent(seat.paseoAgentId);
+        if (live) return live.lifecycle;
+        const record = await agentStorage.get(seat.paseoAgentId);
+        if (!record) return "unknown";
+        return buildStoredAgentPayload(
+          record,
+          new Set(providerSnapshotManager.listRegisteredProviderIds()),
+        ).status;
       };
       const pageInput = {
         limit: z.number().int().min(1).max(50).default(20),
@@ -726,13 +704,13 @@ export async function createPaseoToolCatalog(
         "swarm_seat_read",
         {
           description:
-            "Read one Swarm seat: its role, manager, direct reports, workspace, state (empty until its first message starts an agent, then idle or running), occupant number, and any pending change to its agent. Omit seat to read your own.",
+            "Read one Swarm seat: its role, manager, direct reports, workspace, state (empty until its first message starts an agent, then that agent's Paseo status, such as idle or running), occupant number, and any pending change to its agent. Omit seat to read your own.",
           inputSchema: { seat: z.string().optional() },
         },
         async (input) => {
           const { seats, actor } = await readSwarm();
-          const seat = input.seat ? findSeat(seats, input.seat, actor) : actor;
-          return swarmResult(seatDetail(seat, seats, seatState(seat)));
+          const seat = input.seat ? resolveSeat(seats, input.seat, actor) : actor;
+          return swarmResult(seatDetail(seat, seats, await seatState(seat)));
         },
       );
       registerTool(
@@ -752,7 +730,9 @@ export async function createPaseoToolCatalog(
           );
           return swarmResult({
             ...page,
-            items: page.items.map((seat) => seatSummary(seat, seatState(seat))),
+            items: await Promise.all(
+              page.items.map(async (seat) => seatSummary(seat, await seatState(seat))),
+            ),
           });
         },
       );
@@ -841,7 +821,7 @@ export async function createPaseoToolCatalog(
         },
         async (input) => {
           const { seats, actor, name } = await readSwarm();
-          const seat = input.seat ? seatName(findSeat(seats, input.seat, actor)) : name;
+          const seat = input.seat ? seatName(resolveSeat(seats, input.seat, actor)) : name;
           const history = (await invokePlugin("paseo-swarm", "swarm.seat.history.read", {
             seat,
             actorName: name,
@@ -875,10 +855,10 @@ export async function createPaseoToolCatalog(
           },
         },
         async (input) => {
-          const { name } = await readSwarm();
+          const { seats, actor, name } = await readSwarm();
           return swarmResult(
             await invokePlugin("paseo-swarm", "swarm.message.send", {
-              recipientName: input.to,
+              recipientName: seatName(resolveSeat(seats, input.to, actor)),
               senderName: name,
               actorName: name,
               taskId: input.taskId ?? null,

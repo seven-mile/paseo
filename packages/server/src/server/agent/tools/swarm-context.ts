@@ -1,5 +1,10 @@
+import type { AgentLifecycleStatus } from "@getpaseo/protocol/agent-lifecycle";
+
 // The Swarm data agent tools read, as the paseo-swarm plugin returns it, and the views the tools
 // build from it. Tools name seats, never the Paseo agents in them.
+
+// The label paseo-swarm puts on every agent it starts for a seat (plugins/paseo-swarm/server/seats.ts).
+export const SWARM_SEAT_LABEL = "paseo-swarm.seat";
 
 export interface SwarmSeat {
   id: string;
@@ -47,7 +52,64 @@ export interface SwarmBoard {
   activities?: SwarmActivity[];
 }
 
-export type SeatState = "empty" | "idle" | "running";
+// empty until the seat's first message starts an agent; unknown when Paseo has no record of it.
+export type SeatState = "empty" | "unknown" | AgentLifecycleStatus;
+
+export type SeatRoleClass = SwarmSeat["roleClass"];
+
+// Native Paseo tools a seat's agent keeps: work in its workspace, and for managers, choosing what a
+// new seat runs and where. Tools that create or drive agents, or schedule prompts, go around the
+// seats and the mailbox, so a seat's agent gets none of them, nor any native tool added later.
+const SEAT_WORK_TOOLS = new Set([
+  "speak",
+  "list_workspaces",
+  "list_workspace_scripts",
+  "start_workspace_script",
+  "stop_workspace_script",
+  "list_terminals",
+  "create_terminal",
+  "kill_terminal",
+  "capture_terminal",
+  "send_terminal_keys",
+]);
+const SEAT_MANAGER_TOOLS = new Set([
+  "create_workspace",
+  "archive_workspace",
+  "rename_workspace",
+  "list_providers",
+  "list_models",
+  "list_profiles",
+  "inspect_provider",
+]);
+
+// The role class of the caller's seat, null outside any seat, or unresolved for an agent Swarm
+// started whose seat cannot be looked up now.
+export type SeatAccess = SeatRoleClass | "unresolved" | null;
+
+// An unresolved agent gets a worker's native tools and none of Swarm's, rather than the whole
+// native catalog.
+export async function resolveSeatAccess(input: {
+  seatOfCaller: () => Promise<SwarmSeat | undefined>;
+  callerLabels: () => Promise<Record<string, string> | undefined>;
+  onLookupError: (error: unknown, access: SeatAccess) => void;
+}): Promise<SeatAccess> {
+  try {
+    return (await input.seatOfCaller())?.roleClass ?? null;
+  } catch (error) {
+    const labels = await input.callerLabels().catch(() => undefined);
+    const access = labels?.[SWARM_SEAT_LABEL] ? "unresolved" : null;
+    input.onLookupError(error, access);
+    return access;
+  }
+}
+
+export function seatToolAllowed(access: SeatAccess, name: string): boolean {
+  if (!access) return true;
+  if (name.startsWith("swarm_") || name.startsWith("browser_") || SEAT_WORK_TOOLS.has(name)) {
+    return true;
+  }
+  return access !== "worker" && access !== "unresolved" && SEAT_MANAGER_TOOLS.has(name);
+}
 
 // Every Swarm list tool returns this shape. total is null where it is unknown, as for transcripts.
 export interface SwarmPage<Item> {
@@ -79,6 +141,26 @@ export function pageSwarmItems<Item>(
 
 export function seatName(seat: Pick<SwarmSeat, "name" | "qualifiedName">): string {
   return seat.qualifiedName ?? seat.name;
+}
+
+// A seat as an agent names it: any seat by its qualified name, or by local name its own reports,
+// its teammates, and its manager. A local name never reaches past those.
+export function resolveSeat(seats: SwarmSeat[], reference: string, actor: SwarmSeat): SwarmSeat {
+  const active = seats.filter((seat) => !seat.retired);
+  const named = (qualifiedName: string | null) =>
+    qualifiedName ? active.find((seat) => seatName(seat) === qualifiedName) : undefined;
+  const manager = named(actor.reportsTo);
+  const seat =
+    named(reference) ??
+    named(`${seatName(actor)}.${reference}`) ??
+    named(actor.reportsTo ? `${actor.reportsTo}.${reference}` : null) ??
+    (manager?.name === reference ? manager : undefined);
+  if (!seat) {
+    throw new Error(
+      `Unknown Swarm seat: ${reference}. Name your manager, reports, or teammates by local name, and any other seat by its qualified name.`,
+    );
+  }
+  return seat;
 }
 
 // Planners see every seat. Anyone else sees their own seat, their manager, and their team: a

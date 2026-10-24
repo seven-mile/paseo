@@ -106,8 +106,12 @@ test("supervisors require independent placement, workers keep caller defaults, a
       return { projectId: workspaceId === "other-workspace" ? "other" : "project" };
     },
     agents: {
-      async create(creation: { parent?: string; config: { systemPrompt: string } }) {
-        const agentId = `started-agent-${agentCreations.length + 1}`;
+      async create(creation: {
+        agentId: string;
+        parent?: string;
+        config: { systemPrompt: string };
+      }) {
+        const { agentId } = creation;
         runtimeWorkspaces.set(agentId, workspaceId);
         prompts.push(creation.config.systemPrompt);
         agentCreations.push({ workspaceId, parent: creation.parent });
@@ -952,15 +956,15 @@ test("manager can replace a Task worker roster with creation-time validation", a
     createdAt: timestamp,
     updatedAt: timestamp,
   };
-  const worker = (name: string, id: string): AgentRecord => ({
+  const worker = (name: string, id: string, reportsTo = "planner.manager"): AgentRecord => ({
     id,
     paseoAgentId: `${id}-agent`,
     name,
-    qualifiedName: `planner.manager.${name}`,
+    qualifiedName: `${reportsTo}.${name}`,
     aliases: [],
     roleClass: "worker",
     role: "researcher",
-    reportsTo: "planner.manager",
+    reportsTo,
     workspaceId: null,
     retired: false,
     createdAt: timestamp,
@@ -982,6 +986,7 @@ test("manager can replace a Task worker roster with creation-time validation", a
         manager,
         worker("first", "first-record"),
         worker("second", "second-record"),
+        worker("audit", "audit-record", "planner.other"),
       ],
     });
     const created = createTaskRpc.output.parse(
@@ -1022,6 +1027,19 @@ test("manager can replace a Task worker roster with creation-time validation", a
           }),
         ),
       /Task worker must have role class worker/,
+    );
+    // A worker on another team, though its local name is unique, is not this manager's to assign.
+    await assert.rejects(
+      async () =>
+        invoke(
+          updateTaskRpc.name,
+          updateTaskRpc.input.parse({
+            taskId: "roster",
+            actorName: "manager",
+            workerNames: ["audit"],
+          }),
+        ),
+      /Task worker planner\.other\.audit does not report to planner\.manager/,
     );
     assert.deepEqual(store.read().tasks[0].workerNames, ["planner.manager.second"]);
   } finally {
