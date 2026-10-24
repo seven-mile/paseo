@@ -4,7 +4,8 @@ import type { Pwa, RoleClass } from "./pwa";
 export type PromptPwa = Pick<
   Pwa,
   "project" | "role" | "roleClass" | "projectBody" | "roleBody" | "statuses" | "revision"
->;
+> &
+  Partial<Pick<Pwa, "preferredSeatModes">>;
 
 export interface PromptAgent {
   name: string;
@@ -118,12 +119,22 @@ function roleClassGuidance(roleClass: RoleClass): string {
   }
 }
 
+function seatProvisioning(): string[] {
+  return [
+    "Provisioning seats:",
+    "- You are responsible for giving each report a mode in which it can work without routine permission approvals; you do not approve its individual tool calls. Choose an explicit, provider-appropriate mode when you create its seat, and do not settle on an approval-asking default out of caution.",
+    "- Favor reliable autonomous execution. An automatic-review mode is a good choice when it works. When it is known to stall or fail, a full-access or permission-bypass mode is appropriate for a trusted agent.",
+    "- Escalate a configuration problem you cannot resolve, not routine approvals.",
+  ];
+}
+
 function roleClassSystemSettings(roleClass: RoleClass): string {
   return [
     "<paseo-swarm-system-settings>",
     "These settings come from the Swarm framework. They describe how you take part in the team, and they grant no capabilities beyond the tools you have.",
     roleClassGuidance(roleClass),
     "",
+    ...(roleClass === "worker" ? [] : [...seatProvisioning(), ""]),
     ...swarmModel(),
     "",
     ...workingRules(),
@@ -131,6 +142,13 @@ function roleClassSystemSettings(roleClass: RoleClass): string {
     "When context is rebuilt after compaction, preserve these settings and apply them before project and Task context.",
     "</paseo-swarm-system-settings>",
   ].join("\n");
+}
+
+function preferredSeatModesLine({ pwa, agent }: StandingPromptInput): string[] {
+  const entries = Object.entries(pwa.preferredSeatModes ?? {});
+  if (agent.roleClass === "worker" || entries.length === 0) return [];
+  const modes = entries.map(([provider, mode]) => `${provider}: ${mode}`).join(", ");
+  return [`Project-preferred seat modes (advice for choosing modeId): ${modes}.`];
 }
 
 function identityAndAgreement({ pwa, agent }: StandingPromptInput): string[] {
@@ -141,6 +159,7 @@ function identityAndAgreement({ pwa, agent }: StandingPromptInput): string[] {
     `Project: ${pwa.project}. Role class: ${agent.roleClass}. Role: ${agent.role}.`,
     `Reports to: ${agent.reportsTo ?? "none"}. PWA revision: ${pwa.revision}.`,
     `Project statuses: ${pwa.statuses.length ? pwa.statuses.join(", ") : "none declared"}.`,
+    ...preferredSeatModesLine({ pwa, agent }),
     "",
     "Project working agreement:",
     pwa.projectBody,

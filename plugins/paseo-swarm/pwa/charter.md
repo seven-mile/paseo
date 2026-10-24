@@ -30,9 +30,15 @@ roles/<role-slug>.md
 `PWA.md` contains project-wide guidance. The selected role file contains the
 guidance for one role. The v0 parser requires this frontmatter:
 
-- `PWA.md`: `version: 1`, a non-empty `project`, and optional `statuses`.
+- `PWA.md`: `version: 1`, a non-empty `project`, optional `statuses`, and optional
+  `preferredSeatModes`.
 - `roles/<role-slug>.md`: `version: 1` and `roleClass: planner`, `supervisor`,
   or `worker`; `title` is optional.
+
+`preferredSeatModes` maps a provider to the native mode the project prefers for its seats, for
+example `preferredSeatModes: { codex: auto-review, claude: auto }`. It is advice shown to
+planners and supervisors, who still pass an explicit `modeId` when they create a seat; Swarm never
+applies it by itself. A project may prefer `full-access` where automatic review proves unreliable.
 
 Statuses are project vocabulary. The plugin stores them as strings and does
 not infer transitions or compile a gate engine from them.

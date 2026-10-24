@@ -554,6 +554,11 @@ export function updateSeats(
   context: SeatContext,
 ): Promise<SeatView[]> {
   const patch = input.agentConfig;
+  if (patch.provider && !patch.modeId) {
+    throw new Error(
+      `Setting provider ${patch.provider} also needs modeId in the same request: modes are provider-specific and are never carried over.`,
+    );
+  }
   return editSeats(
     input.seats,
     input.dryRun,

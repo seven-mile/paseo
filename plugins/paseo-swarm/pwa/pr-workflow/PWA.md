@@ -8,6 +8,9 @@ statuses:
   - mr-preparation
   - human-review
   - completed
+preferredSeatModes:
+  codex: auto-review
+  claude: auto
 ---
 
 # PR workflow

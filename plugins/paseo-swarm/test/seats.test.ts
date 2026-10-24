@@ -391,7 +391,7 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
       { seats: ["lead", "lead.dev"], agentConfig: { provider: "fast" } },
       fake.context,
     ),
-    /moves to another provider: lead \(fast\), lead\.dev \(fast\)/,
+    /Setting provider fast also needs modeId in the same request/,
   );
   const preview = await call<Seats>(
     seatUpdateRpc,
@@ -608,7 +608,7 @@ test("a stale agent finishes its turn before it is replaced, and unfinished mail
   // A seat that pins only its provider keeps the model its agent runs.
   await call(
     seatUpdateRpc,
-    { seats: ["lead.dev"], agentConfig: { provider: "slow" } },
+    { seats: ["lead.dev"], agentConfig: { provider: "slow", modeId: "default" } },
     fake.context,
   );
   await call(seatResetRpc, { seats: ["lead.dev"] }, fake.context);
@@ -731,7 +731,7 @@ test("a seat from before seats existed is stamped with what its agent runs", asy
   await seed(fake, [legacy]);
   const result = await call<Seats>(
     seatUpdateRpc,
-    { seats: ["lead"], agentConfig: { provider: "slow" } },
+    { seats: ["lead"], agentConfig: { provider: "slow", modeId: "default" } },
     fake.context,
   );
   assert.equal(result.seats[0].pending, null, "the live agent already runs the wanted provider");
@@ -840,6 +840,7 @@ test("a reserved seat starts its agent on its first message, held while the star
   assert.equal(started.paseoAgentId, fake.created(1));
   assert.equal(started.occupant?.number, 1);
   assert.deepEqual(fake.creations[0].config.provider, "fast/small");
+  assert.equal(fake.creations[0].config.modeId, "build");
   assert.doesNotMatch(String(fake.creations[0].config.systemPrompt), /Orientation:|takeover/i);
   assert.equal(fake.runtime.get(fake.created(1))!.parent, undefined);
   assert.deepEqual(
@@ -847,6 +848,47 @@ test("a reserved seat starts its agent on its first message, held while the star
     [[fake.created(1), true]],
   );
   assert.deepEqual(fake.openedIn, [[fake.created(1), "dev"]]);
+});
+
+test("a started seat keeps its stored mode whatever the PWA prefers", async (t) => {
+  const { call } = setup(t);
+  const fake = fakePaseo();
+  await seed(fake, [supervisor]);
+  // The PWA prefers codex: auto-review; the seat's own "auto" is a literal mode id.
+  const reserved: AgentRecord = {
+    ...worker,
+    paseoAgentId: null,
+    occupant: undefined,
+    agentConfig: { provider: "codex/gpt-6.1-sol", modeId: "auto" },
+  };
+  await store.commit(() => [{ op: "put", collection: "agents", record: reserved }]);
+  await call(
+    sendMessageRpc,
+    { recipientName: "dev", senderName: "lead", actorName: "lead", body: "Start" },
+    fake.context,
+  );
+  assert.equal(fake.creations[0].config.modeId, "auto");
+  for (const modeId of ["default", "auto-review", "full-access"]) {
+    const edited = await call<Seats>(
+      seatUpdateRpc,
+      { seats: ["lead.dev"], agentConfig: { provider: "codex/gpt-6.1-sol", modeId }, dryRun: true },
+      fake.context,
+    );
+    assert.equal(edited.seats[0].agentConfig?.modeId, modeId);
+  }
+  // A mode-only change and an unrelated edit need no provider.
+  const modeOnly = await call<Seats>(
+    seatUpdateRpc,
+    { seats: ["lead.dev"], agentConfig: { modeId: "full-access" }, dryRun: true },
+    fake.context,
+  );
+  assert.equal(modeOnly.seats[0].agentConfig?.modeId, "full-access");
+  const unrelated = await call<Seats>(
+    seatUpdateRpc,
+    { seats: ["lead.dev"], agentConfig: { thinkingOptionId: "high" }, dryRun: true },
+    fake.context,
+  );
+  assert.equal(unrelated.seats[0].agentConfig?.modeId, "auto");
 });
 
 test("a seat with no agent yet takes the edits it could still start from", async (t) => {
@@ -869,13 +911,13 @@ test("a seat with no agent yet takes the edits it could still start from", async
     thinkingOptionId: "high",
   });
   assert.equal(
-    (await edit({ provider: "fast/large" })).seats[0].agentConfig?.provider,
+    (await edit({ provider: "fast/large", modeId: "plan" })).seats[0].agentConfig?.provider,
     "fast/large",
   );
-  // It has no agent to keep a model from, and moving it to another provider needs a mode.
-  await assert.rejects(edit({ provider: "fast" }), /needs provider\/model/);
+  // It has no agent to keep a model from, and a provider always arrives with its mode.
+  await assert.rejects(edit({ provider: "fast", modeId: "plan" }), /needs provider\/model/);
   await assert.rejects(edit({ provider: null }), /needs provider\/model/);
-  await assert.rejects(edit({ provider: "slow/large" }), /moves to another provider: lead\.dev/);
+  await assert.rejects(edit({ provider: "slow/large" }), /also needs modeId in the same request/);
   assert.equal(
     (await edit({ provider: "slow/large", modeId: "default" })).seats[0].agentConfig?.modeId,
     "default",

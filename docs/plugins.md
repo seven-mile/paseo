@@ -117,7 +117,9 @@ log line, left by a crash mid-append, is dropped automatically.
 
 A Swarm seat is an agent record: the roster identity owns the Tasks, Activities, and mailbox, and
 the Paseo agent behind it can change. `swarm_seat_create` only reserves the seat; its first
-mailbox delivery starts the agent. Change what a seat should run, or reset it, with
+mailbox delivery starts the agent. It takes an explicit `provider/model` and provider-native `modeId`,
+which the PWA's optional `preferredSeatModes` only advises; `seat set --provider` must carry
+`--mode` in the same request, and a mode never carries across providers. Change what a seat should run, or reset it, with
 `paseo-swarm swarm seat set|reset` (the `swarm.seat.*` RPCs). The seat's next mailbox delivery,
 after any running turn, brings its agent in line: in place where that keeps the context, otherwise
 with an earlier or a new agent. A replaced agent is archived and its transcript stays readable
