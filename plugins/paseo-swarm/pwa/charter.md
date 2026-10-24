@@ -25,10 +25,15 @@ A PWA is a human-readable directory, normally kept in a Git-managed location:
 ```text
 PWA.md
 roles/<role-slug>.md
+refs/<name>.md
 ```
 
 `PWA.md` contains project-wide guidance. The selected role file contains the
-guidance for one role. The v0 parser requires this frontmatter:
+guidance for one role. A file under `refs/` holds guidance that only one step
+of the workflow needs, such as writing a PR/MR body with its examples. It is
+not part of any system prompt. `PWA.md` or a role file names the ref and the
+step that needs it, and the agent reads it from the PWA directory stated in
+its context when it reaches that step. The v0 parser requires this frontmatter:
 
 - `PWA.md`: `version: 1`, a non-empty `project`, and optional `statuses`.
 - `roles/<role-slug>.md`: `version: 1` and `roleClass: planner`, `supervisor`,

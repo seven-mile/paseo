@@ -30,14 +30,17 @@ evidence. Workers do not push, create or modify remote PRs/MRs, undraft,
 approve, merge, or publish. A supervisor or human handles any authorized
 remote effect.
 
-PR/MR text has a different reader from the Task record: a reviewer who has
-the diff, the linked issue, and the repository, and none of the Task,
-Activities, board links, or agent conversations. In `mr-preparation` the
-supervisor gives a preparer with no earlier turns on the Task a fixed bundle:
-base and head refs, the Task objective and acceptance criteria, reviewer facts,
-the linked issue, and public evidence links. The preparer writes and checks the
-title and body from that bundle and the diff. The supervisor sends any
-corrections back to the preparer and posts the text it returns.
+In `mr-preparation` the supervisor writes the PR/MR title and body, because it
+holds the reasons behind the change. A `pr-checker` with no earlier turns on
+the Task then checks the delivery the way an upstream reviewer would, for at
+most two rounds, before the Task moves to `human-review`.
+
+Some guidance is needed only at one step, so it lives under `refs/` in the PWA
+directory and is read at that step:
+
+- `refs/mr-body-writing.md`: what a PR/MR title and body are for, how to write
+  them, and examples. The supervisor reads it before writing; the `pr-checker`
+  reads it before checking.
 
 Model/provider routing is an operating note configurable by this text. Do not
 assume an environment model default, and do not treat a runtime status as a
