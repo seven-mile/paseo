@@ -129,7 +129,7 @@ describe("Swarm envelope reference fields", () => {
         rows: [
           turnDigestRow({
             agent: "planner.supervisor.worker-2",
-            paseoAgentId: "worker-agent",
+            occupant: 1,
             taskId: "ui-task-9",
             outcome,
             detail: "stopped",

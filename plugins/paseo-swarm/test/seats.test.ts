@@ -11,6 +11,7 @@ import type {
 import contribute from "../index.server";
 import { flushMailbox, forgetRunningTurns, MAX_DELIVERY_ATTEMPTS } from "../server/mailbox";
 import { registerOperations } from "../server/operations";
+import { assemblePrompt, seatOfAgent } from "../server/seats";
 import { store } from "../server/state";
 import { mailboxMessageStatus, type AgentRecord } from "../shared/models";
 import { bootConfig, planSeat, settingsLostOnProviderChange } from "../server/seat-policy";
@@ -77,9 +78,13 @@ function fakePaseo() {
   const timeline: Array<{ seq: number; item: Record<string, unknown> }> = [];
   const applied: Array<{ agentId: string; config: Record<string, unknown> }> = [];
   const failSend = new Set<string>();
+  // The ids Swarm chose for the agents it created, in order.
+  const createdIds: string[] = [];
+  // The seat each agent counted as occupying while its session opened: at creation, or at the
+  // send that resumes an archived agent.
+  const openedIn: Array<[string, string | undefined]> = [];
   let failCreate: string | null = null;
   let failLookup: string | null = null;
-  let created = 0;
   const context = {
     signal: new AbortController().signal,
     paseo: {
@@ -110,6 +115,7 @@ function fakePaseo() {
               if (failSend.has(agentId)) throw new Error(`Cannot resume ${agentId}`);
               sends.push({ agentId, text });
               const agent = runtime.get(agentId);
+              if (agent?.archived) openedIn.push([agentId, seatOfAgent(agentId)?.name]);
               if (agent) agent.archived = false;
             },
             async applyConfig(config: Record<string, unknown>) {
@@ -144,10 +150,11 @@ function fakePaseo() {
         ref(workspaceId: string) {
           return {
             agents: {
-              async create(creation: { config: Record<string, unknown> }) {
+              async create(creation: { agentId: string; config: Record<string, unknown> }) {
                 if (failCreate) throw new Error(failCreate);
-                created += 1;
-                const id = `replacement-${created}`;
+                const id = creation.agentId;
+                createdIds.push(id);
+                openedIn.push([id, seatOfAgent(id)?.name]);
                 creations.push({ workspaceId, config: creation.config });
                 runtime.set(id, {
                   status: "idle",
@@ -174,6 +181,11 @@ function fakePaseo() {
     timeline,
     applied,
     failSend,
+    openedIn,
+    // The Nth agent Swarm created, counted from 1.
+    created(n: number) {
+      return createdIds[n - 1];
+    },
     failCreate(message: string | null) {
       failCreate = message;
     },
@@ -234,10 +246,17 @@ function setup(t: { after(fn: () => void): void }) {
   return { call, turn };
 }
 
+// Seeded seats carry the current standing prompt, so delivery has no refresh to send them.
 async function seed(fake: ReturnType<typeof fakePaseo>, agents: AgentRecord[]) {
-  await store.commit(() => agents.map((record) => ({ op: "put", collection: "agents", record })));
+  await store.commit(() =>
+    agents.map((record) => ({
+      op: "put",
+      collection: "agents",
+      record: { ...record, prompt: assemblePrompt(record, record.projectId).received },
+    })),
+  );
   for (const agent of agents) {
-    fake.runtime.set(agent.paseoAgentId, {
+    fake.runtime.set(agent.paseoAgentId!, {
       status: "idle",
       provider: "slow",
       model: "large",
@@ -372,7 +391,7 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
       { seats: ["lead", "lead.dev"], agentConfig: { provider: "fast" } },
       fake.context,
     ),
-    /needs provider\/model and a mode for it: lead \(fast\), lead\.dev \(fast\)/,
+    /moves to another provider: lead \(fast\), lead\.dev \(fast\)/,
   );
   const preview = await call<Seats>(
     seatUpdateRpc,
@@ -424,7 +443,6 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   await call(
     sendMessageRpc,
     {
-      recipientPaseoAgentId: supervisor.paseoAgentId,
       recipientName: "lead",
       senderName: "human",
       body: "Status?",
@@ -433,7 +451,7 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   );
 
   const replaced = seat(supervisor.id);
-  assert.equal(replaced.paseoAgentId, "replacement-1");
+  assert.equal(replaced.paseoAgentId, fake.created(1));
   assert.equal(planSeat(replaced).kind, "keep");
   // Nothing of the old provider carries over, including the thinking option the old agent ran.
   assert.deepEqual(replaced.occupant?.config, { provider: "fast/small", modeId: "build" });
@@ -453,13 +471,13 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   ]);
   assert.deepEqual(
     fake.sends.map((entry) => entry.agentId),
-    ["replacement-1"],
+    [fake.created(1)],
   );
   assert.match(fake.sends[0].text, /Status\?/);
 
   // The worker's turn ends reach the seat's new agent.
   await turn("agent.turn_ended", worker.paseoAgentId, fake.context);
-  assert.equal(fake.sends.at(-1)?.agentId, "replacement-1");
+  assert.equal(fake.sends.at(-1)?.agentId, fake.created(1));
 });
 
 test("an in-place change keeps the agent and its context", async (t) => {
@@ -470,7 +488,6 @@ test("an in-place change keeps the agent and its context", async (t) => {
     call(
       sendMessageRpc,
       {
-        recipientPaseoAgentId: seat(supervisor.id).paseoAgentId,
         recipientName: "lead",
         senderName: "human",
         body,
@@ -506,7 +523,6 @@ test("moving a seat back brings back its earlier agent, or a new one if that can
     call(
       sendMessageRpc,
       {
-        recipientPaseoAgentId: seat(supervisor.id).paseoAgentId,
         recipientName: "lead",
         senderName: "human",
         body,
@@ -518,7 +534,7 @@ test("moving a seat back brings back its earlier agent, or a new one if that can
 
   await move("fast/small", "build");
   await send("On B");
-  assert.equal(seat(supervisor.id).paseoAgentId, "replacement-1");
+  assert.equal(seat(supervisor.id).paseoAgentId, fake.created(1));
 
   const preview = await call<Seats>(
     seatUpdateRpc,
@@ -533,9 +549,9 @@ test("moving a seat back brings back its earlier agent, or a new one if that can
   assert.equal(back.occupant?.number, 1);
   assert.deepEqual(
     back.pastOccupants?.map((past) => [past.number, past.paseoAgentId]),
-    [[2, "replacement-1"]],
+    [[2, fake.created(1)]],
   );
-  assert.equal(fake.runtime.get("replacement-1")!.archived, true);
+  assert.equal(fake.runtime.get(fake.created(1))!.archived, true);
   assert.equal(fake.runtime.get(supervisor.paseoAgentId)!.archived, false);
   // The return brief goes first; "On B", which occupant 2 never finished, moves over with the mail.
   assert.deepEqual(
@@ -553,11 +569,19 @@ test("moving a seat back brings back its earlier agent, or a new one if that can
 
   // An earlier agent whose session cannot resume is a miss: the seat gets a new agent.
   await move("fast/small", "build");
-  fake.failSend.add("replacement-1");
+  fake.failSend.add(fake.created(1));
   await send("To B again");
-  assert.equal(seat(supervisor.id).paseoAgentId, "replacement-2");
+  assert.equal(seat(supervisor.id).paseoAgentId, fake.created(2));
   assert.equal(seat(supervisor.id).occupant?.number, 3);
   assert.match(fake.sends.at(-1)!.text, /To B again/);
+  // Each agent the seat started or brought back already counted as the seat's while its session
+  // opened, and one that could not resume holds no claim on it afterwards.
+  assert.deepEqual(fake.openedIn, [
+    [fake.created(1), "lead"],
+    [supervisor.paseoAgentId, "lead"],
+    [fake.created(2), "lead"],
+  ]);
+  assert.equal(seatOfAgent(fake.created(1)), undefined);
 });
 
 test("a stale agent finishes its turn before it is replaced, and unfinished mail moves over", async (t) => {
@@ -568,7 +592,6 @@ test("a stale agent finishes its turn before it is replaced, and unfinished mail
     call(
       sendMessageRpc,
       {
-        recipientPaseoAgentId: seat(worker.id).paseoAgentId,
         recipientName: "lead.dev",
         senderName: "lead",
         actorName: "lead",
@@ -600,7 +623,7 @@ test("a stale agent finishes its turn before it is replaced, and unfinished mail
     error: { message: "provider down" },
   });
   const replaced = seat(worker.id);
-  assert.equal(replaced.paseoAgentId, "replacement-1");
+  assert.equal(replaced.paseoAgentId, fake.created(1));
   assert.equal(replaced.occupant?.generation, 1);
   // A new agent boots from the seat alone: the bare provider keeps its model, and the thinking
   // option the seat never named is left to the provider's default.
@@ -612,8 +635,8 @@ test("a stale agent finishes its turn before it is replaced, and unfinished mail
       .filter((entry) => entry.agentId !== supervisor.paseoAgentId)
       .map((entry) => [entry.agentId, /Steered|Held/.exec(entry.text)?.[0]]),
     [
-      ["replacement-1", "Steered"],
-      ["replacement-1", "Held"],
+      [fake.created(1), "Steered"],
+      [fake.created(1), "Held"],
     ],
   );
 });
@@ -637,7 +660,6 @@ test("a cancelled reset and a failed replacement leave the seat's agent in place
   await call(
     sendMessageRpc,
     {
-      recipientPaseoAgentId: supervisor.paseoAgentId,
       recipientName: "lead",
       senderName: "human",
       body: "Hello",
@@ -660,8 +682,8 @@ test("a cancelled reset and a failed replacement leave the seat's agent in place
 
   fake.failCreate(null);
   await flushMailbox(fake.context);
-  assert.equal(seat(supervisor.id).paseoAgentId, "replacement-1");
-  assert.equal(fake.sends[0].agentId, "replacement-1");
+  assert.equal(seat(supervisor.id).paseoAgentId, fake.created(1));
+  assert.equal(fake.sends[0].agentId, fake.created(1));
   assert.equal(mailboxMessageStatus(store.read().messages[0]), "delivered");
 });
 
@@ -675,7 +697,6 @@ test("a seat whose agent status cannot be read is held, and an edit reports the 
   await call(
     sendMessageRpc,
     {
-      recipientPaseoAgentId: supervisor.paseoAgentId,
       recipientName: "lead",
       senderName: "human",
       body: "Hello",
@@ -694,7 +715,7 @@ test("a seat whose agent status cannot be read is held, and an edit reports the 
     { seats: ["lead"], agentConfig: { thinkingOptionId: "high" } },
     fake.context,
   );
-  assert.equal(updated.seats[0].paseoAgentId, "replacement-1");
+  assert.equal(updated.seats[0].paseoAgentId, fake.created(1));
   assert.equal(updated.seats[0].pending, null);
 });
 
@@ -740,7 +761,6 @@ test("earlier transcripts are paged newest first, and readable only within the r
   await call(
     sendMessageRpc,
     {
-      recipientPaseoAgentId: worker.paseoAgentId,
       recipientName: "lead.dev",
       senderName: "lead",
       actorName: "lead",
@@ -748,11 +768,17 @@ test("earlier transcripts are paged newest first, and readable only within the r
     },
     fake.context,
   );
-  assert.equal(seat(worker.id).paseoAgentId, "replacement-1");
+  assert.equal(seat(worker.id).paseoAgentId, fake.created(1));
 
-  const first = await call<History>(
+  const current = await call<History>(
     seatHistoryReadRpc,
     { seat: "lead.dev", actorName: "lead", limit: 2 },
+    fake.context,
+  );
+  assert.equal(current.occupant, 2, "the current occupant by default");
+  const first = await call<History>(
+    seatHistoryReadRpc,
+    { seat: "lead.dev", actorName: "lead", occupant: 1, limit: 2 },
     fake.context,
   );
   assert.equal(first.occupant, 1);
@@ -762,7 +788,7 @@ test("earlier transcripts are paged newest first, and readable only within the r
   );
   const older = await call<History>(
     seatHistoryReadRpc,
-    { seat: "lead.dev", before: first.nextBefore, limit: 2 },
+    { seat: "lead.dev", occupant: 1, before: first.nextBefore, limit: 2 },
     fake.context,
   );
   assert.deepEqual(
@@ -775,6 +801,110 @@ test("earlier transcripts are paged newest first, and readable only within the r
     call(seatHistoryReadRpc, { seat: "lead", actorName: "lead.dev" }, fake.context),
     /cannot read the history of seat lead/,
   );
+});
+
+test("a reserved seat starts its agent on its first message, held while the start fails", async (t) => {
+  const { call } = setup(t);
+  const fake = fakePaseo();
+  await seed(fake, [supervisor]);
+  const reserved: AgentRecord = {
+    ...worker,
+    paseoAgentId: null,
+    occupant: undefined,
+    agentConfig: { provider: "fast/small", modeId: "build" },
+  };
+  await store.commit(() => [{ op: "put", collection: "agents", record: reserved }]);
+  const listed = await call<Seats>(seatListRpc, {}, fake.context);
+  assert.deepEqual(listed.seats.find((entry) => entry.id === worker.id)?.pending, {
+    kind: "start",
+    reason: "no agent yet",
+  });
+  const send = (body: string) =>
+    call(
+      sendMessageRpc,
+      { recipientName: "dev", senderName: "lead", actorName: "lead", body },
+      fake.context,
+    );
+
+  fake.failCreate("provider unavailable");
+  await send("Start");
+  assert.equal(seat(worker.id).paseoAgentId, null);
+  const held = store.read().messages.at(-1)!;
+  assert.equal(mailboxMessageStatus(held), "queued");
+  assert.equal(held.attempts, 0);
+  assert.match(held.lastError ?? "", /provider unavailable/);
+
+  fake.failCreate(null);
+  await flushMailbox(fake.context);
+  const started = seat(worker.id);
+  assert.equal(started.paseoAgentId, fake.created(1));
+  assert.equal(started.occupant?.number, 1);
+  assert.deepEqual(fake.creations[0].config.provider, "fast/small");
+  assert.doesNotMatch(String(fake.creations[0].config.systemPrompt), /Orientation:|takeover/i);
+  assert.equal(fake.runtime.get(fake.created(1))!.parent, undefined);
+  assert.deepEqual(
+    fake.sends.map((entry) => [entry.agentId, entry.text.includes("Start")]),
+    [[fake.created(1), true]],
+  );
+  assert.deepEqual(fake.openedIn, [[fake.created(1), "dev"]]);
+});
+
+test("a seat with no agent yet takes the edits it could still start from", async (t) => {
+  const { call } = setup(t);
+  const fake = fakePaseo();
+  await seed(fake, [supervisor]);
+  const reserved: AgentRecord = {
+    ...worker,
+    paseoAgentId: null,
+    occupant: undefined,
+    agentConfig: { provider: "fast/small" },
+  };
+  await store.commit(() => [{ op: "put", collection: "agents", record: reserved }]);
+  const edit = (agentConfig: Record<string, unknown>) =>
+    call<Seats>(seatUpdateRpc, { seats: ["lead.dev"], agentConfig, dryRun: true }, fake.context);
+
+  // Created without a mode, it needs none for an edit on the same provider.
+  assert.deepEqual((await edit({ thinkingOptionId: "high" })).seats[0].agentConfig, {
+    provider: "fast/small",
+    thinkingOptionId: "high",
+  });
+  assert.equal(
+    (await edit({ provider: "fast/large" })).seats[0].agentConfig?.provider,
+    "fast/large",
+  );
+  // It has no agent to keep a model from, and moving it to another provider needs a mode.
+  await assert.rejects(edit({ provider: "fast" }), /needs provider\/model/);
+  await assert.rejects(edit({ provider: null }), /needs provider\/model/);
+  await assert.rejects(edit({ provider: "slow/large" }), /moves to another provider: lead\.dev/);
+  assert.equal(
+    (await edit({ provider: "slow/large", modeId: "default" })).seats[0].agentConfig?.modeId,
+    "default",
+  );
+});
+
+test("an agent whose standing prompt is out of date gets the current one ahead of its mail", async (t) => {
+  const { call } = setup(t);
+  const fake = fakePaseo();
+  await seed(fake, [supervisor]);
+  await store.commit(() => [
+    {
+      op: "put",
+      collection: "agents",
+      record: {
+        ...seat(supervisor.id),
+        prompt: { revision: "old", pwaRevision: "old", receivedAt: timestamp },
+      },
+    },
+  ]);
+  const send = (body: string) =>
+    call(sendMessageRpc, { recipientName: "lead", senderName: "human", body }, fake.context);
+  await send("First");
+  await send("Second");
+  assert.deepEqual(
+    fake.sends.map((entry) => /paseo-swarm-prompt-refresh|First|Second/.exec(entry.text)?.[0]),
+    ["paseo-swarm-prompt-refresh", "First", "Second"],
+  );
+  assert.notEqual(seat(supervisor.id).prompt?.revision, "old");
 });
 
 test("Activities record which agent in the seat wrote them", async (t) => {

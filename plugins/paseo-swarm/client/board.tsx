@@ -428,7 +428,7 @@ function TaskDetail({
   const openAgent = useCallback(
     (reference: string): void => {
       const agent = findAgent(board, reference);
-      if (agent && navigation) {
+      if (agent?.paseoAgentId && navigation) {
         navigation.openAgent({ agentId: agent.paseoAgentId, serverId: hostId });
         return;
       }
@@ -680,7 +680,10 @@ export function BoardSurface({ theme, layout, navigation, host }: PluginSurfaceP
   }
 
   const statuses = [...new Set(board.tasks.map((task) => task.status))];
-  const activeAgents = board.agents.filter((agent) => !agent.retired);
+  const activeAgents = board.agents.filter(
+    (agent): agent is typeof agent & { paseoAgentId: string } =>
+      !agent.retired && agent.paseoAgentId !== null,
+  );
   const attentionCount = board.activities.filter(
     (activity) => activity.actorKind === "human",
   ).length;

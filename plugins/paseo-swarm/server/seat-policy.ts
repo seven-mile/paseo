@@ -5,11 +5,14 @@ import { currentOccupant, providerFamily } from "../shared/models";
 // planSeat says how to bring the agent in line: keep it, change it in place (same session, same
 // context), bring back an earlier agent that already runs the spec, or start a new agent.
 //
+// A reserved seat has no agent yet, so its first mail starts one.
+//
 // The rules are conservative. A change they do not know to be safe in place gets a new agent, so
 // a gap here costs context, never a broken session. Teaching them more only turns replacements
 // into in-place changes. Every rule about what a seat change costs belongs in this file.
 export type SeatPlan =
   | { kind: "keep" }
+  | { kind: "start"; reason: string }
   | { kind: "adjust"; reason: string; apply: AgentConfigApply }
   | { kind: "revive"; reason: string; occupant: PastOccupant }
   | { kind: "replace"; reason: string };
@@ -109,9 +112,10 @@ function changes(wanted: AgentConfig, running: AgentConfig): Change[] {
 export function planSeat(
   seat: Pick<
     AgentRecord,
-    "agentConfig" | "generation" | "occupant" | "pastOccupants" | "createdAt"
+    "paseoAgentId" | "agentConfig" | "generation" | "occupant" | "pastOccupants" | "createdAt"
   >,
 ): SeatPlan {
+  if (seat.paseoAgentId === null) return { kind: "start", reason: "no agent yet" };
   const occupant = currentOccupant(seat);
   const generation = seat.generation ?? 0;
   // A reset asks for a clean context, so no agent from before it is reused.

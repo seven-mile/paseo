@@ -29,6 +29,11 @@ export function resolveActivityRefs(body: string, state: SwarmState): ActivityRe
           (candidate) => agentQualifiedName(candidate) === target.qualifiedName,
         );
         if (!agent) throw new Error(`Unknown agent reference: ${target.qualifiedName}`);
+        if (agent.paseoAgentId === null) {
+          throw new Error(
+            `Seat ${target.qualifiedName} has no agent to link to until its first message`,
+          );
+        }
         refs.push({
           kind: "agent",
           uri,

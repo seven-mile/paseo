@@ -136,7 +136,6 @@ function setup(t: { after(fn: () => void): void }) {
   const send = (context: PluginHandlerContext, body: string) =>
     handlers.get(sendMessageRpc.name)!(
       sendMessageRpc.input.parse({
-        recipientPaseoAgentId: worker.paseoAgentId,
         recipientName: "manager.worker",
         senderName: "manager",
         actorName: "manager",
@@ -152,7 +151,6 @@ function setup(t: { after(fn: () => void): void }) {
   const sendTo = (context: PluginHandlerContext, recipient: AgentRecord, body: string) =>
     handlers.get(sendMessageRpc.name)!(
       sendMessageRpc.input.parse({
-        recipientPaseoAgentId: recipient.paseoAgentId,
         recipientName: recipient.qualifiedName,
         senderName: "outsider",
         body,
@@ -439,7 +437,7 @@ test("child turn ends coalesce into one digest per manager wake", async (t) => {
   assert.match(digest.text, /^<paseo-swarm-turn-digest manager="manager" turns="2">\n/);
   assert.ok(
     digest.text.includes(
-      `<turn agent="manager.reviewer" outcome="completed" files="2" truncated="true" paseo-agent-id="reviewer-agent">\n${"x".repeat(1500)}\n</turn>`,
+      `<turn agent="manager.reviewer" outcome="completed" files="2" truncated="true" occupant="1">\n${"x".repeat(1500)}\n</turn>`,
     ),
   );
   assert.ok(

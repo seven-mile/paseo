@@ -17,7 +17,8 @@ interface AgentConfig {
 
 interface Seat {
   id: string;
-  paseoAgentId: string;
+  // Null until the seat's first message starts its agent.
+  paseoAgentId: string | null;
   name: string;
   qualifiedName?: string;
   roleClass: string;
@@ -30,7 +31,7 @@ interface Seat {
 interface SeatRow {
   seat: string;
   role: string;
-  occupant: number;
+  occupant: number | string;
   agent: string;
   wants: string;
   applied: string;
@@ -58,8 +59,8 @@ function toSeatRow(seat: Seat): SeatRow {
   return {
     seat: seat.qualifiedName ?? seat.name,
     role: `${seat.roleClass}/${seat.role}`,
-    occupant: seat.occupant?.number ?? 1,
-    agent: seat.paseoAgentId,
+    occupant: seat.paseoAgentId === null ? "-" : (seat.occupant?.number ?? 1),
+    agent: seat.paseoAgentId ?? "-",
     wants: configSummary(seat.agentConfig),
     applied: configSummary(seat.occupant?.config),
     pending: seat.pending ? `${seat.pending.kind}: ${seat.pending.reason}` : "-",
@@ -295,9 +296,9 @@ export function createSwarmCommand(): Command {
   addJsonAndDaemonHostOptions(
     seat
       .command("history")
-      .description("Read an earlier agent's transcript in a seat, newest first")
+      .description("Read the transcript of a seat's agent, newest first")
       .argument("<seat>", "Seat qualified name or roster ID")
-      .option("--occupant <n>", "Earlier occupant number (default: the one before the current)")
+      .option("--occupant <n>", "Occupant number (default: the current one)")
       .option("--before <cursor>", "Cursor from a previous page")
       .option("--limit <n>", "Entries per page (default: 40)"),
   ).action(withOutput(runHistory));

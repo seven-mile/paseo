@@ -16,6 +16,7 @@ import {
   listSeats,
   readSeatHistory,
   resetSeats,
+  seatOfAgent,
   seatView,
   updateSeats,
   type SeatView,
@@ -29,7 +30,7 @@ import {
   appendActivityRpc,
   appendHumanActivityRpc,
   boardReadRpc,
-  createAgentRpc,
+  createSeatRpc,
   createTaskRpc,
   registerAgentRpc,
   sendMessageRpc,
@@ -87,12 +88,8 @@ async function projectScope(
   if (input.projectId && input.parent?.projectId && input.projectId !== input.parent.projectId) {
     throw new Error("Choose a manager and workspace in the selected project.");
   }
-  const parentSnapshot = input.parent
-    ? (await context.paseo.agents.ref(input.parent.paseoAgentId).refresh())?.agent
-    : null;
-  if (input.parent && !parentSnapshot)
-    throw new Error(`Unknown manager agent: ${input.parent.paseoAgentId}`);
-  const workspaceIds = new Set([parentSnapshot?.workspaceId, input.workspaceId]);
+  const parentWorkspaceId = input.parent ? await seatWorkspaceId(input.parent, context) : null;
+  const workspaceIds = new Set([parentWorkspaceId, input.workspaceId]);
   for (const workspaceId of workspaceIds) {
     if (!workspaceId) continue;
     const workspace = await context.paseo.workspaces.ref(workspaceId).refresh();
@@ -104,6 +101,18 @@ async function projectScope(
   }
   if (projectId) await projectRoot(projectId, context);
   return projectId;
+}
+
+// Where a seat works: its own record, or for seats made before workspaces were recorded, where its
+// agent runs.
+async function seatWorkspaceId(
+  seat: AgentRecord,
+  context: PluginHandlerContext,
+): Promise<string | null> {
+  if (seat.workspaceId || seat.paseoAgentId === null) return seat.workspaceId;
+  const snapshot = (await context.paseo.agents.ref(seat.paseoAgentId).refresh())?.agent;
+  if (!snapshot) throw new Error(`Unknown manager agent: ${seat.paseoAgentId}`);
+  return snapshot.workspaceId ?? null;
 }
 
 function findAgent(reference: string, scopeName?: string): AgentRecord {
@@ -127,17 +136,16 @@ function findAgent(reference: string, scopeName?: string): AgentRecord {
   throw new Error(`Unknown active agent: ${reference}`);
 }
 
-function findAgentByPaseoId(paseoAgentId: string): AgentRecord | undefined {
-  return store
-    .read()
-    .agents.find((candidate) => candidate.paseoAgentId === paseoAgentId && !candidate.retired);
-}
-
 function resolveTaskWorkers(workerNames: string[], manager: AgentRecord): string[] {
   return workerNames.map((workerName) => {
     const worker = findAgent(workerName, agentQualifiedName(manager));
     if (worker.roleClass !== "worker") {
       throw new Error(`Task worker must have role class worker: ${worker.name}`);
+    }
+    if (worker.reportsTo !== agentQualifiedName(manager)) {
+      throw new Error(
+        `Task worker ${agentQualifiedName(worker)} does not report to ${agentQualifiedName(manager)}`,
+      );
     }
     return agentQualifiedName(worker);
   });
@@ -172,20 +180,9 @@ function ensureUniqueName(
   }
 }
 
-function parentForCreate(input: { actorPaseoAgentId: string | null; reportsTo: string | null }): {
-  actor: AgentRecord | null;
-  parent: AgentRecord | null;
-} {
-  const actor = input.actorPaseoAgentId
-    ? (findAgentByPaseoId(input.actorPaseoAgentId) ?? null)
-    : null;
-  if (input.actorPaseoAgentId && !actor) {
-    throw new Error(`Unknown active Paseo actor: ${input.actorPaseoAgentId}`);
-  }
-  const parent = input.reportsTo
-    ? findAgent(input.reportsTo, actor ? agentQualifiedName(actor) : undefined)
-    : actor;
-  return { actor, parent };
+// The manager of a new seat: reportsTo when given, else the seat that asks.
+function parentFor(actor: AgentRecord | null, reportsTo: string | null): AgentRecord | null {
+  return reportsTo ? findAgent(reportsTo, actor ? agentQualifiedName(actor) : undefined) : actor;
 }
 
 function assertCanCreateAgent(
@@ -204,7 +201,7 @@ function assertCanCreateAgent(
   if (actor.roleClass === "planner" && parent && parent.roleClass !== "planner") {
     throw new Error(`Agent ${actor.name} cannot create under ${agentQualifiedName(parent)}`);
   }
-  if (actor.roleClass === "supervisor" && parent?.paseoAgentId !== actor.paseoAgentId) {
+  if (actor.roleClass === "supervisor" && parent?.id !== actor.id) {
     throw new Error(
       `Agent ${actor.name} cannot create under ${parent ? agentQualifiedName(parent) : "no parent"}`,
     );
@@ -223,18 +220,21 @@ async function assertCreationWorkspace(
   context: PluginHandlerContext,
 ): Promise<void> {
   if (actor) {
-    if (!workspaceId) throw new Error(`Caller has no workspace: ${actor.paseoAgentId}`);
-    const allowedIds = new Set(
-      store
-        .read()
-        .agents.filter(
-          (candidate) =>
-            !candidate.retired &&
-            (candidate.paseoAgentId === actor.paseoAgentId ||
-              candidate.reportsTo === agentQualifiedName(actor)),
-        )
-        .map((candidate) => candidate.paseoAgentId),
+    if (!workspaceId) throw new Error(`Caller has no workspace: ${agentQualifiedName(actor)}`);
+    const seats = store.read().agents.filter((candidate) => !candidate.retired);
+    const allowed = seats.filter(
+      (candidate) => candidate.id === actor.id || candidate.reportsTo === agentQualifiedName(actor),
     );
+    // Reserved seats have no agent in the workspace yet, but they will.
+    const outsiderSeat = seats.find(
+      (seat) => seat.workspaceId === workspaceId && !allowed.includes(seat),
+    );
+    if (outsiderSeat) {
+      throw new Error(
+        `Workspace ${workspaceId} holds seat ${agentQualifiedName(outsiderSeat)} outside ${agentQualifiedName(actor)}'s direct roster`,
+      );
+    }
+    const allowedIds = new Set(allowed.map((candidate) => candidate.paseoAgentId));
     const outsider = (await availableAgents(context)).find(
       (agent) => agent.workspaceId === workspaceId && !allowedIds.has(agent.id),
     );
@@ -246,8 +246,8 @@ async function assertCreationWorkspace(
   }
 }
 
-// What a created agent runs, which is also what its seat wants until someone edits the seat.
-function seatConfig(input: RpcInput<typeof createAgentRpc>): AgentConfig {
+// What a new seat wants its agent to run; its first mail starts an agent with it.
+function seatConfig(input: RpcInput<typeof createSeatRpc>): AgentConfig {
   return {
     provider: input.provider,
     ...(input.modeId ? { modeId: input.modeId } : {}),
@@ -256,40 +256,34 @@ function seatConfig(input: RpcInput<typeof createAgentRpc>): AgentConfig {
   };
 }
 
-function creationConfig(
-  input: RpcInput<typeof createAgentRpc>,
-  systemPrompt: string,
-  parent: AgentRecord | null,
-) {
-  return {
-    config: { ...seatConfig(input), provider: input.provider, systemPrompt },
-    title: input.title ?? input.name,
-    ...(parent ? { parent: parent.paseoAgentId } : {}),
-  };
-}
-
-async function creationPlacement(
-  input: RpcInput<typeof createAgentRpc>,
+// The workspace a new seat works in. A planner's supervisor gets a workspace of its own; a worker
+// shares its supervisor's unless told otherwise. A seat with nowhere to go gets a new workspace at
+// the project root.
+async function creationWorkspace(
+  input: RpcInput<typeof createSeatRpc>,
   actor: AgentRecord | null,
   parent: AgentRecord | null,
   projectId: string | undefined,
   context: PluginHandlerContext,
-) {
-  const workspaceAgentId = (actor ?? parent)?.paseoAgentId ?? null;
-  const workspaceAgent = workspaceAgentId ? context.paseo.agents.ref(workspaceAgentId) : null;
-  const parentSnapshot = workspaceAgent ? (await workspaceAgent.refresh())?.agent : null;
+): Promise<string> {
+  const owner = actor ?? parent;
+  const ownerWorkspaceId = owner ? await seatWorkspaceId(owner, context) : null;
   if (
     input.roleClass === "supervisor" &&
-    (actor ?? parent)?.roleClass === "planner" &&
-    (!input.workspaceId || input.workspaceId === parentSnapshot?.workspaceId)
+    owner?.roleClass === "planner" &&
+    (!input.workspaceId || input.workspaceId === ownerWorkspaceId)
   ) {
     throw new Error("Prepare a separate workspace for the supervisor and pass its workspaceId.");
   }
-  const workspaceId = input.workspaceId ?? parentSnapshot?.workspaceId ?? null;
+  const workspaceId = input.workspaceId ?? ownerWorkspaceId;
   await assertCreationWorkspace(actor, workspaceId, context);
-  const cwd =
-    parentSnapshot?.cwd ?? (projectId ? await projectRoot(projectId, context) : process.cwd());
-  return { workspaceId, cwd };
+  if (workspaceId) return workspaceId;
+  const path = projectId ? await projectRoot(projectId, context) : process.cwd();
+  const workspace = await context.paseo.workspaces.create({
+    source: { kind: "directory", path, ...(projectId ? { projectId } : {}) },
+    title: input.name,
+  });
+  return workspace.id;
 }
 
 export function registerOperations(server: Pick<PluginServerContext, "handle">): void {
@@ -298,7 +292,10 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     const saved = store.read();
     const board = {
       version: saved.version,
-      agents: saved.agents.filter((agent) => availableIds.has(agent.paseoAgentId)).map(seatView),
+      // Reserved seats have no agent yet; they appear once their first mail starts one.
+      agents: saved.agents
+        .filter((agent) => agent.paseoAgentId !== null && availableIds.has(agent.paseoAgentId))
+        .map(seatView),
       tasks: saved.tasks,
       activities: saved.activities,
     };
@@ -389,97 +386,59 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   });
 
   server.handle(
-    createAgentRpc,
-    async (input: RpcInput<typeof createAgentRpc>, context: PluginHandlerContext) => {
-      const { actor, parent } = parentForCreate(input);
+    createSeatRpc,
+    async (input: RpcInput<typeof createSeatRpc>, context: PluginHandlerContext) => {
+      const actor = input.actorName ? findAgent(input.actorName) : null;
+      const parent = parentFor(actor, input.reportsTo);
       assertCanCreateAgent(actor, parent, input.roleClass);
+      if (!input.provider.includes("/")) {
+        throw new Error(`A new seat needs provider/model, not ${input.provider}`);
+      }
       const projectId = await projectScope({ ...input, parent }, context);
       const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
       ensureUniqueName(input.name, qualifiedName, parent);
-      const { workspaceId, cwd } = await creationPlacement(
-        input,
-        actor,
-        parent,
+      const reportsTo = parent ? agentQualifiedName(parent) : null;
+      // Fails now, rather than at the first mail, when the role is not in the PWA.
+      assemblePrompt(
+        {
+          name: input.name,
+          qualifiedName,
+          roleClass: input.roleClass,
+          role: input.role,
+          reportsTo,
+        },
         projectId,
-        context,
       );
-      const provisional = {
-        name: input.name,
-        qualifiedName,
-        roleClass: input.roleClass,
-        role: input.role,
-        reportsTo: parent ? agentQualifiedName(parent) : null,
-      } as const;
-      const assembled = assemblePrompt(provisional, projectId);
-      const paseoAgentId = randomUUID();
+      const workspaceId = await creationWorkspace(input, actor, parent, projectId, context);
       const timestamp = now();
-      const reservedAgent: AgentRecord = {
+      const seat: AgentRecord = {
         id: id("agent"),
-        paseoAgentId,
+        paseoAgentId: null,
         name: input.name,
         qualifiedName,
         aliases: input.aliases,
         roleClass: input.roleClass,
         role: input.role,
-        reportsTo: parent ? agentQualifiedName(parent) : null,
+        reportsTo,
         workspaceId,
         projectId,
-        prompt: assembled.received,
         agentConfig: seatConfig(input),
         generation: 0,
-        occupant: { number: 1, config: seatConfig(input), generation: 0, boundAt: timestamp },
         retired: false,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
-      const createConfig = creationConfig(
-        input,
-        initialPrompt({ pwa: assembled.pwa, agent: provisional, brief: input.brief }),
-        parent,
-      );
-      await store.commit(() => [{ op: "put", collection: "agents", record: reservedAgent }]);
-      let created;
-      try {
-        let workspace = workspaceId ? context.paseo.workspaces.ref(workspaceId) : null;
-        if (!workspace && (input.roleClass === "supervisor" || (!parent && projectId))) {
-          workspace = await context.paseo.workspaces.create({
-            source: { kind: "directory", path: cwd, ...(projectId ? { projectId } : {}) },
-            title: input.title ?? input.name,
-          });
-        }
-        created = workspace
-          ? await workspace.agents.create({
-              ...createConfig,
-              agentId: paseoAgentId,
-            })
-          : await context.paseo.agents.create({
-              ...createConfig,
-              agentId: paseoAgentId,
-              cwd,
-            });
-      } catch (error) {
-        await store.commit(() => [{ op: "delete", collection: "agents", key: reservedAgent.id }]);
-        throw error;
-      }
-      const snapshot = (await created.refresh())?.agent;
-      let result = reservedAgent;
-      await store.commit((state) => {
-        const current = state.agents.find((agent) => agent.paseoAgentId === paseoAgentId);
-        if (!current) throw new Error(`Reserved Swarm agent disappeared: ${paseoAgentId}`);
-        result = {
-          ...current,
-          workspaceId: snapshot?.workspaceId ?? current.workspaceId,
-          updatedAt: now(),
-        };
-        return [{ op: "put", collection: "agents", record: result }];
-      });
-      await created.send(input.brief);
-      return result;
+      await store.commit(() => [{ op: "put", collection: "agents", record: seat }]);
+      return seatView(seat);
     },
   );
 
   server.handle(prepareAgentRpc, async (input: RpcInput<typeof prepareAgentRpc>, context) => {
-    const { actor, parent } = parentForCreate(input);
+    const actor = input.actorPaseoAgentId ? (seatOfAgent(input.actorPaseoAgentId) ?? null) : null;
+    if (input.actorPaseoAgentId && !actor) {
+      throw new Error(`Unknown active Paseo actor: ${input.actorPaseoAgentId}`);
+    }
+    const parent = parentFor(actor, input.reportsTo);
     assertCanCreateAgent(actor, parent, input.roleClass);
     const projectId = await projectScope({ ...input, parent }, context);
     const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
@@ -493,9 +452,10 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     } as const;
     const assembled = assemblePrompt(provisional, projectId);
     const timestamp = now();
+    const paseoAgentId = randomUUID();
     const agent: AgentRecord = {
       id: id("agent"),
-      paseoAgentId: randomUUID(),
+      paseoAgentId,
       name: input.name,
       qualifiedName,
       aliases: input.aliases,
@@ -515,7 +475,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       brief: input.brief,
     });
     await store.commit(() => [{ op: "put", collection: "agents", record: agent }]);
-    return { agentId: agent.paseoAgentId, systemPrompt, agent };
+    return { agentId: paseoAgentId, systemPrompt, agent };
   });
 
   server.handle(
@@ -552,7 +512,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   );
 
   server.handle(refreshPromptRpc, async ({ paseoAgentId }) => {
-    const current = findAgentByPaseoId(paseoAgentId);
+    const current = seatOfAgent(paseoAgentId);
     if (!current) throw new Error(`Unknown active Swarm agent: ${paseoAgentId}`);
     const assembled = assemblePrompt(current, current.projectId);
     const previousRevision = current.prompt?.revision ?? null;
@@ -718,16 +678,8 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
           `Message sender ${input.senderName} does not match actor ${input.actorName}`,
         );
       }
-      const recipient = findAgentByPaseoId(input.recipientPaseoAgentId);
-      if (!recipient) {
-        throw new Error(`Unknown active Swarm recipient: ${input.recipientPaseoAgentId}`);
-      }
+      const recipient = findAgent(input.recipientName);
       const recipientReference = agentQualifiedName(recipient);
-      if (recipientReference !== input.recipientName) {
-        throw new Error(
-          `Message recipient ${input.recipientName} does not match agent ${input.recipientPaseoAgentId}`,
-        );
-      }
       if (input.taskId) {
         const task = findTask(input.taskId);
         const actor = input.actorName ? findAgent(input.actorName) : null;
@@ -746,7 +698,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       const message = await sendThroughMailbox(
         {
           recipientAgentId: recipient.id,
-          recipientName: input.recipientName,
+          recipientName: recipientReference,
           senderName: input.senderName,
           taskId: input.taskId,
           kind: "team",
@@ -754,7 +706,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
             messagePrompt({
               id: messageId,
               sender: input.senderName,
-              recipient: input.recipientName,
+              recipient: recipientReference,
               message: input.body,
               taskId: input.taskId,
             }),
@@ -767,7 +719,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         messageId: message.id,
         status,
         receipt: messageReceipt({
-          recipient: input.recipientName,
+          recipient: recipientReference,
           messageId: message.id,
           status,
           error: message.lastError,
@@ -868,7 +820,7 @@ export async function notifyManager(
       render: () =>
         turnDigestRow({
           agent: agentQualifiedName(managed),
-          paseoAgentId: managed.paseoAgentId,
+          occupant: currentOccupant(managed).number,
           taskId,
           ...turn,
         }),

@@ -12,7 +12,7 @@ import type {
 import contribute from "../index.server";
 import { forgetRunningTurns } from "../server/mailbox";
 import { notifyManager, registerOperations } from "../server/operations";
-import { pendingPlan } from "../server/seat-policy";
+import { seatView } from "../server/seats";
 import {
   getConfigPath,
   getEventLogPath,
@@ -24,7 +24,7 @@ import {
 import { emptyState, type AgentRecord, type SwarmState } from "../shared/models";
 import {
   boardReadRpc,
-  createAgentRpc,
+  createSeatRpc,
   sendMessageRpc,
   appendHumanActivityRpc,
   createTaskRpc,
@@ -62,7 +62,7 @@ function readDisk(): string {
 function boardOf({ messages: _messages, ...board }: Readonly<SwarmState>) {
   return {
     ...board,
-    agents: board.agents.map((agent) => ({ ...agent, pending: pendingPlan(agent) })),
+    agents: board.agents.filter((agent) => agent.paseoAgentId !== null).map(seatView),
   };
 }
 
@@ -98,7 +98,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
   registerOperations(server);
   const sends: Array<{ agentId: string; text: string; options: unknown }> = [];
   const workspaceCreations: unknown[] = [];
-  const agentCreations: Array<{ workspaceId: string; parent: string }> = [];
+  const agentCreations: Array<{ workspaceId: string; parent: string | undefined }> = [];
   const runtimeWorkspaces = new Map([[planner.paseoAgentId, "planner-workspace"]]);
   const prompts: string[] = [];
   const workspace = (workspaceId: string) => ({
@@ -108,18 +108,20 @@ test("supervisors require independent placement, workers keep caller defaults, a
     agents: {
       async create(creation: {
         agentId: string;
-        parent: string;
+        parent?: string;
         config: { systemPrompt: string };
       }) {
-        runtimeWorkspaces.set(creation.agentId, workspaceId);
+        const { agentId } = creation;
+        runtimeWorkspaces.set(agentId, workspaceId);
         prompts.push(creation.config.systemPrompt);
         agentCreations.push({ workspaceId, parent: creation.parent });
         return {
+          id: agentId,
           async refresh() {
             return { agent: { workspaceId } };
           },
           async send(text: string, options: unknown) {
-            sends.push({ agentId: creation.agentId, text, options });
+            sends.push({ agentId, text, options });
           },
         };
       },
@@ -176,15 +178,15 @@ test("supervisors require independent placement, workers keep caller defaults, a
     await assert.rejects(
       async () =>
         invoke(
-          createAgentRpc.name,
-          createAgentRpc.input.parse({
+          createSeatRpc.name,
+          createSeatRpc.input.parse({
             name: "missing-role",
             roleClass: "supervisor",
             role: "missing",
             workspaceId: "supervisor-workspace",
-            actorPaseoAgentId: planner.paseoAgentId,
+            actorName: "planner",
+            provider: "codex/gpt-6.1-sol",
             reportsTo: "planner",
-            brief: "Survey",
           }),
         ),
       /Missing role/,
@@ -192,15 +194,15 @@ test("supervisors require independent placement, workers keep caller defaults, a
     await assert.rejects(
       async () =>
         invoke(
-          createAgentRpc.name,
-          createAgentRpc.input.parse({
+          createSeatRpc.name,
+          createSeatRpc.input.parse({
             name: "wrong-project",
             roleClass: "supervisor",
             role: "supervisor",
             projectId: "other",
-            actorPaseoAgentId: planner.paseoAgentId,
+            actorName: "planner",
+            provider: "codex/gpt-6.1-sol",
             reportsTo: "planner",
-            brief: "Survey",
           }),
         ),
       /selected project/,
@@ -213,12 +215,13 @@ test("supervisors require independent placement, workers keep caller defaults, a
       await assert.rejects(
         async () =>
           invoke(
-            createAgentRpc.name,
-            createAgentRpc.input.parse({
+            createSeatRpc.name,
+            createSeatRpc.input.parse({
               name: "invalid-placement",
               roleClass: "supervisor",
               role: "supervisor",
-              actorPaseoAgentId: planner.paseoAgentId,
+              actorName: "planner",
+              provider: "codex/gpt-6.1-sol",
               reportsTo: "planner",
               workspaceId,
             }),
@@ -229,48 +232,81 @@ test("supervisors require independent placement, workers keep caller defaults, a
       assert.equal(agentCreations.length, 0);
     }
     const supervisor = (await invoke(
-      createAgentRpc.name,
-      createAgentRpc.input.parse({
+      createSeatRpc.name,
+      createSeatRpc.input.parse({
         name: "supervisor",
         roleClass: "supervisor",
         role: "supervisor",
-        actorPaseoAgentId: planner.paseoAgentId,
+        actorName: "planner",
         reportsTo: "planner",
         provider: "codex/gpt-6.1-sol",
         modeId: "auto-review",
-        brief: "Survey",
         workspaceId: "supervisor-workspace",
       }),
     )) as AgentRecord;
     assert.equal(supervisor.workspaceId, "supervisor-workspace");
     assert.deepEqual(workspaceCreations, []);
     const worker = (await invoke(
-      createAgentRpc.name,
-      createAgentRpc.input.parse({
+      createSeatRpc.name,
+      createSeatRpc.input.parse({
         name: "scout",
         roleClass: "worker",
         role: "researcher",
-        actorPaseoAgentId: supervisor.paseoAgentId,
+        actorName: "planner.supervisor",
         reportsTo: "planner.supervisor",
         provider: "codex/gpt-6.1-sol",
-        brief: "Survey",
       }),
     )) as AgentRecord;
     assert.equal(worker.workspaceId, supervisor.workspaceId);
     assert.equal(workspaceCreations.length, 0);
+    // A new seat has no agent until its first message starts one, with no Paseo parent.
+    assert.equal(supervisor.paseoAgentId, null);
+    assert.deepEqual(supervisor.pending, { kind: "start", reason: "no agent yet" });
+    assert.deepEqual(agentCreations, []);
+    await invoke(
+      sendMessageRpc.name,
+      sendMessageRpc.input.parse({
+        senderName: "planner",
+        actorName: "planner",
+        recipientName: "supervisor",
+        body: "Lead the survey",
+      }),
+    );
+    await invoke(
+      sendMessageRpc.name,
+      sendMessageRpc.input.parse({
+        senderName: "planner.supervisor",
+        actorName: "planner.supervisor",
+        recipientName: "scout",
+        body: "Survey the codebase",
+      }),
+    );
     assert.deepEqual(agentCreations, [
-      { workspaceId: "supervisor-workspace", parent: planner.paseoAgentId },
-      { workspaceId: "supervisor-workspace", parent: supervisor.paseoAgentId },
+      { workspaceId: "supervisor-workspace", parent: undefined },
+      { workspaceId: "supervisor-workspace", parent: undefined },
     ]);
+    const seatOf = (seat: AgentRecord) =>
+      store.read().agents.find((agent) => agent.id === seat.id)!;
+    const supervisorAgent = seatOf(supervisor).paseoAgentId!;
+    const workerAgent = seatOf(worker).paseoAgentId!;
+    assert.equal(seatOf(supervisor).occupant?.number, 1);
+    assert.deepEqual(
+      sends.map(({ agentId, text }) => ({ agentId, first: text.includes("Lead the survey") })),
+      [
+        { agentId: supervisorAgent, first: true },
+        { agentId: workerAgent, first: false },
+      ],
+    );
     assert.equal(supervisor.projectId, "project");
     assert.equal(worker.projectId, "project");
     const createChild = (actor: AgentRecord, name: string, workspaceId?: string) =>
       invoke(
-        createAgentRpc.name,
-        createAgentRpc.input.parse({
+        createSeatRpc.name,
+        createSeatRpc.input.parse({
           name,
-          actorPaseoAgentId: actor.paseoAgentId,
+          actorName: actor.qualifiedName,
           reportsTo: actor.qualifiedName,
+          provider: "codex/gpt-6.1-sol",
           roleClass: actor.roleClass === "planner" ? "supervisor" : "worker",
           role: actor.roleClass === "planner" ? "supervisor" : "researcher",
           workspaceId,
@@ -431,7 +467,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
     assert.equal(stored()?.workspaceId, "supervisor-workspace");
     const initialSends = sends.length;
     await notifyManager(
-      { id: worker.paseoAgentId },
+      { id: workerAgent },
       { outcome: "completed", detail: null, report: "Findings", filesChanged: 0 },
       context,
     );
@@ -440,7 +476,6 @@ test("supervisors require independent placement, workers keep caller defaults, a
       sendMessageRpc.input.parse({
         senderName: "planner.supervisor.scout",
         recipientName: "planner.supervisor",
-        recipientPaseoAgentId: supervisor.paseoAgentId,
         body: "Survey findings",
       }),
     );
@@ -450,25 +485,11 @@ test("supervisors require independent placement, workers keep caller defaults, a
           sendMessageRpc.name,
           sendMessageRpc.input.parse({
             senderName: "planner.supervisor.scout",
-            recipientName: "planner.supervisor",
-            recipientPaseoAgentId: worker.paseoAgentId,
-            body: "Mismatched recipient",
-          }),
-        ),
-      /does not match agent/,
-    );
-    await assert.rejects(
-      async () =>
-        invoke(
-          sendMessageRpc.name,
-          sendMessageRpc.input.parse({
-            senderName: "planner.supervisor.scout",
             recipientName: "missing",
-            recipientPaseoAgentId: "missing-agent",
             body: "Unknown recipient",
           }),
         ),
-      /Unknown active Swarm recipient/,
+      /Unknown active agent: missing/,
     );
     await seed({
       ...emptyState(),
@@ -495,7 +516,6 @@ test("supervisors require independent placement, workers keep caller defaults, a
             senderName: "planner.supervisor.scout",
             actorName: "planner.supervisor.scout",
             recipientName: "planner.supervisor.scout",
-            recipientPaseoAgentId: worker.paseoAgentId,
             taskId: "survey",
             body: "Not a task member",
           }),
@@ -511,9 +531,10 @@ test("supervisors require independent placement, workers keep caller defaults, a
         body: "Continue",
       }),
     );
-    assert.equal(sends.length, initialSends + 3);
-    for (const delivery of sends.slice(initialSends)) {
-      assert.equal(delivery.agentId, supervisor.paseoAgentId);
+    const toSupervisor = sends.slice(initialSends);
+    assert.equal(toSupervisor.length, 3);
+    for (const delivery of toSupervisor) {
+      assert.equal(delivery.agentId, supervisorAgent);
       assert.deepEqual(delivery.options, {
         activeTurnBehavior: "steer",
         messageId: (delivery.options as { messageId: string }).messageId,
@@ -868,7 +889,7 @@ test("roster reads filter native availability without releasing historical names
       },
     },
   } as unknown as PluginHandlerContext;
-  const invoke = (rpc: typeof boardReadRpc | typeof createAgentRpc, input: unknown) =>
+  const invoke = (rpc: typeof boardReadRpc | typeof createSeatRpc, input: unknown) =>
     handlers.get(rpc.name)!(rpc.input.parse(input) as never, context);
   try {
     await seed({ ...emptyState(), agents: [agent] });
@@ -877,10 +898,11 @@ test("roster reads filter native availability without releasing historical names
     assert.deepEqual(cursors, [undefined, "next"]);
     await assert.rejects(
       async () =>
-        invoke(createAgentRpc, {
+        invoke(createSeatRpc, {
           name: "historical",
           roleClass: "planner",
           role: "planner",
+          provider: "codex/gpt-6.1-sol",
         }),
       /already exists/,
     );
@@ -934,15 +956,15 @@ test("manager can replace a Task worker roster with creation-time validation", a
     createdAt: timestamp,
     updatedAt: timestamp,
   };
-  const worker = (name: string, id: string): AgentRecord => ({
+  const worker = (name: string, id: string, reportsTo = "planner.manager"): AgentRecord => ({
     id,
     paseoAgentId: `${id}-agent`,
     name,
-    qualifiedName: `planner.manager.${name}`,
+    qualifiedName: `${reportsTo}.${name}`,
     aliases: [],
     roleClass: "worker",
     role: "researcher",
-    reportsTo: "planner.manager",
+    reportsTo,
     workspaceId: null,
     retired: false,
     createdAt: timestamp,
@@ -964,6 +986,7 @@ test("manager can replace a Task worker roster with creation-time validation", a
         manager,
         worker("first", "first-record"),
         worker("second", "second-record"),
+        worker("audit", "audit-record", "planner.other"),
       ],
     });
     const created = createTaskRpc.output.parse(
@@ -1004,6 +1027,19 @@ test("manager can replace a Task worker roster with creation-time validation", a
           }),
         ),
       /Task worker must have role class worker/,
+    );
+    // A worker on another team, though its local name is unique, is not this manager's to assign.
+    await assert.rejects(
+      async () =>
+        invoke(
+          updateTaskRpc.name,
+          updateTaskRpc.input.parse({
+            taskId: "roster",
+            actorName: "manager",
+            workerNames: ["audit"],
+          }),
+        ),
+      /Task worker planner\.other\.audit does not report to planner\.manager/,
     );
     assert.deepEqual(store.read().tasks[0].workerNames, ["planner.manager.second"]);
   } finally {

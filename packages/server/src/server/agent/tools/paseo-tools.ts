@@ -1,6 +1,21 @@
 import { stat } from "node:fs/promises";
 import { z } from "zod";
-import { pageSwarmItems, summarizeSwarmBoard, type SwarmBoard } from "./swarm-context.js";
+import {
+  activityPreviews,
+  pageSwarmItems,
+  resolveSeat,
+  resolveSeatAccess,
+  seatDetail,
+  seatName,
+  seatSummary,
+  seatToolAllowed,
+  visibleSeats,
+  visibleTasks,
+  type SeatAccess,
+  type SeatState,
+  type SwarmBoard,
+  type SwarmSeat,
+} from "./swarm-context.js";
 import { ensureValidJson } from "../../json-utils.js";
 import type { Logger } from "pino";
 
@@ -606,17 +621,7 @@ export async function createPaseoToolCatalog(
   };
 
   const tools = new Map<string, PaseoToolDefinition>();
-  let swarmRole: "planner" | "supervisor" | "worker" | null = null;
-  const swarmBypassTools = new Set(["create_agent", "send_agent_prompt"]);
-  const workerManagementTools = new Set([
-    "create_workspace",
-    "archive_workspace",
-    "archive_agent",
-    "kill_agent",
-    "update_agent",
-    "cancel_agent",
-    "create_schedule",
-  ]);
+  let seatAccess: SeatAccess = null;
   const registerTool = (
     name: string,
     config: PaseoToolConfig,
@@ -626,10 +631,7 @@ export async function createPaseoToolCatalog(
     if (!isPaseoToolEnabled(options.paseoToolPolicy, name)) {
       return;
     }
-    if (swarmRole && swarmBypassTools.has(name)) {
-      return;
-    }
-    if (swarmRole === "worker" && workerManagementTools.has(name)) {
+    if (!seatToolAllowed(seatAccess, name)) {
       return;
     }
     tools.set(name, {
@@ -643,38 +645,36 @@ export async function createPaseoToolCatalog(
   };
   const invokePlugin = options.invokePlugin;
   if (invokePlugin) {
-    swarmRole = await (async (): Promise<"planner" | "supervisor" | "worker" | null> => {
-      if (!callerAgentId) return null;
-      try {
-        const board = (await invokePlugin("paseo-swarm", "swarm.board.read", {})) as {
-          agents?: Array<{
-            paseoAgentId: string;
-            roleClass: "planner" | "supervisor" | "worker";
-            retired: boolean;
-          }>;
-        };
-        return (
-          board.agents?.find(
-            (candidate) => candidate.paseoAgentId === callerAgentId && !candidate.retired,
-          )?.roleClass ?? null
-        );
-      } catch {
-        return null;
-      }
-    })();
+    const readSeats = async (filter: { paseoAgentId?: string } = {}) =>
+      ((await invokePlugin("paseo-swarm", "swarm.seat.list", filter)) as { seats: SwarmSeat[] })
+        .seats;
+    // The plugin decides which seat an agent sits in, including an agent it is still starting or
+    // bringing back, whose session opens before the seat binds it.
+    const seatOfCaller = async () =>
+      callerAgentId ? (await readSeats({ paseoAgentId: callerAgentId })).at(0) : undefined;
+    seatAccess = await resolveSeatAccess({
+      seatOfCaller,
+      callerLabels: async () =>
+        callerAgentId ? (await agentStorage.get(callerAgentId))?.labels : undefined,
+      onLookupError: (error, access) =>
+        childLogger.warn(
+          { err: error, callerAgentId, seatAccess: access },
+          "Could not look up the caller's Swarm seat",
+        ),
+    });
+    const swarmRole = seatAccess === "unresolved" ? null : seatAccess;
     if (!swarmRole) {
-      // An unregistered Paseo agent must not receive Swarm tools, even if it can
+      // An agent outside any seat must not receive Swarm tools, even if it can
       // reach the native catalog.
     } else {
+      // The caller's seat, every seat, and the seat's name, read fresh for each call.
       const readSwarm = async () => {
-        if (!callerAgentId) throw new Error("Swarm tools require an agent caller");
-        const board = (await invokePlugin("paseo-swarm", "swarm.board.read", {})) as SwarmBoard;
-        const actor = board.agents?.find(
-          (candidate) => candidate.paseoAgentId === callerAgentId && !candidate.retired,
-        );
-        if (!actor) throw new Error(`Unknown active Swarm agent: ${callerAgentId}`);
-        return { board, actor, name: actor.qualifiedName ?? actor.name };
+        const [seats, actor] = await Promise.all([readSeats(), seatOfCaller()]);
+        if (!actor) throw new Error(`This agent no longer occupies a Swarm seat: ${callerAgentId}`);
+        return { seats, actor, name: seatName(actor) };
       };
+      const readBoard = async () =>
+        (await invokePlugin("paseo-swarm", "swarm.board.read", {})) as SwarmBoard;
       const invokeSwarm = async (method: string, input: Record<string, unknown>) => {
         const { name } = await readSwarm();
         return invokePlugin("paseo-swarm", method, { ...input, actorName: name });
@@ -683,80 +683,195 @@ export async function createPaseoToolCatalog(
         content: [{ type: "text", text: JSON.stringify(value) }],
         structuredContent: value,
       });
+      // What Paseo reports for the seat's agent: its live lifecycle, or the last status it stored
+      // for an agent that is not loaded.
+      const seatState = async (seat: SwarmSeat): Promise<SeatState> => {
+        if (seat.paseoAgentId === null) return "empty";
+        const live = agentManager.getAgent(seat.paseoAgentId);
+        if (live) return live.lifecycle;
+        const record = await agentStorage.get(seat.paseoAgentId);
+        if (!record) return "unknown";
+        return buildStoredAgentPayload(
+          record,
+          new Set(providerSnapshotManager.listRegisteredProviderIds()),
+        ).status;
+      };
+      const pageInput = {
+        limit: z.number().int().min(1).max(50).default(20),
+        cursor: z.string().optional().describe("nextCursor from the previous page"),
+      };
       registerTool(
-        "swarm_board_read",
+        "swarm_seat_read",
         {
           description:
-            "Read the current caller's paginated Swarm team and workset view, including descendant-managed Tasks and Tasks naming you as a worker. This is a team/workset summary, not a full project roster. Agent rows and Task rows are summaries; follow nextAgentCursor/nextTaskCursor to read more, then use swarm_task_read for a complete Task brief/metadata and Activity previews or swarm_activity_read for one full Activity. Activity bodies are not included here.",
-          inputSchema: {
-            limit: z.number().int().min(1).max(50).default(20),
-            taskCursor: z.string().optional(),
-            agentCursor: z.string().optional(),
-            status: z.string().optional(),
-          },
+            "Read one Swarm seat: its role, manager, direct reports, workspace, state (empty until its first message starts an agent, then that agent's Paseo status, such as idle or running), occupant number, and any pending change to its agent. Omit seat to read your own.",
+          inputSchema: { seat: z.string().optional() },
         },
         async (input) => {
-          const { board, actor } = await readSwarm();
-          return swarmResult(summarizeSwarmBoard(board, actor, input));
+          const { seats, actor } = await readSwarm();
+          const seat = input.seat ? resolveSeat(seats, input.seat, actor) : actor;
+          return swarmResult(seatDetail(seat, seats, await seatState(seat)));
+        },
+      );
+      registerTool(
+        "swarm_seat_list",
+        {
+          description:
+            "List the Swarm seats you can see, in roster order: every seat for a planner; for anyone else, your own seat, your manager, and your team.",
+          inputSchema: pageInput,
+        },
+        async (input) => {
+          const { seats, actor } = await readSwarm();
+          const page = pageSwarmItems(
+            visibleSeats(seats, actor),
+            seatName,
+            input.cursor,
+            input.limit,
+          );
+          return swarmResult({
+            ...page,
+            items: await Promise.all(
+              page.items.map(async (seat) => seatSummary(seat, await seatState(seat))),
+            ),
+          });
+        },
+      );
+      registerTool(
+        "swarm_task_list",
+        {
+          description:
+            "List the Swarm Tasks you manage, that seats under you manage, or that name you as a worker, most recently updated first. Filter by status to narrow it.",
+          inputSchema: { ...pageInput, status: z.string().optional() },
+        },
+        async (input) => {
+          const [{ name }, board] = await Promise.all([readSwarm(), readBoard()]);
+          return swarmResult(
+            pageSwarmItems(
+              visibleTasks(board, name, input.status),
+              (task) => task.id,
+              input.cursor,
+              input.limit,
+            ),
+          );
         },
       );
       registerTool(
         "swarm_task_read",
         {
           description:
-            "Read one real Task's complete brief and metadata plus a newest-first page of Activity previews. Get taskId from swarm_board_read or another verified Swarm reference. Use nextActivityCursor for older previews and swarm_activity_read for one full Activity. Read this before updating a Task: supplied update fields replace existing fields, including the complete brief and workerNames list. This read does not change Task state.",
-          inputSchema: {
-            taskId: z.string(),
-            activityLimit: z.number().int().min(1).max(20).default(5),
-            activityCursor: z.string().optional(),
-          },
+            "Read one Swarm Task: its complete brief, status, manager, workers, data, and activityCount. Task updates replace the fields they supply, so read the Task before updating it.",
+          inputSchema: { taskId: z.string() },
         },
         async (input) => {
-          const { board } = await readSwarm();
+          const board = await readBoard();
           const task = board.tasks?.find((candidate) => candidate.id === input.taskId);
           if (!task) throw new Error(`Unknown Task: ${input.taskId}`);
-          const activities = (board.activities ?? [])
-            .filter((activity) => activity.taskId === task.id)
-            .toReversed()
-            .map((activity) => ({
-              id: activity.id,
-              actorName: activity.actorName,
-              actorKind: activity.actorKind,
-              kind: activity.kind,
-              replyTo: activity.replyTo,
-              responseProfile: activity.responseProfile,
-              createdAt: activity.createdAt,
-              bodyPreview: activity.body.slice(0, 600),
-              bodyTruncated: activity.body.length > 600,
-            }));
-          const page = pageSwarmItems(activities, input.activityCursor, input.activityLimit);
-          return swarmResult({
-            task,
-            activities: page.items,
-            totalActivities: page.total,
-            nextActivityCursor: page.nextCursor,
-          });
+          const activityCount = (board.activities ?? []).filter(
+            (activity) => activity.taskId === task.id,
+          ).length;
+          return swarmResult({ ...task, activityCount });
+        },
+      );
+      registerTool(
+        "swarm_activity_list",
+        {
+          description:
+            "List a Swarm Task's Activities, newest first, with each body cut to a preview. swarm_activity_read has an Activity in full.",
+          inputSchema: { ...pageInput, taskId: z.string() },
+        },
+        async (input) => {
+          const board = await readBoard();
+          if (!board.tasks?.some((task) => task.id === input.taskId)) {
+            throw new Error(`Unknown Task: ${input.taskId}`);
+          }
+          return swarmResult(
+            pageSwarmItems(
+              activityPreviews(board, input.taskId),
+              (activity) => activity.id,
+              input.cursor,
+              input.limit,
+            ),
+          );
         },
       );
       registerTool(
         "swarm_activity_read",
         {
           description:
-            "Read one selected Activity, including its full body, decision metadata, canonical references, and data. Use the Activity id from swarm_task_read; do not fetch entire histories to find one report. Interpret responseProfile: decision expresses a control decision, steering provides direction/context, and discussion requests explanation/exploration. A choice Activity has data.action.type=choice with a prompt, options, and optional responseProfiles; an unanswered choice appears in the board's unanswered count until a human Activity replies with replyTo, often carrying data.selectedOption. A human reply clears the unanswered count but does not by itself mean approval or Task completion. A profile label alone grants no permission; honor the actual human instruction.",
+            "Read one Swarm Activity in full: body, kind, author, references, and data. A choice Activity has data.action.type=choice; a human reply points back to it with replyTo and may carry data.selectedOption. responseProfile says what kind of reply a choice accepts, or what a reply is: decision, steering, or discussion.",
           inputSchema: { activityId: z.string() },
         },
         async (input) => {
-          const { board } = await readSwarm();
+          const board = await readBoard();
           const activity = board.activities?.find((candidate) => candidate.id === input.activityId);
           if (!activity) throw new Error(`Unknown Activity: ${input.activityId}`);
-          return swarmResult({ activity });
+          return swarmResult(activity);
+        },
+      );
+      registerTool(
+        "swarm_transcript_list",
+        {
+          description:
+            "List what a Swarm seat's agent said and did, newest first: its messages, reasoning, tool calls, and errors. Omit seat for your own, and occupant for the seat's current agent; pass an occupant number to read an earlier agent of the seat. Planners read any seat; others read their own and the seats under them.",
+          inputSchema: {
+            ...pageInput,
+            seat: z.string().optional(),
+            occupant: z.number().int().positive().optional(),
+          },
+        },
+        async (input) => {
+          const { seats, actor, name } = await readSwarm();
+          const seat = input.seat ? seatName(resolveSeat(seats, input.seat, actor)) : name;
+          const history = (await invokePlugin("paseo-swarm", "swarm.seat.history.read", {
+            seat,
+            actorName: name,
+            limit: input.limit,
+            ...(input.occupant ? { occupant: input.occupant } : {}),
+            ...(input.cursor ? { before: input.cursor } : {}),
+          })) as {
+            seat: string;
+            occupant: number;
+            entries: Array<{ type: string; text: string }>;
+            nextBefore: string | null;
+          };
+          return swarmResult({
+            seat: history.seat,
+            occupant: history.occupant,
+            items: history.entries,
+            total: null,
+            nextCursor: history.nextBefore,
+          });
+        },
+      );
+      registerTool(
+        "swarm_message_send",
+        {
+          description:
+            "Send a message to a Swarm seat: your manager, one of your reports, or a seat on your team by its local name, or any seat by its qualified name. A seat with no agent yet starts one, and the message is its first instruction. For a Task-scoped message, pass taskId; the recipient must be that Task's manager or one of its workers. The receipt says whether the message was delivered, queued for automatic retry, or failed.",
+          inputSchema: {
+            to: z.string().min(1),
+            body: z.string().min(1),
+            taskId: z.string().nullable().optional(),
+          },
+        },
+        async (input) => {
+          const { seats, actor, name } = await readSwarm();
+          return swarmResult(
+            await invokePlugin("paseo-swarm", "swarm.message.send", {
+              recipientName: seatName(resolveSeat(seats, input.to, actor)),
+              senderName: name,
+              actorName: name,
+              taskId: input.taskId ?? null,
+              body: input.body,
+            }),
+          );
         },
       );
       registerTool(
         "swarm_prompt_refresh",
         {
           description:
-            "Re-read your standing Swarm context, assembled the same way as at your session start but from the current PWA and Swarm plugin: role-class settings, identity, project working agreement, and role guidance. Call it when a human or your manager says the PWA, Swarm plugin, or daemon changed, or when your Swarm settings are missing after compaction. The result says whether the context changed since you last received it; when it changed, it supersedes the corresponding session-start context. Your orientation brief, Task assignments, and team messages stay in effect. Refreshing does not change Tasks, Activities, or your roster identity.",
+            "Re-read your standing Swarm context, assembled from the current PWA and Swarm plugin: role-class settings, identity, project working agreement, and role guidance. The result says whether it changed since you last received it; a changed context supersedes the earlier one. Your Tasks and messages stay in effect.",
         },
         async () => {
           if (!callerAgentId) throw new Error("Swarm prompt refresh requires an agent caller");
@@ -778,78 +893,54 @@ export async function createPaseoToolCatalog(
           };
         },
       );
-      registerTool(
-        "swarm_seat_history_read",
-        {
-          description:
-            "Read a newest-first page of an earlier agent's transcript in a Swarm seat. A seat is a roster identity; when its agent is replaced, the earlier agent is archived and its transcript stays readable here. Omit seat to read your own seat, and omit occupant for the agent just before the current one. Planners can read any seat; others can read their own seat and the seats under them. Use it after a takeover to recover context the board does not hold, and treat what it says as claims to verify against the board, Tasks, and Activities. Follow nextBefore for older entries.",
-          inputSchema: {
-            seat: z.string().optional(),
-            occupant: z.number().int().positive().optional(),
-            before: z.string().optional(),
-            limit: z.number().int().min(1).max(100).default(30),
-          },
-        },
-        async (input) => {
-          const { name } = await readSwarm();
-          return swarmResult(
-            await invokePlugin("paseo-swarm", "swarm.seat.history.read", {
-              ...input,
-              seat: input.seat ?? name,
-              actorName: name,
-            }),
-          );
-        },
-      );
       if (swarmRole !== "worker") {
+        const childRoleClass = swarmRole === "planner" ? "supervisor" : "worker";
         registerTool(
-          "swarm_roles_read",
+          "swarm_role_list",
           {
-            description:
-              "List the current project PWA roles available for your next-level members. Pass the returned role field (the role slug), not the display title or an invented role, to swarm_agent_create.",
+            description: `List the project PWA roles for the ${childRoleClass} seats you can create. swarm_seat_create takes the role field.`,
+            inputSchema: pageInput,
           },
-          async () => {
+          async (input) => {
             const { actor } = await readSwarm();
             const projectId =
               actor.projectId ??
               (actor.workspaceId
                 ? (await options.workspaceRegistry?.get(actor.workspaceId))?.projectId
                 : undefined);
-            const roles = await invokePlugin("paseo-swarm", "swarm.pwa_roles.read", {
-              roleClass: swarmRole === "planner" ? "supervisor" : "worker",
+            const roles = (await invokePlugin("paseo-swarm", "swarm.pwa_roles.read", {
+              roleClass: childRoleClass,
               ...(projectId ? { projectId } : {}),
-            });
-            return swarmResult({ roles });
+            })) as Array<{ role: string }>;
+            return swarmResult(
+              pageSwarmItems(roles, (role) => role.role, input.cursor, input.limit),
+            );
           },
         );
         registerTool(
-          "swarm_agent_create",
+          "swarm_seat_create",
           {
-            description:
-              "Create a real named Paseo agent registered as a Swarm child, using the role slug from swarm_roles_read. Planners create supervisors; supervisors create workers. The caller becomes the child's manager and createdBy identity. The role supplies standing duties; brief supplies the assignment and expected evidence. The framework creates the Paseo agent, system context, roster identity, reporting relationship, workspace placement, and first brief; do not reconstruct them manually. Reuse an existing suitable member instead of creating one for every instruction. settings configures the child before its first turn. Discover provider/model/mode options and follow project policy. A mode named auto does not establish automatic approvals. Planners must first prepare a workspace separate from their own for the supervisor and pass its workspaceId; their own workspace and omitted placement are rejected. Supervisors may omit workspaceId to keep workers in their workspace, or pass a prepared isolated workspace ID. Every current agent in that workspace must be the caller or a direct roster member; descendants and other teams are not allowed. Placement never changes the reporting relationship.",
+            description: `Create a ${childRoleClass} seat that reports to you, with a role from swarm_role_list. The seat has no agent until its first message, which starts one with the provider and settings given here. provider is provider/model. A planner gives each supervisor a workspace of its own: prepare one and pass its workspaceId. A supervisor's workers share its workspace unless given another, and every agent in that workspace must be the supervisor or one of its reports.`,
             inputSchema: {
               name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
               role: z.string().min(1),
               provider: z.string().min(1),
               settings: CreateAgentSettingsInputSchema.optional(),
-              brief: z.string().min(1),
-              title: z.string().optional(),
               workspaceId: z.string().min(1).optional(),
             },
           },
           async (input) => {
-            if (!callerAgentId) throw new Error("Swarm agent creation requires an agent caller");
             const { name } = await readSwarm();
-            const roleClass = swarmRole === "planner" ? "supervisor" : "worker";
             return swarmResult(
-              await invokePlugin("paseo-swarm", "swarm.agent.create", {
-                ...input,
+              await invokePlugin("paseo-swarm", "swarm.seat.create", {
+                name: input.name,
+                role: input.role,
+                provider: input.provider,
                 modeId: input.settings?.modeId,
                 thinkingOptionId: input.settings?.thinkingOptionId,
                 featureValues: input.settings?.features,
-                roleClass,
-                actorPaseoAgentId: callerAgentId,
-                reportsTo: name,
+                roleClass: childRoleClass,
+                actorName: name,
                 workspaceId: input.workspaceId ?? null,
               }),
             );
@@ -859,7 +950,7 @@ export async function createPaseoToolCatalog(
           "swarm_task_create",
           {
             description:
-              "Create a Swarm Task managed by the calling planner or supervisor. The caller becomes both managerName and createdBy; a supervisor can create only its own Task, while a planner may create a project Task. Every workerNames entry must resolve to a worker under that manager. Create the Task through its actual manager and keep workerNames aligned before sending Task-scoped messages.",
+              "Create a Swarm Task that you manage. A planner may also create a project Task. Every workerNames entry must be a worker seat that reports to the Task's manager.",
             inputSchema: {
               id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
               title: z.string().min(1),
@@ -886,7 +977,7 @@ export async function createPaseoToolCatalog(
           "swarm_task_update",
           {
             description:
-              "Update a Swarm Task that the caller is authorized to manage. Read it first with swarm_task_read: every supplied field replaces that field, so preserve the complete existing brief unless intentionally changing the objective. The brief is the stable objective, scope, constraints, and acceptance criteria; Activities hold incremental evidence, decisions, blockers, and progress. Supplied workerNames replaces the entire participant list; it is not an append operation or separate execution state. Set the actual qualified workerNames before Task-scoped messaging. Do not copy the same progress into both the brief and an Activity.",
+              "Update a Swarm Task you manage. Each field you supply replaces that field: brief replaces the whole brief and workerNames the whole worker list, so read the Task first with swarm_task_read.",
             inputSchema: {
               taskId: z.string(),
               status: z.string().min(1).optional(),
@@ -902,7 +993,7 @@ export async function createPaseoToolCatalog(
           "swarm_activity_append",
           {
             description:
-              'Append an incremental Activity to a Swarm Task. Planners and the Task manager may append; workers cannot. Use Activities for evidence, decisions, blockers, stage changes, and deliverables, not as a duplicate Task brief or transcript log. For a human choice, set data.action to { type: "choice", prompt, options: [{ id, label, description? }], responseProfiles? }; the board counts that choice as unanswered until a human reply uses replyTo. Use canonical Markdown links with verified targets: paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, and paseo-swarm://file/<workspace-id>/<relative-path>. Obtain real names, IDs, and workspace ID from the board/runtime; verify the file exists, use a path relative to that workspace, and URL-encode each path segment. Do not use guessed targets, absolute paths, or raw Paseo agent IDs.',
+              'Append an Activity to a Swarm Task you manage, or to any Task if you are a planner: evidence, a decision, a blocker, a stage change, or a deliverable. To ask the human to choose, set data.action to { type: "choice", prompt, options: [{ id, label, description? }], responseProfiles? }. Link Swarm things as paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, or paseo-swarm://file/<workspace-id>/<relative-path>.',
             inputSchema: {
               taskId: z.string(),
               kind: z.string().min(1),
@@ -923,51 +1014,6 @@ export async function createPaseoToolCatalog(
             ),
         );
       }
-      registerTool(
-        "swarm_message_send",
-        {
-          description:
-            "Send an actionable agent-to-agent message to a named active Swarm agent. Use local relationship names within your team and roster-qualified names outside it; do not guess. For Task-scoped messages, the recipient must be that Task's manager or a registered worker and the sender must be authorized; include taskId. Omit taskId for other coordination. The message is stored in the recipient's durable Swarm mailbox; delivery steers an active turn without canceling its tool call. The receipt reports status delivered, queued, or failed. A queued message is retried automatically, so do not resend it. Delivery does not prove the recipient read, understood, acted, or completed the Task. A timeout is not proof of agent failure.",
-          inputSchema: {
-            recipient: z.string().min(1),
-            body: z.string().min(1),
-            taskId: z.string().nullable().optional(),
-          },
-        },
-        async (input) => {
-          const { board, actor, name } = await readSwarm();
-          const agents = board.agents?.filter((candidate) => !candidate.retired) ?? [];
-          const scopes = [name, actor.reportsTo].filter(Boolean);
-          const recipient =
-            scopes
-              .map((scope) =>
-                agents.find(
-                  (candidate) =>
-                    (candidate.qualifiedName ?? candidate.name) === `${scope}.${input.recipient}`,
-                ),
-              )
-              .find(Boolean) ??
-            agents.find(
-              (candidate) =>
-                (candidate.qualifiedName ?? candidate.name) === actor.reportsTo &&
-                candidate.name === input.recipient,
-            ) ??
-            agents.find(
-              (candidate) => (candidate.qualifiedName ?? candidate.name) === input.recipient,
-            );
-          if (!recipient) throw new Error(`Unknown active Swarm agent: ${input.recipient}`);
-          return swarmResult(
-            await invokePlugin("paseo-swarm", "swarm.message.send", {
-              recipientPaseoAgentId: recipient.paseoAgentId,
-              recipientName: recipient.qualifiedName ?? recipient.name,
-              senderName: name,
-              actorName: name,
-              taskId: input.taskId ?? null,
-              body: input.body,
-            }),
-          );
-        },
-      );
     }
   }
   const toCatalog = (): PaseoToolCatalog => ({

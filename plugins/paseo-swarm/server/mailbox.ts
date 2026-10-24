@@ -4,7 +4,7 @@ import type { MailboxMessage, MailboxStatus, MessageKind, SwarmState } from "../
 import { agentQualifiedName, mailboxMessageStatus } from "../shared/models";
 import { turnDigest } from "./prompts";
 import { planSeat } from "./seat-policy";
-import { occupantRunning, reconcileSeat } from "./seats";
+import { occupantRunning, reconcileSeat, refreshStalePrompt } from "./seats";
 import { store, type SwarmChange } from "./state";
 
 // Send failures before a message stops being retried.
@@ -128,12 +128,16 @@ async function deliver(delivery: Delivery, context: MailboxContext): Promise<Mai
       failedAt: new Date().toISOString(),
     }));
   }
-  const wasRunning = runningAgents.has(recipient.paseoAgentId);
+  const paseoAgentId = recipient.paseoAgentId;
+  // syncSeat starts a reserved seat's agent before its mail goes out; a seat it could not start
+  // keeps its mail queued.
+  if (paseoAgentId === null) return "queued";
+  const wasRunning = runningAgents.has(paseoAgentId);
   // Marked before the send so a turn end that races the send's reply still clears it.
-  runningAgents.add(recipient.paseoAgentId);
+  runningAgents.add(paseoAgentId);
   try {
     // messageId makes the daemon deduplicate a retry of a send that already landed.
-    await context.paseo.agents.ref(recipient.paseoAgentId).send(delivery.prompt, {
+    await context.paseo.agents.ref(paseoAgentId).send(delivery.prompt, {
       messageId: delivery.messageId,
       activeTurnBehavior: "steer",
     });
@@ -142,7 +146,7 @@ async function deliver(delivery: Delivery, context: MailboxContext): Promise<Mai
       attempts: message.attempts + 1,
       lastError: null,
       deliveredAt,
-      deliveredToPaseoAgentId: recipient.paseoAgentId,
+      deliveredToPaseoAgentId: paseoAgentId,
     }));
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -154,11 +158,11 @@ async function deliver(delivery: Delivery, context: MailboxContext): Promise<Mai
         attempts: message.attempts + 1,
         lastError: "Delivery outcome unknown after an interrupted send; not resent.",
         deliveredAt,
-        deliveredToPaseoAgentId: recipient.paseoAgentId,
+        deliveredToPaseoAgentId: paseoAgentId,
       }));
     }
     // The send started no turn, so the agent is as busy as it was before.
-    if (!wasRunning) runningAgents.delete(recipient.paseoAgentId);
+    if (!wasRunning) runningAgents.delete(paseoAgentId);
     const failedAt = new Date().toISOString();
     return settle(delivery.messages, (message) => ({
       attempts: message.attempts + 1,
@@ -198,7 +202,7 @@ async function nextDelivery(queue: MailboxMessage[]): Promise<Delivery | null> {
   const recipient = store.read().agents.find((agent) => agent.id === head.recipientAgentId);
   const held =
     !followedByMessage &&
-    recipient !== undefined &&
+    recipient?.paseoAgentId != null &&
     runningAgents.has(recipient.paseoAgentId) &&
     Date.now() - Date.parse(head.createdAt) < DIGEST_HOLD_LIMIT_MS;
   if (held) return null;
@@ -223,16 +227,21 @@ function queuedFor(recipientAgentId: string): MailboxMessage[] {
 }
 
 // Mail is what wakes a seat, so this is where a seat's agent is brought in line with the seat:
-// changed in place, swapped for an earlier or a new agent, never woken while it does not fit.
-// A running agent finishes its turn first. Returns the queue to deliver, or null to hold it.
-// Replacement puts the rows the old agent never finished back in the queue, ahead of the rest.
+// started, changed in place, swapped for an earlier or a new agent, never woken while it does not
+// fit, and given the current standing prompt if its own is older. A running agent finishes its
+// turn before it is changed. Returns the queue to deliver, or null to hold it. Replacement puts
+// the rows the old agent never finished back in the queue, ahead of the rest.
 async function syncSeat(
   queue: MailboxMessage[],
   context: MailboxContext,
 ): Promise<MailboxMessage[] | null> {
   const [head] = queue;
   const seat = store.read().agents.find((agent) => agent.id === head.recipientAgentId);
-  if (!seat || seat.retired || planSeat(seat).kind === "keep") return queue;
+  if (!seat || seat.retired) return queue;
+  if (planSeat(seat).kind === "keep") {
+    await refreshStalePrompt(seat, context);
+    return queue;
+  }
   // The mail stays queued without spending send attempts, so a provider that is down for a
   // while does not fail the message; every later flush tries again.
   const hold = async (problem: string, error: unknown) => {
@@ -253,6 +262,8 @@ async function syncSeat(
   } catch (error) {
     return hold("Could not update the agent in", error);
   }
+  const synced = store.read().agents.find((agent) => agent.id === seat.id);
+  if (synced) await refreshStalePrompt(synced, context);
   return queuedFor(seat.id);
 }
 

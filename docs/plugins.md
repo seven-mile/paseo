@@ -115,25 +115,26 @@ unreadable snapshot, log line, or legacy file stops every Swarm read and write w
 naming the file until it is repaired or moved aside; nothing is written meanwhile. Only an unterminated final
 log line, left by a crash mid-append, is dropped automatically.
 
-A Swarm agent's system prompt is fixed when its session starts. After you change the PWA or
-reload Swarm, tell the agent to call `swarm_prompt_refresh`: it re-assembles the standing prompt
-(everything except the orientation brief) from the current PWA and plugin and returns it as a
-tool result. The agent record keeps the revision it last received (`prompt.revision`, a hash of
-that standing prompt), so you can tell which agents run an old one. The refresh lives in the
-conversation only; the stored session config keeps the creation-time prompt.
-
-A Swarm agent record is a seat: the roster identity owns the Tasks, Activities, and mailbox, and
-the Paseo agent behind it can change. Change what a seat should run, or reset it, with
-`paseo-swarm swarm seat set|reset` (the `swarm.seat.*` RPCs). The seat's next Swarm mailbox
-delivery, after any running turn, brings its agent in line: in place where that keeps the
-context, otherwise with an earlier or a new agent. A replaced agent is archived and its transcript
-stays readable through `swarm seat history` and the `swarm_seat_history_read` tool.
-Typing into the old agent's own conversation skips the mailbox and does not replace it. See
+A Swarm seat is an agent record: the roster identity owns the Tasks, Activities, and mailbox, and
+the Paseo agent behind it can change. `swarm_seat_create` only reserves the seat; its first
+mailbox delivery starts the agent. Change what a seat should run, or reset it, with
+`paseo-swarm swarm seat set|reset` (the `swarm.seat.*` RPCs). The seat's next mailbox delivery,
+after any running turn, brings its agent in line: in place where that keeps the context, otherwise
+with an earlier or a new agent. A replaced agent is archived and its transcript stays readable
+through `swarm seat history` and the `swarm_transcript_list` tool. Typing into the agent's own
+conversation skips the mailbox and does not reconcile the seat. See
 [design/06-seats.md](../design/06-seats.md).
 
+A Swarm agent's system prompt is fixed when its session starts. The seat keeps the revision its
+agent last received (`prompt.revision`, a hash of the standing prompt), and each mailbox delivery
+compares it with the prompt assembled from the current PWA and plugin. When they differ, the
+current standing prompt goes out ahead of the mail. An agent can also ask for it with
+`swarm_prompt_refresh`. The refresh lives in the conversation only; the stored session config
+keeps the creation-time prompt.
+
 Swarm planners must prepare a separate workspace and pass its `workspaceId` when creating
-a supervisor. This keeps supervisor execution out of the planner's workspace; omitting placement
-does not bypass the separation. Supervisor-created workers still default to the supervisor's
+a supervisor seat. This keeps supervisor execution out of the planner's workspace; omitting placement
+does not bypass the separation. Other seats default to their creator's
 workspace. Explicit placement keeps the reporting relationship unchanged.
 
 Built-ins run in process and remain active independently of `pluginsEnabled`. They are
