@@ -191,6 +191,7 @@ export async function backfillSwarms(): Promise<void> {
   if (legacySeats.length + legacyTasks.length + legacyActivities.length === 0) return;
 
   const created: SwarmRecord[] = [];
+  const planned: Array<{ files: PwaFiles; name: string; projectId: string | null }> = [];
   const swarmFor = new Map<string | null, string>();
   for (const projectId of new Set(legacySeats.map((seat) => seat.projectId ?? null))) {
     const existing = state.swarms.find((swarm) => swarm.projectId === projectId);
@@ -198,21 +199,27 @@ export async function backfillSwarms(): Promise<void> {
       swarmFor.set(projectId, existing.id);
       continue;
     }
+    // A swarm that cannot run would fail every prompt, so the migration stops before writing
+    // anything, and every request reports why, until the directory is back.
     const sourceDirectory = readPwaSource(projectId ?? undefined);
-    let files: PwaFiles = {};
+    const owner = projectId ? `project ${projectId}` : "seats with no project";
+    if (!sourceDirectory) {
+      throw new Error(`Swarm cannot migrate the seats of ${owner}: no PWA directory is configured`);
+    }
+    let files: PwaFiles;
     try {
-      if (sourceDirectory) files = readPwaFiles(sourceDirectory);
+      files = readPwaFiles(sourceDirectory);
+      assertRunnablePwa(files, sourceDirectory);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      console.warn(`[paseo-swarm] Could not read the PWA directory ${sourceDirectory}: ${detail}`);
+      throw new Error(`Swarm cannot migrate the seats of ${owner}: ${detail}`, { cause: error });
     }
-    const swarm = instantiate({
-      files,
-      name: sourceDirectory ? basename(sourceDirectory) : "swarm",
-      projectId,
-    });
+    planned.push({ files, name: basename(sourceDirectory), projectId });
+  }
+  for (const input of planned) {
+    const swarm = instantiate(input);
     created.push(swarm);
-    swarmFor.set(projectId, swarm.id);
+    swarmFor.set(input.projectId, swarm.id);
   }
 
   const seats = state.agents.map((seat) =>

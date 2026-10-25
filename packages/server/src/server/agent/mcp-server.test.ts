@@ -850,14 +850,24 @@ describe("Swarm MCP coordination", () => {
   });
   // The plugin's seat list, which narrows to the caller's seat when asked by Paseo agent id. Null
   // seats stand for a plugin that cannot answer.
-  const seatList = (seats: Array<{ paseoAgentId: string | null }> | null, input: unknown) => {
+  const seatList = (
+    seats: Array<{ paseoAgentId: string | null; retired?: boolean }> | null,
+    input: unknown,
+  ) => {
     if (!seats) throw new Error("Plugin is not available: paseo-swarm");
-    const { paseoAgentId } = input as { paseoAgentId?: string };
-    return { seats: paseoAgentId ? seats.filter((s) => s.paseoAgentId === paseoAgentId) : seats };
+    const { paseoAgentId, includeRetired } = input as {
+      paseoAgentId?: string;
+      includeRetired?: boolean;
+    };
+    return {
+      seats: paseoAgentId
+        ? seats.filter((s) => s.paseoAgentId === paseoAgentId && (includeRetired || !s.retired))
+        : seats,
+    };
   };
   const swarmServer = async (
     callerAgentId: string,
-    seats: Array<{ paseoAgentId: string | null }> | null,
+    seats: Array<{ paseoAgentId: string | null; retired?: boolean }> | null,
     answer: (method: string, input: unknown) => unknown = () => ({}),
     stored: Record<string, { labels: Record<string, string> }> = {},
   ) => {
@@ -1120,6 +1130,20 @@ describe("Swarm MCP coordination", () => {
     } finally {
       await seatAgent.server.close();
       await nativeAgent.server.close();
+    }
+  });
+
+  it("keeps native agent tools from the agent of a retired seat", async () => {
+    const retired = await swarmServer("retired-agent", [
+      { ...seat("lead", "supervisor", "retired-agent"), retired: true },
+    ]);
+    try {
+      expect(lookupTool(retired.server, "create_agent")).toBeUndefined();
+      expect(lookupTool(retired.server, "create_workspace")).toBeUndefined();
+      expect(lookupTool(retired.server, "create_terminal")).toBeDefined();
+      expect(lookupTool(retired.server, "swarm_seat_read")).toBeUndefined();
+    } finally {
+      await retired.server.close();
     }
   });
 

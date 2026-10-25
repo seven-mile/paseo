@@ -303,7 +303,8 @@ export const seatListRpc = defineRpc({
     swarmId: z.string().min(1).optional(),
     projectId: z.string().min(1).optional(),
     includeRetired: z.boolean().default(false),
-    // Only the seat this Paseo agent occupies, or is arriving in while its session opens.
+    // Only the seat this Paseo agent occupies, or is arriving in while its session opens. With
+    // includeRetired, else the seat it occupied before that seat retired or replaced it.
     paseoAgentId: z.string().min(1).optional(),
   }),
   output: z.object({ seats: z.array(seatSchema) }),

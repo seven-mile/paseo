@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { parse, stringify } from "yaml";
 import { z } from "zod";
 import type { AgentConfig, AgentRecord, SwarmRecord, SwarmState } from "../shared/models";
@@ -138,12 +147,41 @@ export function definedConfig(config: AgentConfig): AgentConfig {
 // truth while no file exists. Seat tools otherwise edit the file in place (server/spec.ts).
 export function ensureSwarmFile(swarm: SwarmRecord, accepted: readonly AgentRecord[]): string {
   const path = join(swarm.directory, SWARM_FILE);
-  if (!existsSync(path)) {
-    const temporary = `${path}.${randomUUID()}.tmp`;
-    writeFileSync(temporary, renderSwarmFile(accepted), "utf8");
-    renameSync(temporary, path);
-  }
+  if (!existsSync(path)) replaceFile(path, renderSwarmFile(accepted));
   return path;
+}
+
+// Replaces path through a synced temporary file and a rename, then syncs the directory, so the
+// new text survives a crash once this returns. check runs just before the rename; when it returns
+// false, path is left as it was and this returns false.
+export function replaceFile(
+  path: string,
+  text: string,
+  check: () => boolean = () => true,
+): boolean {
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  const fd = openSync(temporary, "w");
+  try {
+    writeSync(fd, text);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  if (!check()) {
+    rmSync(temporary, { force: true });
+    return false;
+  }
+  renameSync(temporary, path);
+  // Windows cannot open a directory to sync it; NTFS journals the rename itself.
+  if (process.platform !== "win32") {
+    const directory = openSync(dirname(path), "r");
+    try {
+      fsyncSync(directory);
+    } finally {
+      closeSync(directory);
+    }
+  }
+  return true;
 }
 
 // What the swarm directory asks for.

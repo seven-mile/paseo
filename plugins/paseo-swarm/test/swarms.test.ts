@@ -283,3 +283,13 @@ test("two swarms can hold seats and Tasks with the same names without crossing",
   assert.deepEqual(swarmTasks(alpha.id), [task("build", "lead", alpha.id)]);
   assert.deepEqual(swarmTasks(beta.id), [task("build", "lead", beta.id)]);
 });
+
+test("records whose PWA directory cannot run stay as they were, and the migration says why", async (t) => {
+  const home = setup(t);
+  process.env.PASEO_SWARM_PWA_ROOT = join(home, "missing");
+  await seed({ agents: [seat({ id: "lead", name: "lead", projectId: "alpha" })] });
+  const before = store.read();
+
+  await assert.rejects(() => backfillSwarms(), /cannot migrate the seats of project alpha/);
+  assert.deepEqual(store.read(), before);
+});

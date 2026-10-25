@@ -99,6 +99,17 @@ export function seatOfAgent(paseoAgentId: string): AgentRecord | undefined {
   );
 }
 
+// The seat a Paseo agent occupied before its seat retired or replaced it.
+function formerSeatOf(paseoAgentId: string): AgentRecord | undefined {
+  return store
+    .read()
+    .agents.find(
+      (seat) =>
+        seat.paseoAgentId === paseoAgentId ||
+        seat.pastOccupants?.some((occupant) => occupant.paseoAgentId === paseoAgentId),
+    );
+}
+
 // A seat named by its roster id, or by its qualified name within a swarm. With no swarm named, a
 // qualified name must belong to one seat across every swarm.
 export function findSeat(
@@ -514,7 +525,9 @@ export function listSeats(input: {
   paseoAgentId?: string;
 }): SeatView[] {
   if (input.paseoAgentId) {
-    const seat = seatOfAgent(input.paseoAgentId);
+    const seat =
+      seatOfAgent(input.paseoAgentId) ??
+      (input.includeRetired ? formerSeatOf(input.paseoAgentId) : undefined);
     return seat ? [seatView(seat)] : [];
   }
   return store

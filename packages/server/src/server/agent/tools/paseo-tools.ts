@@ -645,7 +645,9 @@ export async function createPaseoToolCatalog(
   };
   const invokePlugin = options.invokePlugin;
   if (invokePlugin) {
-    const readSeats = async (filter: { paseoAgentId?: string; swarmId?: string } = {}) =>
+    const readSeats = async (
+      filter: { paseoAgentId?: string; swarmId?: string; includeRetired?: boolean } = {},
+    ) =>
       ((await invokePlugin("paseo-swarm", "swarm.seat.list", filter)) as { seats: SwarmSeat[] })
         .seats;
     // The plugin decides which seat an agent sits in, including an agent it is still starting or
@@ -654,6 +656,10 @@ export async function createPaseoToolCatalog(
       callerAgentId ? (await readSeats({ paseoAgentId: callerAgentId })).at(0) : undefined;
     seatAccess = await resolveSeatAccess({
       seatOfCaller,
+      formerSeatOfCaller: async () =>
+        callerAgentId
+          ? (await readSeats({ paseoAgentId: callerAgentId, includeRetired: true })).at(0)
+          : undefined,
       callerLabels: async () =>
         callerAgentId ? (await agentStorage.get(callerAgentId))?.labels : undefined,
       onLookupError: (error, access) =>

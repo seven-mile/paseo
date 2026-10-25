@@ -497,6 +497,12 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       if (existing.swarmId !== swarm.id) {
         throw new Error(`Agent ${input.paseoAgentId} already sits in another swarm`);
       }
+      // Whether a seat exists is the spec's to say; registering again only rebinds its agent.
+      if (existing.retired) {
+        throw new Error(
+          `Seat ${agentQualifiedName(existing)} is retired. Name it in swarm.yaml and run \`paseo-swarm swarm up\` to restore it.`,
+        );
+      }
       if (
         existing.name !== input.name ||
         existing.roleClass !== input.roleClass ||
@@ -512,7 +518,6 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         projectId,
         qualifiedName,
         reportsTo,
-        retired: false,
         updatedAt: timestamp,
       };
       return [{ op: "put", collection: "agents", record: result }];

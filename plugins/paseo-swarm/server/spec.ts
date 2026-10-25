@@ -1,11 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isMap, parseDocument, type Document } from "yaml";
 import type { SeatChange, SpecIntent, SwarmRecord, SwarmState } from "../shared/models";
 import { agentQualifiedName } from "../shared/models";
 import { SWARM_FILE } from "./pwa";
-import { definedConfig, ensureSwarmFile, failQueuedMail, sameConfig, TEAM_OF } from "./roster";
+import {
+  definedConfig,
+  ensureSwarmFile,
+  failQueuedMail,
+  replaceFile,
+  sameConfig,
+  TEAM_OF,
+} from "./roster";
 import { store, type SwarmChange } from "./state";
 import { findSwarm, swarmSeats } from "./swarms";
 
@@ -239,15 +246,11 @@ export function assertNoConflict(swarmId: string): void {
   }
 }
 
+// Writes the file unless it changed since it was read. An editor that saves between the check
+// and the rename is overwritten: the window is a few system calls, and the file stays the user's
+// to edit, so Swarm accepts that rather than locking it.
 function writeChecked(path: string, text: string, expectedHash: string): boolean {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, text, "utf8");
-  if (readHash(path) !== expectedHash) {
-    rmSync(temporary, { force: true });
-    return false;
-  }
-  renameSync(temporary, path);
-  return true;
+  return replaceFile(path, text, () => readHash(path) === expectedHash);
 }
 
 // The parent's team holds the role class the tree allows, as `up` requires.

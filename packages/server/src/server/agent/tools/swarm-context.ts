@@ -84,19 +84,23 @@ const SEAT_MANAGER_TOOLS = new Set([
   "inspect_provider",
 ]);
 
-// The role class of the caller's seat, null outside any seat, or unresolved for an agent Swarm
-// started whose seat cannot be looked up now.
+// The role class of the caller's seat, null for an agent that never sat in one, or unresolved
+// for a Swarm agent without an active seat: its seat retired or replaced it, or cannot be looked
+// up now.
 export type SeatAccess = SeatRoleClass | "unresolved" | null;
 
 // An unresolved agent gets a worker's native tools and none of Swarm's, rather than the whole
-// native catalog.
+// native catalog, so leaving a seat never widens what an agent can do.
 export async function resolveSeatAccess(input: {
   seatOfCaller: () => Promise<SwarmSeat | undefined>;
+  formerSeatOfCaller: () => Promise<SwarmSeat | undefined>;
   callerLabels: () => Promise<Record<string, string> | undefined>;
   onLookupError: (error: unknown, access: SeatAccess) => void;
 }): Promise<SeatAccess> {
   try {
-    return (await input.seatOfCaller())?.roleClass ?? null;
+    const seat = await input.seatOfCaller();
+    if (seat) return seat.roleClass;
+    return (await input.formerSeatOfCaller()) ? "unresolved" : null;
   } catch (error) {
     const labels = await input.callerLabels().catch(() => undefined);
     const access = labels?.[SWARM_SEAT_LABEL] ? "unresolved" : null;
