@@ -36,7 +36,7 @@ seats:
 - The file never holds an occupant, a workspace, a Paseo agent id, or a project. Those are local bindings that stay in the daemon.
 - Unknown keys are refused. `workspaces` is refused until workspace groups exist.
 
-A directory without `swarm.yaml` gets one written from the accepted seats on the first `diff`, `up`, or `status`. That is the only time Swarm writes the file; accepted state is the whole truth while no file exists. A template that carries a `swarm.yaml` passes it to new swarms unaccepted, so the first `up` reserves its seats.
+A directory without `swarm.yaml` gets one written from the accepted seats on the first `diff`, `up`, `status`, or seat change. That is the only time Swarm generates the whole file; accepted state is the whole truth while no file exists. After that, Swarm writes only the sections seat tools change. A template that carries a `swarm.yaml` passes it to new swarms unaccepted, so the first `up` reserves its seats.
 
 ## What up does
 
@@ -62,6 +62,30 @@ Retiring leaves the occupant and its workspace as they are, so a restore can bri
 
 A seat that `up` reserved has no workspace until its first agent starts. A worker then shares its manager's workspace; any other seat gets a new workspace at the project root.
 
+## Seat tools
+
+Seat tools change `swarm.yaml` and the accepted seats together, so the next `up` has nothing of theirs to undo. That covers a hire (`swarm_seat_create`, `swarm.agent.prepare`, a new `swarm.agent.register`), an agent change (`paseo-swarm swarm seat set`), and `paseo-swarm swarm seat retire`. A reset, a re-registration, and `bind_workspace` change local bindings only and leave the file alone. The steps are in `mutateSpec` in `plugins/paseo-swarm/server/spec.ts`.
+
+A change checks only the section it writes against what the swarm accepted. Edits you have not run `up` on elsewhere in the file do not block it:
+
+| Change | Section                     | Conflicts when the file                                 |
+| ------ | --------------------------- | ------------------------------------------------------- |
+| hire   | the manager and the new key | no longer names the manager, or already names the seat  |
+| agent  | the seat's `agent` block    | has an `agent` block that differs from the accepted one |
+| retire | the seat                    | changed its `role` or `agent`, or names seats under it  |
+
+A conflict changes nothing and names the section. Run `up` to accept the file, or undo the edit, then try again. The file is written through the `yaml` Document API, so comments and key order survive.
+
+A retirement is refused while the seat has an active team, as in `up`. An agent retires the seats that report to it; a planner retires any seat.
+
+### Crash recovery
+
+Before writing the file, Swarm commits an intent with the file's hash before and after the change. The accepted change and the cleared intent are one commit. An intent left by a crash is settled at the next start or seat change:
+
+- The file has the new hash: the change is accepted.
+- The file has the old hash: the change is dropped, and the tool call that made it failed.
+- The file has neither, because it was edited by hand meanwhile: Swarm cannot tell whether the change was saved. `status` shows it, and seat changes and `up` are refused until `paseo-swarm swarm recover --keep-file` drops the change or `--apply-intent` writes it into the file as it now stands and accepts it.
+
 ## Migration from before swarms
 
 Records from before swarms get a swarm at plugin start, before any request or hook runs:
@@ -74,6 +98,6 @@ The copy is byte-identical, so prompt revisions stay valid and no agent is woken
 
 ## Later
 
-- Seat tools (`swarm_seat_create` and the CLI's `seat set`) write `swarm.yaml` as part of their change, with a conflict check and crash recovery. Until then a hire writes only daemon state, and the next `up` plans to retire it.
+- A `swarm_seat_retire` agent tool. Retirement is CLI-only for now.
 - Named workspace groups in `swarm.yaml`.
 - Several swarms in one project, `init` from a template, and moving a swarm's directory.

@@ -69,8 +69,16 @@ export const statusReadRpc = defineRpc({
     unapplied: rosterPlanSchema.nullable(),
     // Why the directory cannot be accepted as it stands.
     invalid: z.string().nullable(),
+    // A seat change a crash left half written, which `recover` resolves.
+    recovery: z.string().nullable(),
     seats: z.array(seatSchema),
   }),
+});
+
+export const directoryRecoverRpc = defineRpc({
+  name: "swarm.directory.recover",
+  input: z.object({ ...swarmScopeSchema, keep: z.enum(["file", "intent"]) }),
+  output: z.object({ swarm: swarmSummarySchema, seats: z.array(z.string()) }),
 });
 
 export const boardReadRpc = defineRpc({
@@ -330,6 +338,18 @@ export const seatResetRpc = defineRpc({
     dryRun: z.boolean().default(false),
   }),
   output: z.object({ seats: z.array(seatSchema) }),
+});
+
+// Retires a seat that has no active team: it leaves swarm.yaml, and its queued mail fails.
+export const seatRetireRpc = defineRpc({
+  name: "swarm.seat.retire",
+  input: z.object({
+    swarmId: z.string().min(1).optional(),
+    seat: z.string().min(1),
+    // Set when an agent retires: planners retire any seat, others the seats that report to them.
+    actorName: z.string().min(1).optional(),
+  }),
+  output: z.object({ seat: seatSchema }),
 });
 
 export const seatHistoryReadRpc = defineRpc({

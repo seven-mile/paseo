@@ -130,22 +130,25 @@ export function renderSwarmFile(seats: readonly AgentRecord[]): string {
   return stringify({ version: 1, seats: tree(null) ?? {} });
 }
 
-function definedConfig(config: AgentConfig): AgentConfig {
+export function definedConfig(config: AgentConfig): AgentConfig {
   return Object.fromEntries(Object.entries(config).filter(([, value]) => value !== undefined));
 }
 
-function writeAtomic(path: string, text: string): void {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, text, "utf8");
-  renameSync(temporary, path);
+// A directory without swarm.yaml gets one written from the accepted seats, which are the whole
+// truth while no file exists. Seat tools otherwise edit the file in place (server/spec.ts).
+export function ensureSwarmFile(swarm: SwarmRecord, accepted: readonly AgentRecord[]): string {
+  const path = join(swarm.directory, SWARM_FILE);
+  if (!existsSync(path)) {
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    writeFileSync(temporary, renderSwarmFile(accepted), "utf8");
+    renameSync(temporary, path);
+  }
+  return path;
 }
 
-// What the swarm directory asks for. A directory without swarm.yaml gets one written from the
-// accepted seats, which are the whole truth while no file exists; this is the only time Swarm
-// writes the file.
+// What the swarm directory asks for.
 export function readDesired(swarm: SwarmRecord, accepted: readonly AgentRecord[]): DesiredSwarm {
-  const path = join(swarm.directory, SWARM_FILE);
-  if (!existsSync(path)) writeAtomic(path, renderSwarmFile(accepted));
+  const path = ensureSwarmFile(swarm, accepted);
   const files = readPwaFiles(swarm.directory);
   assertRunnablePwa(files, swarm.directory);
   return { files, seats: parseSwarmFile(readFileSync(path, "utf8")) };
@@ -153,13 +156,13 @@ export function readDesired(swarm: SwarmRecord, accepted: readonly AgentRecord[]
 
 // Who may report to whom. A file can only nest seats, so this is the creation rule for agents
 // stated for the tree.
-const TEAM_OF: Record<RoleClass, RoleClass | null> = {
+export const TEAM_OF: Record<RoleClass, RoleClass | null> = {
   planner: "supervisor",
   supervisor: "worker",
   worker: null,
 };
 
-function sameConfig(left: AgentConfig, right: AgentConfig): boolean {
+export function sameConfig(left: AgentConfig, right: AgentConfig): boolean {
   const keys = new Set([...Object.keys(left), ...Object.keys(right)]) as Set<keyof AgentConfig>;
   return [...keys].every((key) => JSON.stringify(left[key]) === JSON.stringify(right[key]));
 }
@@ -297,8 +300,26 @@ function planNamedSeats(
   return records;
 }
 
-// Active seats the file no longer names. Their mail fails with the reason and stays in the
-// mailbox to read; the Tasks that name them are listed, not judged.
+// A retiring seat's queued mail fails with the reason and stays in the mailbox to read.
+export function failQueuedMail(
+  state: Readonly<SwarmState>,
+  seat: AgentRecord,
+  reason: string,
+  now: string,
+): SwarmChange[] {
+  return state.messages
+    .filter(
+      (message) =>
+        message.recipientAgentId === seat.id && mailboxMessageStatus(message) === "queued",
+    )
+    .map((message) => ({
+      op: "put",
+      collection: "messages",
+      record: { ...message, lastError: reason, failedAt: now },
+    }));
+}
+
+// Active seats the file no longer names. The Tasks that name them are listed, not judged.
 function planRetirements(
   swarm: SwarmRecord,
   desired: DesiredSwarm,
@@ -324,10 +345,7 @@ function planRetirements(
   const changes: SwarmChange[] = [];
   for (const seat of retiring) {
     const name = agentQualifiedName(seat);
-    const queued = state.messages.filter(
-      (message) =>
-        message.recipientAgentId === seat.id && mailboxMessageStatus(message) === "queued",
-    );
+    const failed = failQueuedMail(state, seat, `Seat ${name} was retired by swarm up`, now);
     plan.retire.push({
       seat: name,
       tasks: state.tasks
@@ -337,20 +355,12 @@ function planRetirements(
             (task.managerName === name || task.workerNames.includes(name)),
         )
         .map((task) => task.id),
-      queuedMessages: queued.length,
+      queuedMessages: failed.length,
     });
-    changes.push({
-      op: "put",
-      collection: "agents",
-      record: { ...seat, retired: true, updatedAt: now },
-    });
-    for (const message of queued) {
-      changes.push({
-        op: "put",
-        collection: "messages",
-        record: { ...message, lastError: `Seat ${name} was retired by swarm up`, failedAt: now },
-      });
-    }
+    changes.push(
+      { op: "put", collection: "agents", record: { ...seat, retired: true, updatedAt: now } },
+      ...failed,
+    );
   }
   return changes;
 }

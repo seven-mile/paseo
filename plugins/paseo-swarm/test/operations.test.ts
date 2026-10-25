@@ -64,7 +64,12 @@ function readDisk(): string {
     .join("\0");
 }
 
-function boardOf({ messages: _messages, swarms: _swarms, ...board }: Readonly<SwarmState>) {
+function boardOf({
+  messages: _messages,
+  swarms: _swarms,
+  intents: _intents,
+  ...board
+}: Readonly<SwarmState>) {
   return {
     ...board,
     agents: board.agents.filter((agent) => agent.paseoAgentId !== null).map(seatView),

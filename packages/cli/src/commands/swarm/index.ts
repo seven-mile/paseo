@@ -343,11 +343,18 @@ interface SwarmStatus {
   swarm: SwarmSummary;
   unapplied: RosterPlan | null;
   invalid: string | null;
+  recovery?: string | null;
   seats: Seat[];
 }
 
 function directoryLines(status: SwarmStatus): string[] {
   const { directory } = status.swarm;
+  if (status.recovery) {
+    return [
+      `Seat changes are on hold: ${status.recovery}`,
+      "Run `paseo-swarm swarm recover --keep-file` or `--apply-intent`.",
+    ];
+  }
   if (status.invalid) return [`${directory} cannot be accepted: ${status.invalid}`];
   if (!status.unapplied) return [`${directory} matches what the swarm accepted.`];
   return [`Unapplied changes in ${directory}:`, ...planLines(status.unapplied)];
@@ -373,6 +380,50 @@ async function runStatus(
 ): Promise<SingleResult<SwarmStatus>> {
   const data = (await invokeSwarm(options, "swarm.status.read", scope(options))) as SwarmStatus;
   return { type: "single", data, schema: statusSchema };
+}
+
+interface RecoverOptions extends ScopeOptions {
+  keepFile?: boolean;
+  applyIntent?: boolean;
+}
+
+interface Recovered {
+  swarm: SwarmSummary;
+  seats: string[];
+}
+
+async function runRecover(
+  options: RecoverOptions,
+  _command: Command,
+): Promise<SingleResult<Recovered>> {
+  if (!options.keepFile === !options.applyIntent) {
+    throw new Error("Pass one of --keep-file or --apply-intent");
+  }
+  const keep = options.keepFile ? "file" : "intent";
+  const data = (await invokeSwarm(options, "swarm.directory.recover", {
+    ...scope(options),
+    keep,
+  })) as Recovered;
+  const schema: OutputSchema<Recovered> = {
+    idField: (result) => result.swarm.id,
+    columns: [],
+    renderHuman: () =>
+      keep === "file"
+        ? `Kept ${data.swarm.directory}/swarm.yaml as it is; the change to ${data.seats.join(", ")} was dropped.`
+        : `Applied the change to ${data.seats.join(", ")} to swarm.yaml and accepted it.`,
+  };
+  return { type: "single", data, schema };
+}
+
+async function runRetire(
+  seat: string,
+  options: SwarmOptions,
+  _command: Command,
+): Promise<ListResult<SeatRow>> {
+  const { seat: retired } = (await invokeSwarm(options, "swarm.seat.retire", { seat })) as {
+    seat: Seat;
+  };
+  return { type: "list", data: [toSeatRow(retired)], schema: seatSchema };
 }
 
 function addSeatOptions(command: Command): Command {
@@ -407,6 +458,16 @@ export function createSwarmCommand(): Command {
       )
       .option("--project <id>", "The swarm of this project"),
   ).action(withOutput(runStatus));
+  addSeatOptions(
+    swarm
+      .command("recover")
+      .description(
+        "Resolve a seat change that a crash left half written while swarm.yaml was edited by hand",
+      )
+      .option("--project <id>", "The swarm of this project")
+      .option("--keep-file", "Keep swarm.yaml as it is and drop the change")
+      .option("--apply-intent", "Apply the change to swarm.yaml and accept it"),
+  ).action(withOutput(runRecover));
   const seat = swarm
     .command("seat")
     .description(
@@ -451,6 +512,14 @@ export function createSwarmCommand(): Command {
       .option("--cancel", "Withdraw a reset that has not taken effect")
       .option("--dry-run", "Show the result without saving it"),
   ).action(withOutput(runReset));
+  addSeatOptions(
+    seat
+      .command("retire")
+      .description(
+        "Retire a seat that has no active team: it leaves swarm.yaml, its queued mail fails, and its agent and history are kept",
+      )
+      .argument("<seat>", "Seat qualified name or roster ID"),
+  ).action(withOutput(runRetire));
   addSeatOptions(
     seat
       .command("history")

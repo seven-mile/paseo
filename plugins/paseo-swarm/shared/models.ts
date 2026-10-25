@@ -185,6 +185,30 @@ export const swarmRecordSchema = z.object({
 });
 export type SwarmRecord = z.infer<typeof swarmRecordSchema>;
 
+// A seat change written to swarm.yaml and the accepted seats together. An add carries the new
+// seat; an agent change carries the seat with its new agentConfig; a retirement carries the seat
+// and the reason its queued mail fails with.
+export const seatChangeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("add"), seat: agentRecordSchema }),
+  z.object({ kind: z.literal("agent"), seat: agentRecordSchema }),
+  z.object({ kind: z.literal("retire"), seat: agentRecordSchema, reason: z.string() }),
+]);
+export type SeatChange = z.infer<typeof seatChangeSchema>;
+
+// A seat change in flight: committed before swarm.yaml is written and cleared with the accepted
+// changes, so a crash between the two is recovered from the file's hash. `conflict` is set when
+// the file matches neither side; the swarm then takes no seat change until the user resolves it.
+export const specIntentSchema = z.object({
+  id: z.string(),
+  swarmId: z.string(),
+  oldHash: z.string(),
+  newHash: z.string(),
+  changes: z.array(seatChangeSchema),
+  conflict: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type SpecIntent = z.infer<typeof specIntentSchema>;
+
 export const stateSchema = z.object({
   version: z.literal(1),
   swarms: z.array(swarmRecordSchema).default([]),
@@ -192,11 +216,20 @@ export const stateSchema = z.object({
   tasks: z.array(taskSchema),
   activities: z.array(activitySchema),
   messages: z.array(mailboxMessageSchema).default([]),
+  intents: z.array(specIntentSchema).default([]),
 });
 export type SwarmState = z.infer<typeof stateSchema>;
 // What the board shows; the mailbox is read through its own RPC.
 export type SwarmBoard = Pick<SwarmState, "version" | "agents" | "tasks" | "activities">;
 
 export function emptyState(): SwarmState {
-  return { version: 1, swarms: [], agents: [], tasks: [], activities: [], messages: [] };
+  return {
+    version: 1,
+    swarms: [],
+    agents: [],
+    tasks: [],
+    activities: [],
+    messages: [],
+    intents: [],
+  };
 }

@@ -78,9 +78,10 @@ People and operators manage seats through plugin RPCs; agents work through daemo
 | `swarm.seat.list`         | `paseo-swarm swarm seat ls`      | `swarm_seat_list`, `swarm_seat_read` |
 | `swarm.seat.update`       | `paseo-swarm swarm seat set`     |                                      |
 | `swarm.seat.reset`        | `paseo-swarm swarm seat reset`   |                                      |
+| `swarm.seat.retire`       | `paseo-swarm swarm seat retire`  |                                      |
 | `swarm.seat.history.read` | `paseo-swarm swarm seat history` | `swarm_transcript_list`              |
 
-`update` and `reset` take several seats and a `dryRun` flag, and return each seat with its pending plan as `pending: { kind, reason } | null`, so `--json` and `--dry-run` show whether the next mail starts, adjusts, revives, or replaces. A field set to `null` in `update` stops being compared. `reset --cancel` withdraws a reset that has not taken effect. The CLI's seat commands take `--swarm <id>` when a seat name exists in several swarms. In-place changes go through the agent handle's `applyConfig` in the Paseo client SDK.
+`create`, `update`, and `retire` also write `swarm.yaml`; see [seat tools](07-swarm-directory.md#seat-tools). `update` and `reset` take several seats and a `dryRun` flag, and return each seat with its pending plan as `pending: { kind, reason } | null`, so `--json` and `--dry-run` show whether the next mail starts, adjusts, revives, or replaces. A field set to `null` in `update` stops being compared. `reset --cancel` withdraws a reset that has not taken effect. The CLI's seat commands take `--swarm <id>` when a seat name exists in several swarms. In-place changes go through the agent handle's `applyConfig` in the Paseo client SDK.
 
 Agents read transcripts for their own seat and the seats under them; planners read any seat. Agents cannot edit seats in this version.
 

@@ -29,6 +29,7 @@ import {
   settingsLostOnProviderChange,
   type SeatPlan,
 } from "./seat-policy";
+import { mutateSpec } from "./spec";
 import { store } from "./state";
 import { swarmOf } from "./swarms";
 
@@ -553,40 +554,42 @@ async function withOccupantStamp(seat: AgentRecord, context: SeatContext): Promi
   };
 }
 
-// Applies edit to each seat and commits the results unless dryRun. Edits replace whole records,
-// so an edit applied to a seat that changed meanwhile is applied to the current record.
+// Applies a runtime edit to each seat and commits the results unless dryRun. Edits replace whole
+// records, so an edit applied to a seat that changed meanwhile is applied to the current record.
 async function editSeats(
   swarmId: string | undefined,
   references: string[],
   dryRun: boolean,
   edit: (seat: AgentRecord) => AgentRecord,
   context: SeatContext,
-  validate: (seats: AgentRecord[], before: ReadonlyMap<string, AgentRecord>) => void = () => {},
 ): Promise<SeatView[]> {
   const stamped = new Map<string, AgentRecord>();
   for (const seat of resolveSeats(swarmId, references)) {
     stamped.set(seat.id, await withOccupantStamp(seat, context));
   }
   const preview = [...stamped.values()].map(edit);
-  validate(preview, stamped);
   if (dryRun) return preview.map(seatView);
   const timestamp = now();
   const results: AgentRecord[] = [];
   await store.commit((state) => {
     results.length = 0;
     for (const before of stamped.values()) {
-      const current = state.agents.find((agent) => agent.id === before.id);
-      if (!current) throw new Error(`Swarm seat disappeared: ${before.id}`);
-      const edited = edit({
-        ...current,
-        agentConfig: current.agentConfig ?? before.agentConfig,
-        occupant: current.occupant ?? before.occupant,
-      });
-      results.push({ ...edited, updatedAt: timestamp });
+      results.push({ ...edit(restamped(state, before)), updatedAt: timestamp });
     }
     return results.map((record) => ({ op: "put" as const, collection: "agents" as const, record }));
   });
   return results.map(seatView);
+}
+
+// The seat as it is now, with the stamp withOccupantStamp observed if it still has none.
+function restamped(state: Readonly<{ agents: AgentRecord[] }>, before: AgentRecord): AgentRecord {
+  const current = state.agents.find((agent) => agent.id === before.id);
+  if (!current) throw new Error(`Swarm seat disappeared: ${before.id}`);
+  return {
+    ...current,
+    agentConfig: current.agentConfig ?? before.agentConfig,
+    occupant: current.occupant ?? before.occupant,
+  };
 }
 
 export type AgentConfigPatch = {
@@ -621,7 +624,7 @@ export function assertBootable(
   );
 }
 
-export function updateSeats(
+export async function updateSeats(
   input: {
     swarmId?: string;
     seats: string[];
@@ -631,27 +634,44 @@ export function updateSeats(
   context: SeatContext,
 ): Promise<SeatView[]> {
   const patch = input.agentConfig;
-  return editSeats(
-    input.swarmId,
-    input.seats,
-    input.dryRun,
-    (seat) => {
-      const agentConfig: Record<string, unknown> = { ...seat.agentConfig };
-      if (patch.provider) {
-        const from = seat.agentConfig?.provider ?? currentOccupant(seat).config.provider;
-        for (const field of settingsLostOnProviderChange(from, patch.provider)) {
-          delete agentConfig[field];
-        }
+  const edit = (seat: AgentRecord): AgentRecord => {
+    const agentConfig: Record<string, unknown> = { ...seat.agentConfig };
+    if (patch.provider) {
+      const from = seat.agentConfig?.provider ?? currentOccupant(seat).config.provider;
+      for (const field of settingsLostOnProviderChange(from, patch.provider)) {
+        delete agentConfig[field];
       }
-      for (const [key, value] of Object.entries(patch)) {
-        if (value === null) delete agentConfig[key];
-        else if (value !== undefined) agentConfig[key] = value;
-      }
-      return { ...seat, agentConfig: agentConfig as AgentConfig };
-    },
-    context,
-    assertBootable,
-  );
+    }
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) delete agentConfig[key];
+      else if (value !== undefined) agentConfig[key] = value;
+    }
+    return { ...seat, agentConfig: agentConfig as AgentConfig };
+  };
+  const stamped = new Map<string, AgentRecord>();
+  for (const seat of resolveSeats(input.swarmId, input.seats)) {
+    stamped.set(seat.id, await withOccupantStamp(seat, context));
+  }
+  const preview = [...stamped.values()].map(edit);
+  assertBootable(preview, stamped);
+  if (input.dryRun) return preview.map(seatView);
+  // The agent block of each seat in swarm.yaml changes with it, one swarm at a time.
+  const edited: AgentRecord[] = [];
+  for (const swarmId of new Set(preview.map((seat) => seat.swarmId!))) {
+    const changes = await mutateSpec(swarmId, (state) => {
+      const seats = [...stamped.values()]
+        .filter((seat) => seat.swarmId === swarmId)
+        .map((before) => edit(restamped(state, before)));
+      assertBootable(seats, stamped);
+      return seats.map((seat) => ({ kind: "agent" as const, seat }));
+    });
+    edited.push(...changes.map((change) => change.seat));
+  }
+  const ids = new Set(edited.map((seat) => seat.id));
+  return store
+    .read()
+    .agents.filter((seat) => ids.has(seat.id))
+    .map(seatView);
 }
 
 // A reset asks for a fresh agent with the same config. Cancelling one that has not taken effect

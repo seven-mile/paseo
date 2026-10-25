@@ -121,7 +121,7 @@ are unique within a swarm, so requests that name them carry `swarmId`, or name a
 Swarm can tell. Choosing a PWA directory in Project Settings copies it to
 `$PASEO_HOME/swarms/<name>-<id>/`; the chosen directory is never written. Edits to the swarm
 directory reach no agent until `paseo-swarm swarm up` accepts them, and `paseo-swarm swarm diff|status` show
-what is not accepted yet. See [design/07-swarm-directory.md](../design/07-swarm-directory.md),
+what is not accepted yet. Seat tools write their change into `swarm.yaml` as they accept it. See [design/07-swarm-directory.md](../design/07-swarm-directory.md),
 which also covers the startup migration of records from before swarms.
 
 A Swarm seat is an agent record: the roster identity owns the Tasks, Activities, and mailbox, and

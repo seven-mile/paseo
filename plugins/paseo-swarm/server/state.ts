@@ -18,6 +18,7 @@ import {
   agentRecordSchema,
   emptyState,
   mailboxMessageSchema,
+  specIntentSchema,
   stateSchema,
   swarmRecordSchema,
   taskSchema,
@@ -79,6 +80,7 @@ const collections = {
   tasks: { schema: taskSchema, key: taskKey },
   activities: { schema: activitySchema, key: byId },
   messages: { schema: mailboxMessageSchema, key: byId },
+  intents: { schema: specIntentSchema, key: byId },
 } as const;
 type Collections = typeof collections;
 export type CollectionName = keyof Collections;

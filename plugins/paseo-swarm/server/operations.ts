@@ -13,6 +13,7 @@ import {
 import {
   assemblePrompt,
   assertRoleClass,
+  findSeat,
   listSeats,
   readSeatHistory,
   resetSeats,
@@ -38,11 +39,20 @@ import {
 import { resolveActivityRefs } from "./refs";
 import { planRoster, readDesired } from "./roster";
 import {
+  assertNoConflict,
+  mutateSpec,
+  pendingConflict,
+  recoverIntents,
+  resolveConflict,
+  withSwarmLock,
+} from "./spec";
+import {
   appendActivityRpc,
   appendHumanActivityRpc,
   boardReadRpc,
   createSeatRpc,
   createTaskRpc,
+  directoryRecoverRpc,
   directoryUpRpc,
   registerAgentRpc,
   statusReadRpc,
@@ -59,6 +69,7 @@ import {
   seatHistoryReadRpc,
   seatListRpc,
   seatResetRpc,
+  seatRetireRpc,
   seatUpdateRpc,
 } from "../shared/swarm";
 import type { AgentConfig, AgentRecord, SwarmRecord, SwarmState, Task } from "../shared/models";
@@ -449,51 +460,61 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     assertSwarmProject(swarm, projectId);
     assertRoleClass(readPwa(swarm.source.files, input.role).roleClass, input.roleClass, input.role);
     const timestamp = now();
+    const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
+    const reportsTo = parent ? agentQualifiedName(parent) : null;
+    const registered = store
+      .read()
+      .agents.find((agent) => agent.paseoAgentId === input.paseoAgentId);
+    if (!registered) {
+      // A new seat joins swarm.yaml with its agent.
+      const [added] = await mutateSpec(swarm.id, () => {
+        ensureUniqueName(swarm.id, input.name, qualifiedName, parent);
+        const seat: AgentRecord = {
+          id: id("agent"),
+          swarmId: swarm.id,
+          paseoAgentId: input.paseoAgentId,
+          name: input.name,
+          qualifiedName,
+          aliases: input.aliases,
+          roleClass: input.roleClass,
+          role: input.role,
+          reportsTo,
+          workspaceId: snapshot.workspaceId ?? null,
+          projectId,
+          retired: false,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+        return [{ kind: "add", seat }];
+      });
+      return added.seat;
+    }
+    // Registering a seat again only refreshes where its agent runs.
     let result!: AgentRecord;
     await store.commit((state) => {
       const existing = state.agents.find((agent) => agent.paseoAgentId === input.paseoAgentId);
-      const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
-      if (existing && existing.swarmId !== swarm.id) {
+      if (!existing) throw new Error(`Swarm seat disappeared: ${input.paseoAgentId}`);
+      if (existing.swarmId !== swarm.id) {
         throw new Error(`Agent ${input.paseoAgentId} already sits in another swarm`);
       }
-      if (!existing) ensureUniqueName(swarm.id, input.name, qualifiedName, parent);
       if (
-        existing &&
-        (existing.name !== input.name ||
-          existing.roleClass !== input.roleClass ||
-          existing.role !== input.role ||
-          agentQualifiedName(existing) !== qualifiedName)
+        existing.name !== input.name ||
+        existing.roleClass !== input.roleClass ||
+        existing.role !== input.role ||
+        agentQualifiedName(existing) !== qualifiedName
       ) {
         throw new Error(`Agent identity and hierarchy are immutable: ${input.paseoAgentId}`);
       }
-      const reportsTo = parent ? agentQualifiedName(parent) : null;
-      result = existing
-        ? {
-            ...existing,
-            ...input,
-            workspaceId: snapshot.workspaceId ?? null,
-            projectId,
-            qualifiedName,
-            reportsTo,
-            retired: false,
-            updatedAt: timestamp,
-          }
-        : {
-            id: id("agent"),
-            swarmId: swarm.id,
-            paseoAgentId: input.paseoAgentId,
-            name: input.name,
-            qualifiedName,
-            aliases: input.aliases,
-            roleClass: input.roleClass,
-            role: input.role,
-            reportsTo: parent ? agentQualifiedName(parent) : null,
-            workspaceId: snapshot.workspaceId ?? null,
-            projectId,
-            retired: false,
-            createdAt: timestamp,
-            updatedAt: timestamp,
-          };
+      result = {
+        ...existing,
+        ...input,
+        workspaceId: snapshot.workspaceId ?? null,
+        projectId,
+        qualifiedName,
+        reportsTo,
+        retired: false,
+        updatedAt: timestamp,
+      };
       return [{ op: "put", collection: "agents", record: result }];
     });
     return result;
@@ -545,7 +566,10 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         createdAt: timestamp,
         updatedAt: timestamp,
       };
-      await store.commit(() => [{ op: "put", collection: "agents", record: seat }]);
+      await mutateSpec(swarm.id, () => {
+        ensureUniqueName(swarm.id, input.name, qualifiedName, parent);
+        return [{ kind: "add", seat }];
+      });
       return seatView(seat);
     },
   );
@@ -594,7 +618,10 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       agent: provisional,
       brief: input.brief,
     });
-    await store.commit(() => [{ op: "put", collection: "agents", record: agent }]);
+    await mutateSpec(swarm.id, () => {
+      ensureUniqueName(swarm.id, input.name, qualifiedName, parent);
+      return [{ kind: "add", seat: agent }];
+    });
     return { agentId: paseoAgentId, systemPrompt, agent };
   });
 
@@ -632,16 +659,32 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   // No agent is touched; each seat's next mail brings its agent in line.
   server.handle(directoryUpRpc, async ({ swarmId, projectId, dryRun }) => {
     const swarm = resolveSwarm({ swarmId, projectId });
-    const desired = readDesired(swarm, swarmSeats(swarm.id));
-    let plan!: RosterPlan;
-    await store.commit((state) => {
-      const result = planRoster(findSwarm(swarm.id), desired, state);
-      plan = result.plan;
-      if (dryRun) return [];
-      if (plan.refusals.length > 0) throw new Error(`swarm up refused: ${plan.refusals.join(" ")}`);
-      return result.changes;
+    // Under the lock seat tools take, so up never reads a file a seat change is writing.
+    const plan = await withSwarmLock(swarm.id, async () => {
+      await recoverIntents(swarm.id);
+      if (!dryRun) assertNoConflict(swarm.id);
+      const desired = readDesired(swarm, swarmSeats(swarm.id));
+      let result!: RosterPlan;
+      await store.commit((state) => {
+        const planned = planRoster(findSwarm(swarm.id), desired, state);
+        result = planned.plan;
+        if (dryRun) return [];
+        if (result.refusals.length > 0) {
+          throw new Error(`swarm up refused: ${result.refusals.join(" ")}`);
+        }
+        return planned.changes;
+      });
+      return result;
     });
     return { swarm: swarmSummary(findSwarm(swarm.id)), plan };
+  });
+  server.handle(directoryRecoverRpc, async ({ swarmId, projectId, keep }) => {
+    const swarm = resolveSwarm({ swarmId, projectId });
+    const intent = await resolveConflict(swarm.id, keep);
+    return {
+      swarm: swarmSummary(findSwarm(swarm.id)),
+      seats: intent.changes.map((change) => agentQualifiedName(change.seat)),
+    };
   });
   server.handle(statusReadRpc, async ({ swarmId, projectId }) => {
     const swarm = resolveSwarm({ swarmId, projectId });
@@ -662,6 +705,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       swarm: swarmSummary(swarm),
       unapplied,
       invalid,
+      recovery: pendingConflict(swarm.id)?.conflict ?? null,
       seats: swarmSeats(swarm.id).map(seatView),
     };
   });
@@ -902,6 +946,31 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   server.handle(seatResetRpc, async (input, context) => {
     const seats = await resetSeats(input, context);
     return { seats: input.dryRun ? seats : await afterFlush(seats, context) };
+  });
+  server.handle(seatRetireRpc, async (input) => {
+    const seat = findSeat(input.swarmId, input.seat);
+    const name = agentQualifiedName(seat);
+    if (input.actorName) {
+      const actor = findAgent(seat.swarmId!, input.actorName);
+      if (actor.roleClass !== "planner" && seat.reportsTo !== agentQualifiedName(actor)) {
+        throw new Error(`Agent ${agentQualifiedName(actor)} cannot retire seat ${name}`);
+      }
+    }
+    await mutateSpec(seat.swarmId!, (state) => {
+      const current = state.agents.find((candidate) => candidate.id === seat.id);
+      if (!current || current.retired) throw new Error(`Seat ${name} is already retired`);
+      const team = state.agents.filter(
+        (candidate) =>
+          candidate.swarmId === seat.swarmId && !candidate.retired && candidate.reportsTo === name,
+      );
+      if (team.length > 0) {
+        throw new Error(
+          `Retire the seats that report to ${name} first: ${team.map(agentQualifiedName).join(", ")}`,
+        );
+      }
+      return [{ kind: "retire", seat: current, reason: `Seat ${name} was retired` }];
+    });
+    return { seat: seatView(store.read().agents.find((candidate) => candidate.id === seat.id)!) };
   });
   server.handle(seatHistoryReadRpc, async (input, context) => readSeatHistory(input, context));
 
