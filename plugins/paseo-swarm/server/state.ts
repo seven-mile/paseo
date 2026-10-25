@@ -19,13 +19,27 @@ import {
   emptyState,
   mailboxMessageSchema,
   stateSchema,
+  swarmRecordSchema,
   taskSchema,
   type SwarmState,
 } from "../shared/models";
 
+function getPaseoHome(): string {
+  return process.env.PASEO_HOME ?? process.env.PASEO_DATA_DIR ?? process.cwd();
+}
+
 function getDataDirectory(): string {
-  const home = process.env.PASEO_HOME ?? process.env.PASEO_DATA_DIR ?? process.cwd();
-  return join(home, "plugin-data", "paseo-swarm");
+  return join(getPaseoHome(), "plugin-data", "paseo-swarm");
+}
+
+// Where swarm directories are instantiated by default. They are the user's files, so they live
+// beside Paseo's own stores rather than in the plugin's data.
+export function getSwarmsDirectory(): string {
+  return join(getPaseoHome(), "swarms");
+}
+
+export function getMigrationReportPath(): string {
+  return join(getDataDirectory(), "migration-report.json");
 }
 
 // Whole-file store used before the event log. Imported once into a snapshot, then renamed.
@@ -49,14 +63,22 @@ export function getConfigPath(): string {
   return join(getDataDirectory(), "config.json");
 }
 
-// Each collection is keyed by its records' own id. A new collection is one entry here plus its
-// array in stateSchema. Agents are keyed by the roster id, not paseoAgentId, so the Paseo agent
-// behind a roster member can change without changing its identity.
+// The store key of a Task: its id is unique only within its swarm.
+export function taskKey(task: { id: string; swarmId?: string }): string {
+  return `${task.swarmId ?? ""}/${task.id}`;
+}
+
+const byId = (record: { id: string }) => record.id;
+
+// Each collection is keyed by its records' own id, except Tasks. A new collection is one entry
+// here plus its array in stateSchema. Agents are keyed by the roster id, not paseoAgentId, so the
+// Paseo agent behind a roster member can change without changing its identity.
 const collections = {
-  agents: { schema: agentRecordSchema, key: "id" },
-  tasks: { schema: taskSchema, key: "id" },
-  activities: { schema: activitySchema, key: "id" },
-  messages: { schema: mailboxMessageSchema, key: "id" },
+  swarms: { schema: swarmRecordSchema, key: byId },
+  agents: { schema: agentRecordSchema, key: byId },
+  tasks: { schema: taskSchema, key: taskKey },
+  activities: { schema: activitySchema, key: byId },
+  messages: { schema: mailboxMessageSchema, key: byId },
 } as const;
 type Collections = typeof collections;
 export type CollectionName = keyof Collections;
@@ -121,7 +143,7 @@ function writeAtomic(path: string, text: string): void {
 }
 
 function keyOf(collection: CollectionName, record: object): string {
-  return String((record as Record<string, unknown>)[collections[collection].key]);
+  return collections[collection].key(record as { id: string; swarmId?: string });
 }
 
 function applyChange(state: SwarmState, change: SwarmChange): void {

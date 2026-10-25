@@ -56,7 +56,7 @@ export function SwarmNewWorkspaceScreen({
                 roleClass,
                 projectId: target.projectId,
               }),
-              installation.invoke("swarm.board.read", {}),
+              installation.invoke("swarm.board.read", { projectId: target.projectId }),
             ]);
             const roles: SwarmRoleChoice[] = rolesSchema.parse(roleResponse);
             const board = swarmTaskBoardSchema.parse(boardResponse);

@@ -20,6 +20,7 @@ import {
 } from "../server/mailbox";
 import { registerOperations } from "../server/operations";
 import { StateStore, store } from "../server/state";
+import { backfillSwarms } from "../server/swarms";
 import { mailboxMessageStatus, type AgentRecord } from "../shared/models";
 import { mailboxReadRpc, sendMessageRpc } from "../shared/swarm";
 
@@ -160,8 +161,10 @@ function setup(t: { after(fn: () => void): void }) {
   return { turnStarted, turnEnded, send, sendTo, readMailbox };
 }
 
+// Seeded seats join a swarm the way records from before swarms do.
 async function seed(agents: AgentRecord[]) {
   await store.commit(() => agents.map((record) => ({ op: "put", collection: "agents", record })));
+  await backfillSwarms();
 }
 
 test("an undeliverable message stays queued, survives a restart, and is retried in order", async (t) => {

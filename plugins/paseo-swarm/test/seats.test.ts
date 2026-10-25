@@ -13,6 +13,7 @@ import { flushMailbox, forgetRunningTurns, MAX_DELIVERY_ATTEMPTS } from "../serv
 import { registerOperations } from "../server/operations";
 import { assemblePrompt, seatOfAgent } from "../server/seats";
 import { store } from "../server/state";
+import { backfillSwarms, swarmOf } from "../server/swarms";
 import { mailboxMessageStatus, type AgentRecord } from "../shared/models";
 import { bootConfig, planSeat, settingsLostOnProviderChange } from "../server/seat-policy";
 import {
@@ -246,14 +247,22 @@ function setup(t: { after(fn: () => void): void }) {
   return { call, turn };
 }
 
-// Seeded seats carry the current standing prompt, so delivery has no refresh to send them.
+// Seeded seats join a swarm the way records from before swarms do, and carry the current
+// standing prompt, so delivery has no refresh to send them.
 async function seed(fake: ReturnType<typeof fakePaseo>, agents: AgentRecord[]) {
   await store.commit(() =>
-    agents.map((record) => ({
-      op: "put",
-      collection: "agents",
-      record: { ...record, prompt: assemblePrompt(record, record.projectId).received },
-    })),
+    agents.map((record) => ({ op: "put" as const, collection: "agents" as const, record })),
+  );
+  await backfillSwarms();
+  await store.commit(() =>
+    agents.map(({ id }) => {
+      const record = seat(id);
+      return {
+        op: "put" as const,
+        collection: "agents" as const,
+        record: { ...record, prompt: assemblePrompt(record, swarmOf(record)).received },
+      };
+    }),
   );
   for (const agent of agents) {
     fake.runtime.set(agent.paseoAgentId!, {
@@ -809,6 +818,7 @@ test("a reserved seat starts its agent on its first message, held while the star
   await seed(fake, [supervisor]);
   const reserved: AgentRecord = {
     ...worker,
+    swarmId: seat(supervisor.id).swarmId,
     paseoAgentId: null,
     occupant: undefined,
     agentConfig: { provider: "fast/small", modeId: "build" },

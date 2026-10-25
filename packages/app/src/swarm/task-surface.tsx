@@ -1035,7 +1035,8 @@ function TaskDetail({
     let savedReceiptId: string | null = null;
     const sent = await model.submit(async (input) => {
       const receipt = swarmHumanActivityReceiptSchema.parse(
-        await invoke("swarm.activity.append_human", input),
+        // Task ids are unique only within a swarm.
+        await invoke("swarm.activity.append_human", { ...input, swarmId: task.swarmId }),
       );
       savedReceiptId = receipt.id;
       return receipt;
@@ -1055,7 +1056,7 @@ function TaskDetail({
       }
       onRefresh();
     }
-  }, [invoke, model, onRefresh, online]);
+  }, [invoke, model, onRefresh, online, task.swarmId]);
   const handleActivityKeyPress = useCallback<
     NonNullable<ComponentProps<typeof FormTextInput>["onKeyPress"]>
   >(

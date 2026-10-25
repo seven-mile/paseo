@@ -52,6 +52,9 @@ export type PastOccupant = z.infer<typeof pastOccupantSchema>;
 // A reserved seat has no occupant yet; its first mail starts one.
 export const agentRecordSchema = z.object({
   id: z.string(),
+  // The swarm the seat belongs to. Absent only on records from before swarms, until the startup
+  // backfill assigns one; see server/swarms.ts.
+  swarmId: z.string().optional(),
   paseoAgentId: z.string().nullable(),
   name: slugNameSchema,
   qualifiedName: z.string().optional(),
@@ -90,8 +93,10 @@ export function providerFamily(provider: string): string {
   return provider.split("/")[0];
 }
 
+// A Task id is unique within its swarm.
 export const taskSchema = z.object({
   id: slugNameSchema,
+  swarmId: z.string().optional(),
   title: z.string(),
   brief: z.string(),
   status: z.string(),
@@ -106,6 +111,7 @@ export type Task = z.infer<typeof taskSchema>;
 
 export const activitySchema = z.object({
   id: z.string(),
+  swarmId: z.string().optional(),
   taskId: slugNameSchema,
   actorName: z.string(),
   actorKind: z.preprocess((value) => value ?? "agent", z.enum(["agent", "human"])),
@@ -156,8 +162,32 @@ export function mailboxMessageStatus(
   return "queued";
 }
 
+// The PWA files a swarm last accepted, keyed by path within its directory: PWA.md and
+// roles/<role>.md. Prompts are assembled from these, never from the directory, so an edit there
+// reaches no agent until the swarm accepts it.
+export const swarmSourceSchema = z.object({
+  revision: z.string(),
+  files: z.record(z.string(), z.string()),
+});
+export type SwarmSource = z.infer<typeof swarmSourceSchema>;
+
+// A swarm instance: a directory that describes it, attached to one Paseo project. The id is
+// minted here and is the swarm's identity; the directory is where it is found and can move.
+export const swarmRecordSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  directory: z.string(),
+  // Null for a swarm of seats made with no project, before swarms.
+  projectId: z.string().nullable(),
+  source: swarmSourceSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type SwarmRecord = z.infer<typeof swarmRecordSchema>;
+
 export const stateSchema = z.object({
   version: z.literal(1),
+  swarms: z.array(swarmRecordSchema).default([]),
   agents: z.array(agentRecordSchema),
   tasks: z.array(taskSchema),
   activities: z.array(activitySchema),
@@ -165,8 +195,8 @@ export const stateSchema = z.object({
 });
 export type SwarmState = z.infer<typeof stateSchema>;
 // What the board shows; the mailbox is read through its own RPC.
-export type SwarmBoard = Omit<SwarmState, "messages">;
+export type SwarmBoard = Pick<SwarmState, "version" | "agents" | "tasks" | "activities">;
 
 export function emptyState(): SwarmState {
-  return { version: 1, agents: [], tasks: [], activities: [], messages: [] };
+  return { version: 1, swarms: [], agents: [], tasks: [], activities: [], messages: [] };
 }

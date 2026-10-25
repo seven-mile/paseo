@@ -3,6 +3,13 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 
+// A PWA as files, keyed by path within its directory: PWA.md and roles/<role>.md. Swarm reads a
+// directory into this once, when it accepts it, and parses prompts from the accepted copy.
+export type PwaFiles = Readonly<Record<string, string>>;
+
+const PWA_FILE = "PWA.md";
+const rolePath = (role: string) => `roles/${role}.md`;
+
 export type RoleClass = "planner" | "supervisor" | "worker";
 
 export interface Pwa {
@@ -60,29 +67,42 @@ function validateRole(role: string): void {
   }
 }
 
-export function readPwa(directory: string, role: string): Pwa {
-  validateRole(role);
-
-  const pwaPath = join(directory, "PWA.md");
-  const rolePath = join(directory, "roles", `${role}.md`);
+// Reads the files a PWA directory holds. Other files in it are not part of the PWA.
+export function readPwaFiles(directory: string): Record<string, string> {
   let pwaSource: string;
-  let roleSource: string;
   try {
-    pwaSource = readFileSync(pwaPath, "utf8");
+    pwaSource = readFileSync(join(directory, PWA_FILE), "utf8");
   } catch (error) {
     throw new Error(
       `Missing PWA.md in ${directory}: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
     );
   }
-  try {
-    roleSource = readFileSync(rolePath, "utf8");
-  } catch (error) {
-    throw new Error(
-      `Missing role: ${role}: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
+  const files: Record<string, string> = { [PWA_FILE]: pwaSource };
+  const rolesDirectory = join(directory, "roles");
+  for (const entry of readdirSync(rolesDirectory, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+    files[`roles/${entry.name}`] = readFileSync(join(rolesDirectory, entry.name), "utf8");
   }
+  return files;
+}
+
+// Changes when any file of the PWA changes.
+export function pwaFilesRevision(files: PwaFiles): string {
+  const hash = createHash("sha256");
+  for (const path of Object.keys(files).sort()) {
+    hash.update(path).update("\0").update(files[path]).update("\0");
+  }
+  return hash.digest("hex");
+}
+
+export function readPwa(files: PwaFiles, role: string): Pwa {
+  validateRole(role);
+
+  const pwaSource = files[PWA_FILE];
+  if (pwaSource === undefined) throw new Error("Missing PWA.md");
+  const roleSource = files[rolePath(role)];
+  if (roleSource === undefined) throw new Error(`Missing role: ${role}`);
 
   const pwaDocument = document(pwaSource, "PWA.md");
   const pwa = record(pwaDocument.data, "PWA.md");
@@ -125,33 +145,29 @@ export function readPwa(directory: string, role: string): Pwa {
   };
 }
 
-export function listPwaRoles(directory: string): PwaRole[] {
-  const rolesDirectory = join(directory, "roles");
-  return readdirSync(rolesDirectory, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-    .map((entry) => {
-      const role = entry.name.slice(0, -3);
+export function listPwaRoles(files: PwaFiles): PwaRole[] {
+  return Object.entries(files)
+    .filter(([path]) => path.startsWith("roles/"))
+    .map(([path, source]) => {
+      const name = path.slice("roles/".length);
+      const role = name.slice(0, -3);
       validateRole(role);
-      const roleDocument = document(
-        readFileSync(join(rolesDirectory, entry.name), "utf8"),
-        `roles/${entry.name}`,
-      );
-      const roleData = record(roleDocument.data, `roles/${entry.name}`);
-      if (roleData.version !== 1)
-        throw new Error(`roles/${entry.name} frontmatter version must be 1`);
+      const roleDocument = document(source, `roles/${name}`);
+      const roleData = record(roleDocument.data, `roles/${name}`);
+      if (roleData.version !== 1) throw new Error(`roles/${name} frontmatter version must be 1`);
       const roleClassValue = roleData.roleClass;
       if (
         roleClassValue !== "planner" &&
         roleClassValue !== "supervisor" &&
         roleClassValue !== "worker"
       ) {
-        throw new Error(`roles/${entry.name} frontmatter roleClass is invalid`);
+        throw new Error(`roles/${name} frontmatter roleClass is invalid`);
       }
       const roleClass: RoleClass = roleClassValue;
       const title =
         roleData.title === undefined
           ? role
-          : requiredString(roleData.title, "title", `roles/${entry.name}`);
+          : requiredString(roleData.title, "title", `roles/${name}`);
       return { role, roleClass, title, description: roleDocument.body };
     })
     .sort((left, right) => left.role.localeCompare(right.role));

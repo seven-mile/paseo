@@ -13,6 +13,8 @@ import contribute from "../index.server";
 import { forgetRunningTurns } from "../server/mailbox";
 import { notifyManager, registerOperations } from "../server/operations";
 import { seatView } from "../server/seats";
+import { pwaFilesRevision, readPwaFiles } from "../server/pwa";
+import { backfillSwarms, createSwarm, swarmOf } from "../server/swarms";
 import {
   getConfigPath,
   getEventLogPath,
@@ -45,6 +47,8 @@ async function seed(seeded: SwarmState): Promise<void> {
       (record): SwarmChange => ({ op: "put", collection: "activities", record }),
     ),
   ]);
+  // Seeded records join a swarm the way records from before swarms do.
+  await backfillSwarms();
 }
 
 function readDisk(): string {
@@ -59,7 +63,7 @@ function readDisk(): string {
     .join("\0");
 }
 
-function boardOf({ messages: _messages, ...board }: Readonly<SwarmState>) {
+function boardOf({ messages: _messages, swarms: _swarms, ...board }: Readonly<SwarmState>) {
   return {
     ...board,
     agents: board.agents.filter((agent) => agent.paseoAgentId !== null).map(seatView),
@@ -358,8 +362,8 @@ test("supervisors require independent placement, workers keep caller defaults, a
       workspaceId: "supervisor-workspace",
     })) as AgentRecord;
     assert.equal(bound.projectId, "project");
-    const legacyOverride = await prepareLegacy("legacy-override");
-    runtimeWorkspaces.set(legacyOverride.agentId, "supervisor-workspace");
+    // A project given a PWA directory gets a swarm of its own: a copy, so the chosen directory is
+    // never written.
     const source = join(home, "agreement");
     mkdirSync(join(source, "roles"), { recursive: true });
     writeFileSync(
@@ -370,33 +374,19 @@ test("supervisors require independent placement, workers keep caller defaults, a
       join(source, "roles", "director.md"),
       "---\nversion: 1\nroleClass: planner\n---\nDirect.\n",
     );
-    writeFileSync(
-      join(source, "roles", "researcher.md"),
-      "---\nversion: 1\nroleClass: worker\n---\nFirst role.\n",
-    );
-    assert.deepEqual(
-      await invoke(pwaSourceSetRpc.name, { projectId: "project", path: "agreement" }),
-      { path: source },
-    );
-    assert.deepEqual(await invoke(pwaSourceReadRpc.name, { projectId: "project" }), {
-      path: source,
-    });
-    const legacyPrompt = legacyOverride.systemPrompt;
+    const firstRole = "---\nversion: 1\nroleClass: worker\n---\nFirst role.\n";
+    writeFileSync(join(source, "roles", "researcher.md"), firstRole);
+    const attached = (await invoke(pwaSourceSetRpc.name, {
+      projectId: "project",
+      path: "agreement",
+    })) as { path: string };
+    assert.notEqual(attached.path, source);
+    assert.equal(readFileSync(join(attached.path, "roles", "researcher.md"), "utf8"), firstRole);
+    assert.deepEqual(await invoke(pwaSourceReadRpc.name, { projectId: "project" }), attached);
     await assert.rejects(
-      async () =>
-        invoke(bindPreparedAgentRpc.name, {
-          agentId: legacyOverride.agentId,
-          workspaceId: "supervisor-workspace",
-        }),
-      /Prepare this agent with the selected project before binding its PWA directory/,
+      async () => invoke(pwaSourceSetRpc.name, { projectId: "project", path: "agreement" }),
+      /already has a swarm/,
     );
-    const unbound = store
-      .read()
-      .agents.find((agent) => agent.paseoAgentId === legacyOverride.agentId);
-    assert.equal(unbound?.workspaceId, null);
-    assert.equal(unbound?.projectId, undefined);
-    assert.equal(legacyOverride.systemPrompt, legacyPrompt);
-
     await assert.rejects(
       async () => invoke(pwaSourceSetRpc.name, { projectId: "missing", path: source }),
       /Unknown project/,
@@ -409,45 +399,34 @@ test("supervisors require independent placement, workers keep caller defaults, a
       choices.map((role) => role.role),
       ["director"],
     );
-    writeFileSync(
-      join(source, "PWA.md"),
-      "---\nversion: 1\nproject: Override\nstatuses: [review, survey, completed]\n---\nFresh project.\n",
-    );
+    // Edits to the chosen directory or to the swarm's own reach no one until the swarm accepts them.
+    for (const directory of [source, attached.path]) {
+      writeFileSync(
+        join(directory, "PWA.md"),
+        "---\nversion: 1\nproject: Override\nstatuses: [review, survey, completed]\n---\nEdited.\n",
+      );
+    }
     const readStatuses = async () =>
       boardReadRpc.output.parse(await invoke(boardReadRpc.name, { projectId: "project" })).statuses;
-    assert.deepEqual(await readStatuses(), ["review", "survey", "completed"]);
-    writeFileSync(
-      join(source, "PWA.md"),
-      "---\nversion: 1\nproject: Override\nstatuses: [completed, review]\n---\nFresh project.\n",
-    );
-    assert.deepEqual(await readStatuses(), ["completed", "review"]);
-    assert.equal("statuses" in store.read(), false);
+    assert.deepEqual(await readStatuses(), []);
     assert.deepEqual(await invoke(boardReadRpc.name, {}), boardOf(store.read()));
     const prepare = (name: string) =>
       invoke(
         prepareAgentRpc.name,
         prepareAgentRpc.input.parse({
           name,
+          projectId: "project",
           roleClass: "worker",
           role: "researcher",
-          reportsTo: "planner.supervisor",
         }),
       ) as Promise<{ agentId: string; systemPrompt: string; agent: AgentRecord }>;
     const first = await prepare("fresh-one");
     assert.match(first.systemPrompt, /Fresh project/);
     assert.match(first.systemPrompt, /First role/);
-    writeFileSync(
-      join(source, "roles", "researcher.md"),
-      "---\nversion: 1\nroleClass: worker\n---\nSecond role.\n",
-    );
+    writeFileSync(join(attached.path, "roles", "researcher.md"), "invalid");
     const second = await prepare("fresh-two");
-    assert.match(second.systemPrompt, /Second role/);
-    assert.doesNotMatch(first.systemPrompt, /Second role/);
+    assert.match(second.systemPrompt, /First role/);
     assert.doesNotMatch(prompts[1], /Fresh project/);
-    const count = store.read().agents.length;
-    writeFileSync(join(source, "roles", "researcher.md"), "invalid");
-    await assert.rejects(async () => prepare("invalid-preparation"), /YAML frontmatter/);
-    assert.equal(store.read().agents.length, count);
     runtimeWorkspaces.set(first.agentId, "other-workspace");
     await assert.rejects(
       async () =>
@@ -786,7 +765,7 @@ test("human Activity stays saved when notification fails; storage failure still 
   }
 });
 
-test("plain board reads bypass absent or corrupt sources; project reads resolve PWA statuses", async () => {
+test("board reads never read a PWA directory; a project's statuses come from its accepted PWA", async () => {
   const home = mkdtempSync(join(tmpdir(), "swarm-board-"));
   const previousHome = process.env.PASEO_HOME;
   const previousPwa = process.env.PASEO_SWARM_PWA_ROOT;
@@ -817,24 +796,33 @@ test("plain board reads bypass absent or corrupt sources; project reads resolve 
   try {
     await seed(emptyState());
     const original = boardOf(store.read());
+    const statuses = async (projectId: string) =>
+      boardReadRpc.output.parse(await invoke(projectId)).statuses;
     assert.deepEqual(await invoke(), original);
-    assert.deepEqual(boardReadRpc.output.parse(await invoke("project")).statuses, []);
+    assert.deepEqual(await statuses("project"), []);
     await assert.rejects(async () => invoke("missing"), /Unknown project/);
     process.env.PASEO_SWARM_PWA_ROOT = join(home, "missing");
-    assert.deepEqual(await invoke(), original);
-    await assert.rejects(async () => invoke("project"), /ENOENT/);
     mkdirSync(dirname(getConfigPath()), { recursive: true });
     writeFileSync(getConfigPath(), "corrupt config");
     assert.deepEqual(await invoke(), original);
-    await assert.rejects(async () => invoke("project"), SyntaxError);
-    writeFileSync(getConfigPath(), JSON.stringify({ pwaRoot: home }));
-    mkdirSync(join(home, "roles"));
+    assert.deepEqual(await statuses("project"), []);
+    const source = join(home, "agreement");
+    mkdirSync(join(source, "roles"), { recursive: true });
     writeFileSync(
-      join(home, "roles", "developer.md"),
-      "---\nversion: 1\nroleClass: worker\n---\nDevelop.\n",
+      join(source, "PWA.md"),
+      "---\nversion: 1\nproject: Board\nstatuses: [survey, completed]\n---\nWork.\n",
     );
-    await assert.rejects(async () => invoke("project"), /must contain a planner role/);
-    assert.deepEqual(await invoke(), original);
+    writeFileSync(
+      join(source, "roles", "director.md"),
+      "---\nversion: 1\nroleClass: planner\n---\nDirect.\n",
+    );
+    const swarm = await createSwarm({ sourceDirectory: source, projectId: "project" });
+    assert.deepEqual(await statuses("project"), ["survey", "completed"]);
+    writeFileSync(
+      join(swarm.directory, "PWA.md"),
+      "---\nversion: 1\nproject: Board\nstatuses: [done]\n---\nWork.\n",
+    );
+    assert.deepEqual(await statuses("project"), ["survey", "completed"]);
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
     else process.env.PASEO_HOME = previousHome;
@@ -907,15 +895,17 @@ test("roster reads filter native availability without releasing historical names
       /already exists/,
     );
     available = true;
+    const [seated] = store.read().agents;
+    assert.ok(seated.swarmId);
     assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, [
-      { ...agent, pending: null },
+      { ...agent, swarmId: seated.swarmId, pending: null },
     ]);
     available = false;
     assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, []);
     fail = true;
     await assert.rejects(async () => invoke(boardReadRpc, {}), /daemon unavailable/);
     assert.equal(readDisk(), before);
-    assert.deepEqual(store.read().agents, [agent]);
+    assert.deepEqual(store.read().agents, [seated]);
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
     else process.env.PASEO_HOME = previousHome;
@@ -1056,9 +1046,9 @@ test("prompt refresh re-assembles the standing prompt and records the received r
   const source = join(home, "agreement");
   mkdirSync(join(source, "roles"), { recursive: true });
   writeFileSync(join(source, "PWA.md"), "---\nversion: 1\nproject: Refresh\n---\nProject one.\n");
-  const writeRole = (body: string) =>
+  const writeRole = (body: string, directory = source) =>
     writeFileSync(
-      join(source, "roles", "planner.md"),
+      join(directory, "roles", "planner.md"),
       `---\nversion: 1\nroleClass: planner\n---\n${body}\n`,
     );
   writeRole("Role one.");
@@ -1098,7 +1088,18 @@ test("prompt refresh re-assembles the standing prompt and records the received r
     assert.match(unchanged.prompt, /Role one\./);
     assert.doesNotMatch(unchanged.prompt, /One-time orientation/);
 
-    writeRole("Role two.");
+    // An edit on disk is not accepted, so it reaches no prompt.
+    const swarm = swarmOf(prepared.agent);
+    writeRole("Role two.", swarm.directory);
+    assert.equal((await refresh(prepared.agentId)).changed, false);
+    const files = readPwaFiles(swarm.directory);
+    await store.commit(() => [
+      {
+        op: "put",
+        collection: "swarms",
+        record: { ...swarm, source: { revision: pwaFilesRevision(files), files } },
+      },
+    ]);
     const changed = await refresh(prepared.agentId);
     assert.equal(changed.changed, true);
     assert.equal(changed.previousRevision, created.revision);
@@ -1140,8 +1141,8 @@ test("prompt refresh re-assembles the standing prompt and records the received r
     );
 
     await assert.rejects(async () => refresh("missing-agent"), /Unknown active Swarm agent/);
-    writeFileSync(join(source, "roles", "planner.md"), "invalid");
-    await assert.rejects(async () => refresh(prepared.agentId), /YAML frontmatter/);
+    writeFileSync(join(swarm.directory, "roles", "planner.md"), "invalid");
+    assert.equal((await refresh(prepared.agentId)).changed, false);
     assert.equal(
       store.read().agents.find((agent) => agent.paseoAgentId === prepared.agentId)?.prompt
         ?.revision,

@@ -4,7 +4,7 @@ A Swarm role is bound to a Paseo agent, and a Paseo agent is fragile. Its contex
 
 ## Model
 
-A seat is an agent record (`AgentRecord`, keyed by its roster `id`). Its name, role class, role, reporting line, Tasks, Activities, and mailbox belong to the seat. The Paseo agent in `paseoAgentId` is the seat's current **occupant**.
+A seat is an agent record (`AgentRecord`, keyed by its roster `id`). Its name, role class, role, reporting line, Tasks, Activities, and mailbox belong to the seat. The Paseo agent in `paseoAgentId` is the seat's current **occupant**. A seat belongs to one swarm and its name is unique only there; see [swarms](../docs/plugins.md#built-in-plugins) for the swarm instance and its accepted PWA.
 
 Creating a seat only reserves it: `swarm_seat_create` writes the record with `paseoAgentId: null` and resolves its workspace. The first message to the seat starts its agent, through the same delivery path that replaces a stale one. Until then the seat is listed for its team but left out of `swarm.board.read`, so an app from before seats sees only seats with agents.
 
@@ -38,10 +38,10 @@ The policy is conservative: a difference it does not know to be safe gets a new 
 Reconciling lives in mailbox delivery (`syncSeat` in `plugins/paseo-swarm/server/mailbox.ts`), which carries team messages, human Activities, and turn digests. Typing into the agent's own conversation addresses that Paseo agent directly and changes nothing about the seat. Before delivering to a seat whose plan is not keep:
 
 1. If the occupant is mid-turn, the seat's mail is held. The occupant finishes its turn, and the turn end flushes the mailbox again. If Paseo cannot report the occupant's status, the mail is held too, since replacing an agent that may be mid-turn would cut that turn off.
-2. The plan runs. A seat's first agent starts in its workspace with the standing prompt assembled from the current PWA. A replacement gets the same prompt plus a takeover brief. Swarm picks the new agent's id and holds it as arriving in the seat until the seat binds it, since Paseo builds an agent's tool catalog while its session opens; a revived agent arrives the same way while its session resumes. A revived agent gets a return brief, which also probes whether its session can resume; if the send fails, the seat gets a new agent instead. A session that accepts the brief and fails later in that turn is not caught; reset the seat.
+2. The plan runs. A seat's first agent starts in its workspace with the standing prompt assembled from the swarm's accepted PWA. A replacement gets the same prompt plus a takeover brief. Swarm picks the new agent's id and holds it as arriving in the seat until the seat binds it, since Paseo builds an agent's tool catalog while its session opens; a revived agent arrives the same way while its session resumes. A revived agent gets a return brief, which also probes whether its session can resume; if the send fails, the seat gets a new agent instead. A session that accepts the brief and fails later in that turn is not caught; reset the seat.
 3. Rows the old occupant was handed but never finished a turn on go back to the queue, ahead of newer mail.
 4. Children whose Paseo parent is the old occupant are detached, then the old occupant is archived. Archiving cascades to Paseo children, which would take a supervisor's workers with it.
-5. If the seat's `prompt.revision` differs from the standing prompt assembled now, the current one is sent first, so a PWA edit or a daemon upgrade reaches running agents without a reset. A failed refresh is logged and does not hold the mail.
+5. If the seat's `prompt.revision` differs from the standing prompt assembled now, the current one is sent first, so an accepted PWA change or a daemon upgrade reaches running agents without a reset. A failed refresh is logged and does not hold the mail.
 6. The held mail is delivered.
 
 If a plan fails, the head message records the error in `lastError` and stays queued without spending its send attempts, so a provider that is down for an hour does not fail the mail. Every later flush tries again. The old occupant stays bound but gets no mail.
@@ -80,7 +80,7 @@ People and operators manage seats through plugin RPCs; agents work through daemo
 | `swarm.seat.reset`        | `paseo-swarm swarm seat reset`   |                                      |
 | `swarm.seat.history.read` | `paseo-swarm swarm seat history` | `swarm_transcript_list`              |
 
-`update` and `reset` take several seats and a `dryRun` flag, and return each seat with its pending plan as `pending: { kind, reason } | null`, so `--json` and `--dry-run` show whether the next mail starts, adjusts, revives, or replaces. A field set to `null` in `update` stops being compared. `reset --cancel` withdraws a reset that has not taken effect. In-place changes go through the agent handle's `applyConfig` in the Paseo client SDK.
+`update` and `reset` take several seats and a `dryRun` flag, and return each seat with its pending plan as `pending: { kind, reason } | null`, so `--json` and `--dry-run` show whether the next mail starts, adjusts, revives, or replaces. A field set to `null` in `update` stops being compared. `reset --cancel` withdraws a reset that has not taken effect. The CLI's seat commands take `--swarm <id>` when a seat name exists in several swarms. In-place changes go through the agent handle's `applyConfig` in the Paseo client SDK.
 
 Agents read transcripts for their own seat and the seats under them; planners read any seat. Agents cannot edit seats in this version.
 

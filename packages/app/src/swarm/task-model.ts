@@ -73,6 +73,7 @@ const agentSchema = z.object({
 });
 const taskSchema = z.object({
   id: z.string(),
+  swarmId: z.string().optional(),
   title: z.string(),
   brief: z.string(),
   status: z.string(),

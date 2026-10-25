@@ -8,6 +8,8 @@ export const SWARM_SEAT_LABEL = "paseo-swarm.seat";
 
 export interface SwarmSeat {
   id: string;
+  // Absent only for a seat the plugin has not yet given a swarm; the plugin then finds it by name.
+  swarmId?: string;
   // Null for a reserved seat, whose first message starts its agent.
   paseoAgentId: string | null;
   name: string;

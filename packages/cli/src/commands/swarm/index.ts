@@ -17,6 +17,7 @@ interface AgentConfig {
 
 interface Seat {
   id: string;
+  swarmId?: string;
   // Null until the seat's first message starts its agent.
   paseoAgentId: string | null;
   name: string;
@@ -30,6 +31,7 @@ interface Seat {
 
 interface SeatRow {
   seat: string;
+  swarm: string;
   role: string;
   occupant: number | string;
   agent: string;
@@ -58,6 +60,7 @@ function configSummary(config: AgentConfig | undefined): string {
 function toSeatRow(seat: Seat): SeatRow {
   return {
     seat: seat.qualifiedName ?? seat.name,
+    swarm: seat.swarmId ?? "-",
     role: `${seat.roleClass}/${seat.role}`,
     occupant: seat.paseoAgentId === null ? "-" : (seat.occupant?.number ?? 1),
     agent: seat.paseoAgentId ?? "-",
@@ -72,6 +75,7 @@ const seatSchema: OutputSchema<SeatRow> = {
   idField: "seat",
   columns: [
     { header: "SEAT", field: "seat" },
+    { header: "SWARM", field: "swarm" },
     { header: "ROLE", field: "role" },
     { header: "OCCUPANT", field: "occupant", align: "right" },
     { header: "AGENT", field: "agent" },
@@ -95,25 +99,33 @@ const historySchema: OutputSchema<HistoryEntryRow> = {
   ],
 };
 
+// Seat names are unique only within a swarm; --swarm names the swarm when several use one name.
+interface SwarmOptions extends CommandOptions {
+  swarm?: string;
+}
+
 async function invokeSwarm(
-  options: CommandOptions,
+  options: SwarmOptions,
   method: string,
   input: Record<string, unknown>,
 ): Promise<unknown> {
   const client = await connectToDaemon({ target: options.daemonTarget });
   try {
-    return await client.invokePluginRpc(SWARM_PLUGIN, method, input);
+    return await client.invokePluginRpc(SWARM_PLUGIN, method, {
+      ...input,
+      ...(options.swarm ? { swarmId: options.swarm } : {}),
+    });
   } finally {
     await client.close().catch(() => undefined);
   }
 }
 
-async function seatList(method: string, input: Record<string, unknown>, options: CommandOptions) {
+async function seatList(method: string, input: Record<string, unknown>, options: SwarmOptions) {
   const { seats } = (await invokeSwarm(options, method, input)) as { seats: Seat[] };
   return { type: "list", data: seats.map(toSeatRow), schema: seatSchema } as ListResult<SeatRow>;
 }
 
-interface LsOptions extends CommandOptions {
+interface LsOptions extends SwarmOptions {
   project?: string;
   all?: boolean;
 }
@@ -126,7 +138,7 @@ function runLs(options: LsOptions, _command: Command): Promise<ListResult<SeatRo
   );
 }
 
-interface SetOptions extends CommandOptions {
+interface SetOptions extends SwarmOptions {
   provider?: string;
   mode?: string;
   thinking?: string;
@@ -173,7 +185,7 @@ function runSet(
   return seatList("swarm.seat.update", { seats, agentConfig, dryRun: !!options.dryRun }, options);
 }
 
-interface ResetOptions extends CommandOptions {
+interface ResetOptions extends SwarmOptions {
   cancel?: boolean;
   dryRun?: boolean;
 }
@@ -190,7 +202,7 @@ function runReset(
   );
 }
 
-interface HistoryOptions extends CommandOptions {
+interface HistoryOptions extends SwarmOptions {
   occupant?: string;
   before?: string;
   limit?: string;
@@ -247,6 +259,12 @@ async function runHistory(
   return { type: "single", data: history, schema: seatHistorySchema };
 }
 
+function addSeatOptions(command: Command): Command {
+  return addJsonAndDaemonHostOptions(
+    command.option("--swarm <id>", "The swarm whose seats to use, from the SWARM column of ls"),
+  );
+}
+
 export function createSwarmCommand(): Command {
   const swarm = new Command("swarm").description("Manage the Swarm plugin");
   const seat = swarm
@@ -254,7 +272,7 @@ export function createSwarmCommand(): Command {
     .description(
       "Manage Swarm seats: the roster identities whose Paseo agents can be replaced. A seat's next Swarm mailbox delivery, after any running turn, brings its agent in line with the seat: in place where the context survives, otherwise with an earlier or a new agent. Changes made in the agent's own chat are left alone until then.",
     );
-  addJsonAndDaemonHostOptions(
+  addSeatOptions(
     seat
       .command("ls")
       .description(
@@ -263,7 +281,7 @@ export function createSwarmCommand(): Command {
       .option("--project <id>", "Only seats in this project")
       .option("-a, --all", "Include retired seats"),
   ).action(withOutput(runLs));
-  addJsonAndDaemonHostOptions(
+  addSeatOptions(
     seat
       .command("set")
       .description(
@@ -283,7 +301,7 @@ export function createSwarmCommand(): Command {
       )
       .option("--dry-run", "Show the result without saving it"),
   ).action(withOutput(runSet));
-  addJsonAndDaemonHostOptions(
+  addSeatOptions(
     seat
       .command("reset")
       .description(
@@ -293,7 +311,7 @@ export function createSwarmCommand(): Command {
       .option("--cancel", "Withdraw a reset that has not taken effect")
       .option("--dry-run", "Show the result without saving it"),
   ).action(withOutput(runReset));
-  addJsonAndDaemonHostOptions(
+  addSeatOptions(
     seat
       .command("history")
       .description("Read the transcript of a seat's agent, newest first")

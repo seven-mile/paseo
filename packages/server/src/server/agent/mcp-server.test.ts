@@ -835,6 +835,7 @@ function createPaseoWorktreeForMcpTest(options: {
 describe("Swarm MCP coordination", () => {
   const seat = (qualifiedName: string, roleClass: string, paseoAgentId: string | null) => ({
     id: `${qualifiedName}-record`,
+    swarmId: "swarm",
     paseoAgentId,
     name: qualifiedName.split(".").at(-1),
     qualifiedName,
@@ -1002,6 +1003,7 @@ describe("Swarm MCP coordination", () => {
           nextCursor: null,
         });
         expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.pwa_roles.read", {
+          swarmId: "swarm",
           roleClass: roleClass === "planner" ? "supervisor" : "worker",
           projectId: "parent-project",
         });
@@ -1017,6 +1019,7 @@ describe("Swarm MCP coordination", () => {
           workspaceId: "isolated-worktree",
         });
         expect(invokePlugin).toHaveBeenLastCalledWith("paseo-swarm", "swarm.seat.create", {
+          swarmId: "swarm",
           name: "child",
           role: "researcher",
           provider: "codex/gpt-6.1-sol",
@@ -1053,6 +1056,7 @@ describe("Swarm MCP coordination", () => {
           actorName: "someone-else",
         });
         expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.task.update", {
+          swarmId: "swarm",
           taskId: "review-api",
           workerNames: ["reviewer"],
           actorName: "planner.supervisor",
@@ -1164,6 +1168,7 @@ describe("Swarm MCP coordination", () => {
         { limit: 10, cursor: "newer" },
       );
       expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.seat.history.read", {
+        swarmId: "swarm",
         seat: "planner.supervisor.scout",
         actorName: "planner.supervisor.scout",
         limit: 10,
@@ -1210,7 +1215,12 @@ describe("Swarm MCP coordination", () => {
       ).name;
     try {
       await send("review");
+      // Names resolve among the caller's swarm only.
+      expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.seat.list", {
+        swarmId: "swarm",
+      });
       expect(invokePlugin).toHaveBeenLastCalledWith("paseo-swarm", "swarm.message.send", {
+        swarmId: "swarm",
         recipientName: "alpha.team.review",
         senderName: "alpha.team.scout",
         actorName: "alpha.team.scout",

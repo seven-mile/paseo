@@ -20,7 +20,10 @@ export const seatSchema = agentRecordSchema.extend({
 
 export const boardReadRpc = defineRpc({
   name: "swarm.board.read",
-  input: z.object({ projectId: z.string().min(1).optional() }),
+  input: z.object({
+    projectId: z.string().min(1).optional(),
+    swarmId: z.string().min(1).optional(),
+  }),
   output: z.object({
     version: z.literal(1),
     agents: z.array(seatSchema),
@@ -45,6 +48,7 @@ export const pwaSourceSetRpc = defineRpc({
 export const pwaRolesReadRpc = defineRpc({
   name: "swarm.pwa_roles.read",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     roleClass: roleClassSchema.optional(),
     path: z.string().min(1).optional(),
     projectId: z.string().min(1).optional(),
@@ -62,6 +66,7 @@ export const pwaRolesReadRpc = defineRpc({
 export const registerAgentRpc = defineRpc({
   name: "swarm.agent.register",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     projectId: z.string().min(1).optional(),
     paseoAgentId: z.string(),
     name: slugNameSchema,
@@ -79,6 +84,7 @@ export const registerAgentRpc = defineRpc({
 export const createSeatRpc = defineRpc({
   name: "swarm.seat.create",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     projectId: z.string().min(1).optional(),
     name: slugNameSchema,
     aliases: z.array(z.string()).default([]),
@@ -100,6 +106,7 @@ export const createSeatRpc = defineRpc({
 export const prepareAgentRpc = defineRpc({
   name: "swarm.agent.prepare",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     projectId: z.string().min(1).optional(),
     name: slugNameSchema,
     aliases: z.array(z.string()).default([]),
@@ -136,6 +143,7 @@ export const refreshPromptRpc = defineRpc({
 export const createTaskRpc = defineRpc({
   name: "swarm.task.create",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     id: slugNameSchema,
     title: z.string().min(1),
     brief: z.string().min(1),
@@ -151,6 +159,7 @@ export const createTaskRpc = defineRpc({
 export const updateTaskRpc = defineRpc({
   name: "swarm.task.update",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     taskId: slugNameSchema,
     actorName: z.string(),
     status: z.string().min(1).optional(),
@@ -165,6 +174,7 @@ export const updateTaskRpc = defineRpc({
 export const appendActivityRpc = defineRpc({
   name: "swarm.activity.append",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     taskId: slugNameSchema,
     actorName: z.string(),
     replyTo: z.string().nullable().default(null),
@@ -179,6 +189,8 @@ export const appendActivityRpc = defineRpc({
 export const appendHumanActivityRpc = defineRpc({
   name: "swarm.activity.append_human",
   input: z.object({
+    projectId: z.string().min(1).optional(),
+    swarmId: z.string().min(1).optional(),
     taskId: slugNameSchema,
     actorName: z.string().min(1).default("human"),
     replyTo: z.string().nullable().default(null),
@@ -193,6 +205,7 @@ export const appendHumanActivityRpc = defineRpc({
 export const sendMessageRpc = defineRpc({
   name: "swarm.message.send",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     taskId: slugNameSchema.nullable().default(null),
     actorName: z.string().nullable().default(null),
     senderName: z.string().min(1),
@@ -210,6 +223,7 @@ export const sendMessageRpc = defineRpc({
 export const mailboxReadRpc = defineRpc({
   name: "swarm.mailbox.read",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     recipientName: z.string().min(1).optional(),
     senderName: z.string().min(1).optional(),
     status: mailboxStatusSchema.optional(),
@@ -223,6 +237,7 @@ export const mailboxReadRpc = defineRpc({
 export const seatListRpc = defineRpc({
   name: "swarm.seat.list",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     projectId: z.string().min(1).optional(),
     includeRetired: z.boolean().default(false),
     // Only the seat this Paseo agent occupies, or is arriving in while its session opens.
@@ -237,6 +252,7 @@ const seatReferencesSchema = z.array(z.string().min(1)).min(1);
 export const seatUpdateRpc = defineRpc({
   name: "swarm.seat.update",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     seats: seatReferencesSchema,
     agentConfig: z.object({
       provider: z.string().min(1).nullable().optional(),
@@ -252,6 +268,7 @@ export const seatUpdateRpc = defineRpc({
 export const seatResetRpc = defineRpc({
   name: "swarm.seat.reset",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     seats: seatReferencesSchema,
     // Withdraws a Reset that has not taken effect yet.
     cancel: z.boolean().default(false),
@@ -263,6 +280,7 @@ export const seatResetRpc = defineRpc({
 export const seatHistoryReadRpc = defineRpc({
   name: "swarm.seat.history.read",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     seat: z.string().min(1),
     // Set when an agent reads: planners read any seat, others their own and the seats under them.
     actorName: z.string().min(1).optional(),

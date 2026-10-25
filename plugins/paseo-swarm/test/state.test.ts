@@ -9,6 +9,7 @@ import {
   getSnapshotPath,
   StateLoadError,
   StateStore,
+  taskKey,
 } from "../server/state";
 import { emptyState, type Task } from "../shared/models";
 
@@ -86,12 +87,30 @@ test(
     await store.commit(() => [{ op: "put", collection: "tasks", record: task("a") }]);
     await store.commit(() => [{ op: "put", collection: "tasks", record: task("b") }]);
     await store.commit(() => [{ op: "put", collection: "tasks", record: task("a", "done") }]);
-    await store.commit(() => [{ op: "delete", collection: "tasks", key: "b" }]);
+    await store.commit(() => [{ op: "delete", collection: "tasks", key: taskKey(task("b")) }]);
     assert.equal(read(getEventLogPath()).trim().split("\n").length, 4);
     assert.deepEqual(new StateStore().read().tasks, [task("a", "done")]);
     // Loading folds the log into the snapshot.
     assert.equal(read(getEventLogPath()), "");
     assert.deepEqual(new StateStore().read().tasks, [task("a", "done")]);
+  }),
+);
+
+test(
+  "Tasks with one id in two swarms are two records",
+  withHome(async () => {
+    const store = new StateStore();
+    await store.commit(() => [
+      { op: "put", collection: "tasks", record: { ...task("a"), swarmId: "one" } },
+      { op: "put", collection: "tasks", record: { ...task("a", "done"), swarmId: "two" } },
+    ]);
+    assert.deepEqual(
+      new StateStore().read().tasks.map((record) => [record.swarmId, record.status]),
+      [
+        ["one", "survey"],
+        ["two", "done"],
+      ],
+    );
   }),
 );
 

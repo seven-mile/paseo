@@ -6,6 +6,7 @@ import type {
   MailboxMessage,
   Occupant,
   PastOccupant,
+  SwarmRecord,
 } from "../shared/models";
 import {
   agentQualifiedName,
@@ -31,15 +32,20 @@ import {
   type PendingPlan,
   type SeatPlan,
 } from "./seat-policy";
-import { requirePwaSource } from "./source";
 import { store } from "./state";
+import { swarmOf } from "./swarms";
 
 type SeatContext = Pick<PluginHookContext, "paseo">;
 
 const PARENT_LABEL = "paseo.parent-agent-id";
-// Marks every agent Swarm starts for a seat, with the seat's id. The daemon reads it to keep native
-// agent tools from a seat's agent when it cannot reach Swarm to look the seat up.
+// Marks every agent Swarm starts for a seat, with the seat's swarm and qualified name. The daemon
+// reads it to keep native agent tools from a seat's agent when it cannot reach Swarm to look the
+// seat up.
 const SEAT_LABEL = "paseo-swarm.seat";
+
+function seatLabels(seat: AgentRecord): Record<string, string> {
+  return { [SEAT_LABEL]: `${swarmOf(seat).id}/${agentQualifiedName(seat)}` };
+}
 
 const now = () => new Date().toISOString();
 
@@ -53,13 +59,13 @@ export function assertRoleClass(
   }
 }
 
-// Creation, refresh and replacement all assemble from the current PWA, so each gives an
-// agent what a new agent with the same identity would get.
+// Creation, refresh and replacement all assemble from the swarm's accepted PWA, so each gives an
+// agent what a new agent with the same identity would get, and none reads a file not yet accepted.
 export function assemblePrompt(
   agent: Pick<AgentRecord, "name" | "qualifiedName" | "roleClass" | "role" | "reportsTo">,
-  projectId?: string,
+  swarm: SwarmRecord,
 ) {
-  const pwa = readPwa(requirePwaSource(projectId), agent.role);
+  const pwa = readPwa(swarm.source.files, agent.role);
   assertRoleClass(pwa.roleClass, agent.roleClass, agent.role);
   return {
     pwa,
@@ -95,14 +101,25 @@ export function seatOfAgent(paseoAgentId: string): AgentRecord | undefined {
   );
 }
 
-// A seat named by its roster id or its qualified name.
-export function findSeat(reference: string, includeRetired = false): AgentRecord {
-  const agents = store.read().agents.filter((agent) => includeRetired || !agent.retired);
-  const seat =
-    agents.find((agent) => agent.id === reference) ??
-    agents.find((agent) => agentQualifiedName(agent) === reference);
-  if (!seat) throw new Error(`Unknown Swarm seat: ${reference}`);
-  return seat;
+// A seat named by its roster id, or by its qualified name within a swarm. With no swarm named, a
+// qualified name must belong to one seat across every swarm.
+export function findSeat(
+  swarmId: string | undefined,
+  reference: string,
+  includeRetired = false,
+): AgentRecord {
+  const agents = store
+    .read()
+    .agents.filter(
+      (agent) => (includeRetired || !agent.retired) && (!swarmId || agent.swarmId === swarmId),
+    );
+  const byId = agents.find((agent) => agent.id === reference);
+  if (byId) return byId;
+  const named = agents.filter((agent) => agentQualifiedName(agent) === reference);
+  if (named.length > 1)
+    throw new Error(`Seat ${reference} exists in several swarms. Name the swarm.`);
+  if (named.length === 0) throw new Error(`Unknown Swarm seat: ${reference}`);
+  return named[0];
 }
 
 function definedConfig(config: AgentConfig): AgentConfig {
@@ -240,7 +257,7 @@ async function replaceOccupant(
   if (!config.provider) {
     throw new Error(`Seat ${agentQualifiedName(stale)} has no provider to start a new agent with`);
   }
-  const assembled = assemblePrompt(stale, stale.projectId);
+  const assembled = assemblePrompt(stale, swarmOf(stale));
   const number = nextOccupantNumber(stale);
   const systemPrompt = initialPrompt({
     pwa: assembled.pwa,
@@ -258,7 +275,7 @@ async function replaceOccupant(
     agentId: paseoAgentId,
     config: { ...config, provider: config.provider!, systemPrompt },
     title: stale.name,
-    labels: { [SEAT_LABEL]: stale.id },
+    labels: seatLabels(stale),
   };
   return bringIn(paseoAgentId, stale.id, async () => {
     if (stale.workspaceId) {
@@ -282,7 +299,7 @@ async function startOccupant(seat: AgentRecord, context: SeatContext): Promise<v
   }
   if (!seat.workspaceId) throw new Error(`Seat ${agentQualifiedName(seat)} has no workspace`);
   const { workspaceId } = seat;
-  const assembled = assemblePrompt(seat, seat.projectId);
+  const assembled = assemblePrompt(seat, swarmOf(seat));
   const paseoAgentId = randomUUID();
   await bringIn(paseoAgentId, seat.id, async () => {
     await context.paseo.workspaces.ref(workspaceId).agents.create({
@@ -293,7 +310,7 @@ async function startOccupant(seat: AgentRecord, context: SeatContext): Promise<v
         systemPrompt: standingPrompt({ pwa: assembled.pwa, agent: seat }),
       },
       title: seat.name,
-      labels: { [SEAT_LABEL]: seat.id },
+      labels: seatLabels(seat),
     });
     const boundAt = now();
     await store.commit((state) => {
@@ -376,7 +393,7 @@ async function adjustOccupant(
 export async function refreshStalePrompt(seat: AgentRecord, context: SeatContext): Promise<void> {
   if (seat.paseoAgentId === null) return;
   try {
-    const assembled = assemblePrompt(seat, seat.projectId);
+    const assembled = assemblePrompt(seat, swarmOf(seat));
     if (seat.prompt?.revision === assembled.received.revision) return;
     await context.paseo.agents
       .ref(seat.paseoAgentId)
@@ -441,6 +458,7 @@ export function seatView(seat: AgentRecord): SeatView {
 }
 
 export function listSeats(input: {
+  swarmId?: string;
   projectId?: string;
   includeRetired: boolean;
   paseoAgentId?: string;
@@ -454,15 +472,16 @@ export function listSeats(input: {
     .agents.filter(
       (seat) =>
         (input.includeRetired || !seat.retired) &&
+        (!input.swarmId || seat.swarmId === input.swarmId) &&
         (!input.projectId || seat.projectId === input.projectId),
     )
     .map(seatView);
 }
 
-function resolveSeats(references: string[]): AgentRecord[] {
+function resolveSeats(swarmId: string | undefined, references: string[]): AgentRecord[] {
   const seats = new Map<string, AgentRecord>();
   for (const reference of references) {
-    const seat = findSeat(reference);
+    const seat = findSeat(swarmId, reference);
     seats.set(seat.id, seat);
   }
   return [...seats.values()];
@@ -488,6 +507,7 @@ async function withOccupantStamp(seat: AgentRecord, context: SeatContext): Promi
 // Applies edit to each seat and commits the results unless dryRun. Edits replace whole records,
 // so an edit applied to a seat that changed meanwhile is applied to the current record.
 async function editSeats(
+  swarmId: string | undefined,
   references: string[],
   dryRun: boolean,
   edit: (seat: AgentRecord) => AgentRecord,
@@ -495,7 +515,7 @@ async function editSeats(
   validate: (seats: AgentRecord[], before: ReadonlyMap<string, AgentRecord>) => void = () => {},
 ): Promise<SeatView[]> {
   const stamped = new Map<string, AgentRecord>();
-  for (const seat of resolveSeats(references)) {
+  for (const seat of resolveSeats(swarmId, references)) {
     stamped.set(seat.id, await withOccupantStamp(seat, context));
   }
   const preview = [...stamped.values()].map(edit);
@@ -550,11 +570,17 @@ function assertBootable(seats: AgentRecord[], before: ReadonlyMap<string, AgentR
 }
 
 export function updateSeats(
-  input: { seats: string[]; agentConfig: Partial<AgentConfigPatch>; dryRun: boolean },
+  input: {
+    swarmId?: string;
+    seats: string[];
+    agentConfig: Partial<AgentConfigPatch>;
+    dryRun: boolean;
+  },
   context: SeatContext,
 ): Promise<SeatView[]> {
   const patch = input.agentConfig;
   return editSeats(
+    input.swarmId,
     input.seats,
     input.dryRun,
     (seat) => {
@@ -579,10 +605,11 @@ export function updateSeats(
 // A reset asks for a fresh agent with the same config. Cancelling one that has not taken effect
 // yet lines the seat's generation back up with its occupant's.
 export function resetSeats(
-  input: { seats: string[]; cancel: boolean; dryRun: boolean },
+  input: { swarmId?: string; seats: string[]; cancel: boolean; dryRun: boolean },
   context: SeatContext,
 ): Promise<SeatView[]> {
   return editSeats(
+    input.swarmId,
     input.seats,
     input.dryRun,
     (seat) => {
@@ -598,7 +625,7 @@ export function resetSeats(
 
 // Planners read every seat; anyone else reads their own seat and the seats under it.
 function assertCanReadHistory(seat: AgentRecord, actorName: string): void {
-  const actor = findSeat(actorName);
+  const actor = findSeat(seat.swarmId, actorName);
   if (actor.roleClass === "planner") return;
   const actorReference = agentQualifiedName(actor);
   const seatReference = agentQualifiedName(seat);
@@ -636,10 +663,17 @@ function entryText(item: { type: string } & Record<string, unknown>): string {
 // current one by default, or an earlier one by number. Earlier occupants are archived, and the
 // daemon reads their history without resuming their sessions.
 export async function readSeatHistory(
-  input: { seat: string; actorName?: string; occupant?: number; before?: string; limit: number },
+  input: {
+    swarmId?: string;
+    seat: string;
+    actorName?: string;
+    occupant?: number;
+    before?: string;
+    limit: number;
+  },
   context: SeatContext,
 ): Promise<SeatHistory> {
-  const seat = findSeat(input.seat, true);
+  const seat = findSeat(input.swarmId, input.seat, true);
   if (input.actorName) assertCanReadHistory(seat, input.actorName);
   const occupants: Array<{ number: number; paseoAgentId: string }> = [
     ...(seat.pastOccupants ?? []),
