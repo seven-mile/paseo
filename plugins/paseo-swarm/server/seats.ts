@@ -6,7 +6,6 @@ import type {
   MailboxMessage,
   Occupant,
   PastOccupant,
-  SwarmRecord,
 } from "../shared/models";
 import {
   agentQualifiedName,
@@ -22,14 +21,12 @@ import {
   standingPrompt,
   takeoverBrief,
 } from "./prompts";
-import { readPwa } from "./pwa";
+import { readPwa, type PwaFiles } from "./pwa";
 import {
   adjustedConfig,
   bootConfig,
-  pendingPlan,
   planSeat,
   settingsLostOnProviderChange,
-  type PendingPlan,
   type SeatPlan,
 } from "./seat-policy";
 import { store } from "./state";
@@ -63,9 +60,9 @@ export function assertRoleClass(
 // agent what a new agent with the same identity would get, and none reads a file not yet accepted.
 export function assemblePrompt(
   agent: Pick<AgentRecord, "name" | "qualifiedName" | "roleClass" | "role" | "reportsTo">,
-  swarm: SwarmRecord,
+  files: PwaFiles,
 ) {
-  const pwa = readPwa(swarm.source.files, agent.role);
+  const pwa = readPwa(files, agent.role);
   assertRoleClass(pwa.roleClass, agent.roleClass, agent.role);
   return {
     pwa,
@@ -246,7 +243,7 @@ async function rebind(
 }
 
 // Boots a fresh Paseo agent for the seat and rebinds the seat to it. The new agent runs in the
-// seat's workspace with the role prompt from the current PWA; the mail that woke the seat is
+// seat's workspace with the standing prompt from the swarm's accepted PWA; the mail that woke the seat is
 // delivered to it afterwards.
 async function replaceOccupant(
   stale: AgentRecord,
@@ -257,7 +254,7 @@ async function replaceOccupant(
   if (!config.provider) {
     throw new Error(`Seat ${agentQualifiedName(stale)} has no provider to start a new agent with`);
   }
-  const assembled = assemblePrompt(stale, swarmOf(stale));
+  const assembled = assemblePrompt(stale, swarmOf(stale).source.files);
   const number = nextOccupantNumber(stale);
   const systemPrompt = initialPrompt({
     pwa: assembled.pwa,
@@ -290,16 +287,50 @@ async function replaceOccupant(
   });
 }
 
-// Starts the first agent of a reserved seat, in the seat's workspace with the role prompt from the
-// current PWA. The mail that woke the seat is its first instruction.
+// A seat that `up` reserved has no workspace until its first agent starts. A worker then shares
+// its manager's, as a worker an agent hires does; any other seat gets a new workspace at its
+// project's root. The workspace is the seat's local binding from then on.
+async function placeSeat(seat: AgentRecord, context: SeatContext): Promise<string> {
+  if (seat.workspaceId) return seat.workspaceId;
+  const name = agentQualifiedName(seat);
+  let workspaceId: string;
+  if (seat.roleClass === "worker" && seat.reportsTo) {
+    const manager = findSeat(seat.swarmId, seat.reportsTo);
+    if (!manager.workspaceId) {
+      throw new Error(`Seat ${name} shares the workspace of ${seat.reportsTo}, which has none yet`);
+    }
+    workspaceId = manager.workspaceId;
+  } else {
+    const { projectId } = swarmOf(seat);
+    const project = projectId
+      ? (await context.paseo.projects.list({})).projects.find(
+          (candidate) => candidate.projectId === projectId,
+        )
+      : undefined;
+    if (!project) throw new Error(`Seat ${name} has no workspace and no project to make one in`);
+    const workspace = await context.paseo.workspaces.create({
+      source: { kind: "directory", path: project.projectRootPath, projectId: project.projectId },
+      title: seat.name,
+    });
+    workspaceId = workspace.id;
+  }
+  await store.commit((state) => {
+    const current = state.agents.find((agent) => agent.id === seat.id);
+    if (!current) throw new Error(`Swarm seat disappeared while placing it: ${seat.id}`);
+    return [{ op: "put", collection: "agents", record: { ...current, workspaceId } }];
+  });
+  return workspaceId;
+}
+
+// Starts the first agent of a reserved seat, in the seat's workspace with the standing prompt from
+// the swarm's accepted PWA. The mail that woke the seat is its first instruction.
 async function startOccupant(seat: AgentRecord, context: SeatContext): Promise<void> {
   const config = bootConfig(seat.agentConfig ?? {}, {});
   if (!config.provider) {
     throw new Error(`Seat ${agentQualifiedName(seat)} has no provider to start an agent with`);
   }
-  if (!seat.workspaceId) throw new Error(`Seat ${agentQualifiedName(seat)} has no workspace`);
-  const { workspaceId } = seat;
-  const assembled = assemblePrompt(seat, swarmOf(seat));
+  const workspaceId = await placeSeat(seat, context);
+  const assembled = assemblePrompt(seat, swarmOf(seat).source.files);
   const paseoAgentId = randomUUID();
   await bringIn(paseoAgentId, seat.id, async () => {
     await context.paseo.workspaces.ref(workspaceId).agents.create({
@@ -386,38 +417,33 @@ async function adjustOccupant(
   });
 }
 
-// An agent whose standing prompt predates the current PWA or plugin gets the current one ahead of
-// its next mail, so an upgrade or a PWA edit reaches running agents without a reset. Best effort:
-// a PWA that cannot be read, or a send that fails, leaves the mail to go out as it is, and the next
-// flush tries again.
+// An agent whose standing prompt is older than the one assembled from the swarm's accepted PWA
+// gets the current one ahead of its next mail, so an accepted change or a plugin upgrade reaches
+// running agents without a reset. The seat's receipt moves only once Paseo accepts the send. A
+// prompt that cannot be assembled, or a send that fails, throws: mail that depends on the prompt
+// must not go out ahead of it.
 export async function refreshStalePrompt(seat: AgentRecord, context: SeatContext): Promise<void> {
   if (seat.paseoAgentId === null) return;
-  try {
-    const assembled = assemblePrompt(seat, swarmOf(seat));
-    if (seat.prompt?.revision === assembled.received.revision) return;
-    await context.paseo.agents
-      .ref(seat.paseoAgentId)
-      .send(refreshedPrompt({ pwa: assembled.pwa, agent: seat, changed: true }), {
-        messageId: `prompt-refresh-${seat.paseoAgentId}-${assembled.received.revision}`,
-        activeTurnBehavior: "steer",
-      });
-    await store.commit((state) => {
-      const current = state.agents.find((agent) => agent.id === seat.id);
-      if (!current || current.paseoAgentId !== seat.paseoAgentId) return [];
-      return [
-        {
-          op: "put",
-          collection: "agents",
-          record: { ...current, prompt: assembled.received, updatedAt: now() },
-        },
-      ];
+  const assembled = assemblePrompt(seat, swarmOf(seat).source.files);
+  if (seat.prompt?.revision === assembled.received.revision) return;
+  // The same messageId for the same revision, so a retry after a lost reply is not sent twice.
+  await context.paseo.agents
+    .ref(seat.paseoAgentId)
+    .send(refreshedPrompt({ pwa: assembled.pwa, agent: seat, changed: true }), {
+      messageId: `prompt-refresh-${seat.paseoAgentId}-${assembled.received.revision}`,
+      activeTurnBehavior: "steer",
     });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    console.warn(
-      `[paseo-swarm] Could not refresh the prompt of seat ${agentQualifiedName(seat)}: ${detail}`,
-    );
-  }
+  await store.commit((state) => {
+    const current = state.agents.find((agent) => agent.id === seat.id);
+    if (!current || current.paseoAgentId !== seat.paseoAgentId) return [];
+    return [
+      {
+        op: "put",
+        collection: "agents",
+        record: { ...current, prompt: assembled.received, updatedAt: now() },
+      },
+    ];
+  });
 }
 
 // Brings the seat's agent in line with the seat, as planSeat decides. The caller makes sure the
@@ -451,10 +477,33 @@ export async function reconcileSeat(seat: AgentRecord, context: SeatContext): Pr
   }
 }
 
-export type SeatView = AgentRecord & { pending: PendingPlan };
+// What a seat's next mail does first: the plan for its agent, and whether that agent still has to
+// receive the standing prompt assembled from the swarm's accepted PWA. A first or a new agent boots
+// with that prompt, so only a kept, adjusted or revived one can be behind.
+export type SeatView = AgentRecord & {
+  pending: { kind: Exclude<SeatPlan["kind"], "keep"> | "refresh"; reason: string } | null;
+};
+
+function promptBehind(seat: AgentRecord, plan: SeatPlan): string | null {
+  if (seat.paseoAgentId === null || plan.kind === "start" || plan.kind === "replace") return null;
+  const receipt = plan.kind === "revive" ? plan.occupant.prompt : seat.prompt;
+  try {
+    const expected = assemblePrompt(seat, swarmOf(seat).source.files).received.revision;
+    return receipt?.revision === expected ? null : "standing prompt changed";
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return `standing prompt cannot be assembled: ${detail}`;
+  }
+}
 
 export function seatView(seat: AgentRecord): SeatView {
-  return { ...seat, pending: pendingPlan(seat) };
+  const plan = planSeat(seat);
+  const prompt = promptBehind(seat, plan);
+  if (plan.kind === "keep") {
+    return { ...seat, pending: prompt ? { kind: "refresh", reason: prompt } : null };
+  }
+  const reason = prompt ? `${plan.reason}; then ${prompt}` : plan.reason;
+  return { ...seat, pending: { kind: plan.kind, reason } };
 }
 
 export function listSeats(input: {
@@ -549,7 +598,10 @@ export type AgentConfigPatch = {
 // and its classifier mode is "auto-review". A guessed mode could stall an agent or let it act
 // without asking. A seat with no agent yet starts from its spec alone, so it always needs
 // provider/model, and needs a mode only when an edit moves it to another provider.
-function assertBootable(seats: AgentRecord[], before: ReadonlyMap<string, AgentRecord>): void {
+export function assertBootable(
+  seats: AgentRecord[],
+  before: ReadonlyMap<string, AgentRecord>,
+): void {
   const incomplete = seats.filter((seat) => {
     const wanted = seat.agentConfig?.provider;
     const reserved = seat.paseoAgentId === null;

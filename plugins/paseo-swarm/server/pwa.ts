@@ -8,6 +8,8 @@ import { parse } from "yaml";
 export type PwaFiles = Readonly<Record<string, string>>;
 
 const PWA_FILE = "PWA.md";
+// The roster beside the PWA in a swarm directory; see roster.ts. It is not part of the PWA.
+export const SWARM_FILE = "swarm.yaml";
 const rolePath = (role: string) => `roles/${role}.md`;
 
 export type RoleClass = "planner" | "supervisor" | "worker";

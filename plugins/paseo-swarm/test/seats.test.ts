@@ -260,7 +260,10 @@ async function seed(fake: ReturnType<typeof fakePaseo>, agents: AgentRecord[]) {
       return {
         op: "put" as const,
         collection: "agents" as const,
-        record: { ...record, prompt: assemblePrompt(record, swarmOf(record)).received },
+        record: {
+          ...record,
+          prompt: assemblePrompt(record, swarmOf(record).source.files).received,
+        },
       };
     }),
   );

@@ -259,6 +259,122 @@ async function runHistory(
   return { type: "single", data: history, schema: seatHistorySchema };
 }
 
+// What `swarm diff` and `swarm up` report: the plugin's roster plan.
+export interface RosterPlan {
+  reserve: Array<{ seat: string; role: string }>;
+  restore: Array<{ seat: string; changes: string[] }>;
+  update: Array<{ seat: string; changes: string[] }>;
+  retire: Array<{ seat: string; tasks: string[]; queuedMessages: number }>;
+  source: { files: string[]; prompts: string[] } | null;
+  refusals: string[];
+}
+
+interface SwarmSummary {
+  id: string;
+  name: string;
+  directory: string;
+  projectId: string | null;
+  revision: string;
+}
+
+export function planLines(plan: RosterPlan): string[] {
+  const changes = (list: string[]) => (list.length > 0 ? `: ${list.join(", ")}` : "");
+  const lines = [
+    ...plan.reserve.map((entry) => `+ ${entry.seat} (${entry.role}), starts on first mail`),
+    ...plan.restore.map((entry) => `↺ ${entry.seat} comes back${changes(entry.changes)}`),
+    ...plan.update.map((entry) => `~ ${entry.seat}${changes(entry.changes)}`),
+    ...plan.retire.map((entry) => {
+      const notes = [
+        entry.tasks.length > 0 ? `named by Tasks ${entry.tasks.join(", ")}` : null,
+        entry.queuedMessages > 0 ? `${entry.queuedMessages} queued messages fail` : null,
+      ].filter((note): note is string => note !== null);
+      return `- ${entry.seat} retires${notes.length > 0 ? ` (${notes.join("; ")})` : ""}`;
+    }),
+  ];
+  if (plan.source) {
+    lines.push(`PWA: ${plan.source.files.join(", ")}`);
+    if (plan.source.prompts.length > 0) {
+      lines.push(`  new standing prompt at next mail for ${plan.source.prompts.join(", ")}`);
+    }
+  }
+  lines.push(...plan.refusals.map((refusal) => `refused: ${refusal}`));
+  return lines;
+}
+
+interface DirectoryUp {
+  swarm: SwarmSummary;
+  plan: RosterPlan;
+}
+
+function upSchema(applied: boolean): OutputSchema<DirectoryUp> {
+  return {
+    idField: (result) => result.swarm.id,
+    columns: [],
+    renderHuman: (result) => {
+      const { swarm, plan } = result.type === "single" ? result.data : result.data[0];
+      const lines = planLines(plan);
+      if (lines.length === 0) return `${swarm.directory} matches what swarm ${swarm.id} accepted.`;
+      const heading = applied
+        ? `Accepted ${swarm.directory}. Agents catch up at their next mail.`
+        : `swarm up would accept from ${swarm.directory}:`;
+      return [heading, ...lines].join("\n");
+    },
+  };
+}
+
+interface ScopeOptions extends SwarmOptions {
+  project?: string;
+}
+
+const scope = (options: ScopeOptions) => (options.project ? { projectId: options.project } : {});
+
+async function runDirectoryUp(
+  dryRun: boolean,
+  options: ScopeOptions,
+): Promise<SingleResult<DirectoryUp>> {
+  const data = (await invokeSwarm(options, "swarm.directory.up", {
+    ...scope(options),
+    dryRun,
+  })) as DirectoryUp;
+  return { type: "single", data, schema: upSchema(!dryRun) };
+}
+
+interface SwarmStatus {
+  swarm: SwarmSummary;
+  unapplied: RosterPlan | null;
+  invalid: string | null;
+  seats: Seat[];
+}
+
+function directoryLines(status: SwarmStatus): string[] {
+  const { directory } = status.swarm;
+  if (status.invalid) return [`${directory} cannot be accepted: ${status.invalid}`];
+  if (!status.unapplied) return [`${directory} matches what the swarm accepted.`];
+  return [`Unapplied changes in ${directory}:`, ...planLines(status.unapplied)];
+}
+
+const statusSchema: OutputSchema<SwarmStatus> = {
+  idField: (status) => status.swarm.id,
+  columns: [],
+  renderHuman: (result, options) => {
+    const status = result.type === "single" ? result.data : result.data[0];
+    const directory = directoryLines(status);
+    const seats = renderTable<SeatRow>(
+      { type: "list", data: status.seats.map(toSeatRow), schema: seatSchema },
+      options,
+    );
+    return [`Swarm ${status.swarm.id}`, ...directory, "", seats].join("\n");
+  },
+};
+
+async function runStatus(
+  options: ScopeOptions,
+  _command: Command,
+): Promise<SingleResult<SwarmStatus>> {
+  const data = (await invokeSwarm(options, "swarm.status.read", scope(options))) as SwarmStatus;
+  return { type: "single", data, schema: statusSchema };
+}
+
 function addSeatOptions(command: Command): Command {
   return addJsonAndDaemonHostOptions(
     command.option("--swarm <id>", "The swarm whose seats to use, from the SWARM column of ls"),
@@ -267,6 +383,30 @@ function addSeatOptions(command: Command): Command {
 
 export function createSwarmCommand(): Command {
   const swarm = new Command("swarm").description("Manage the Swarm plugin");
+  addSeatOptions(
+    swarm
+      .command("diff")
+      .description("Show what up would accept from the swarm directory, and what each change costs")
+      .option("--project <id>", "The swarm of this project"),
+  ).action(withOutput((options: ScopeOptions, _command: Command) => runDirectoryUp(true, options)));
+  addSeatOptions(
+    swarm
+      .command("up")
+      .description(
+        "Accept the swarm directory: swarm.yaml, PWA.md and roles/. Agents are not touched; each seat's next mail brings its agent in line",
+      )
+      .option("--project <id>", "The swarm of this project"),
+  ).action(
+    withOutput((options: ScopeOptions, _command: Command) => runDirectoryUp(false, options)),
+  );
+  addSeatOptions(
+    swarm
+      .command("status")
+      .description(
+        "Show unapplied changes in the swarm directory and the work pending for each seat",
+      )
+      .option("--project <id>", "The swarm of this project"),
+  ).action(withOutput(runStatus));
   const seat = swarm
     .command("seat")
     .description(

@@ -1186,6 +1186,32 @@ describe("Swarm MCP coordination", () => {
     }
   });
 
+  it("checks the caller's seat at each call, so a retired seat's agent loses its Swarm tools", async () => {
+    const seats = [seat("lead", "supervisor", "caller")];
+    const { server, invokePlugin } = await swarmServer("caller", seats);
+    try {
+      // The plugin lists no seat for an agent whose seat was retired after its session opened.
+      seats.length = 0;
+      await expect(
+        invokeToolWithParsedInput(registeredTool(server, "swarm_seat_read"), {}),
+      ).rejects.toThrow(/no longer occupies a Swarm seat/);
+      await expect(
+        invokeToolWithParsedInput(registeredTool(server, "swarm_seat_create"), {
+          name: "dev",
+          role: "developer",
+          provider: "codex/gpt-6",
+        }),
+      ).rejects.toThrow(/no longer occupies a Swarm seat/);
+      expect(invokePlugin).not.toHaveBeenCalledWith(
+        "paseo-swarm",
+        "swarm.seat.create",
+        expect.anything(),
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
   it("names seats by local name within the caller's team and by qualified name beyond it", async () => {
     const { server, invokePlugin } = await swarmServer(
       "scout-agent",

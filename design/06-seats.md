@@ -33,7 +33,7 @@ Mode, thinking, and feature values change in place. Feature values are managed p
 
 An earlier occupant comes back only on an exact fit. Its return brief starts a turn, and a turn that ran before an in-place change would run under the old settings, such as a more permissive mode. A candidate that would need a change gets a new agent instead.
 
-The policy is conservative: a difference it does not know to be safe gets a new agent, which costs context but never breaks a session. Rules about what a seat change costs belong in `seat-policy.ts` and nowhere else; teaching it more only turns replacements into in-place changes. `seat ls` and the app's roster show the pending plan for each seat.
+The policy is conservative: a difference it does not know to be safe gets a new agent, which costs context but never breaks a session. Rules about what a seat change costs belong in `seat-policy.ts` and nowhere else; teaching it more only turns replacements into in-place changes. `seat ls`, `swarm status`, and the app's roster show the pending plan for each seat, with `refresh` when only its standing prompt is behind.
 
 Reconciling lives in mailbox delivery (`syncSeat` in `plugins/paseo-swarm/server/mailbox.ts`), which carries team messages, human Activities, and turn digests. Typing into the agent's own conversation addresses that Paseo agent directly and changes nothing about the seat. Before delivering to a seat whose plan is not keep:
 
@@ -41,7 +41,7 @@ Reconciling lives in mailbox delivery (`syncSeat` in `plugins/paseo-swarm/server
 2. The plan runs. A seat's first agent starts in its workspace with the standing prompt assembled from the swarm's accepted PWA. A replacement gets the same prompt plus a takeover brief. Swarm picks the new agent's id and holds it as arriving in the seat until the seat binds it, since Paseo builds an agent's tool catalog while its session opens; a revived agent arrives the same way while its session resumes. A revived agent gets a return brief, which also probes whether its session can resume; if the send fails, the seat gets a new agent instead. A session that accepts the brief and fails later in that turn is not caught; reset the seat.
 3. Rows the old occupant was handed but never finished a turn on go back to the queue, ahead of newer mail.
 4. Children whose Paseo parent is the old occupant are detached, then the old occupant is archived. Archiving cascades to Paseo children, which would take a supervisor's workers with it.
-5. If the seat's `prompt.revision` differs from the standing prompt assembled now, the current one is sent first, so an accepted PWA change or a daemon upgrade reaches running agents without a reset. A failed refresh is logged and does not hold the mail.
+5. If the seat's `prompt.revision` differs from the standing prompt assembled now, the current one is sent first, so an accepted PWA change or a daemon upgrade reaches running agents without a reset. The seat's `prompt` receipt moves only once Paseo accepts that send. A refresh that fails holds the mail the way a failed plan does, since the mail may depend on the new instructions.
 6. The held mail is delivered.
 
 If a plan fails, the head message records the error in `lastError` and stays queued without spending its send attempts, so a provider that is down for an hour does not fail the mail. Every later flush tries again. The old occupant stays bound but gets no mail.

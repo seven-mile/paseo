@@ -36,13 +36,17 @@ import {
   swarmTasks,
 } from "./swarms";
 import { resolveActivityRefs } from "./refs";
+import { planRoster, readDesired } from "./roster";
 import {
   appendActivityRpc,
   appendHumanActivityRpc,
   boardReadRpc,
   createSeatRpc,
   createTaskRpc,
+  directoryUpRpc,
   registerAgentRpc,
+  statusReadRpc,
+  type RosterPlan,
   sendMessageRpc,
   updateTaskRpc,
   pwaSourceReadRpc,
@@ -62,6 +66,16 @@ import { agentQualifiedName, currentOccupant, mailboxMessageStatus } from "../sh
 
 const now = () => new Date().toISOString();
 const id = (prefix: string) => `${prefix}-${randomUUID()}`;
+
+function swarmSummary(swarm: SwarmRecord) {
+  return {
+    id: swarm.id,
+    name: swarm.name,
+    directory: swarm.directory,
+    projectId: swarm.projectId,
+    revision: swarm.source.revision,
+  };
+}
 
 async function availableAgents(context: PluginHandlerContext) {
   const agents: Array<{ id: string; workspaceId?: string }> = [];
@@ -386,7 +400,9 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   server.handle(pwaSourceSetRpc, async ({ path, projectId }, context) => {
     const root = projectId ? await projectRoot(projectId, context) : process.cwd();
     if (store.read().swarms.some((swarm) => swarm.projectId === (projectId ?? null))) {
-      throw new Error("This project already has a swarm. Edit the swarm directory instead.");
+      throw new Error(
+        "This project already has a swarm. Edit its directory and run `paseo-swarm swarm up`.",
+      );
     }
     const trimmed = path.trim();
     if (!trimmed) throw new Error("Enter a PWA directory.");
@@ -507,7 +523,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
           role: input.role,
           reportsTo,
         },
-        swarm,
+        swarm.source.files,
       );
       const workspaceId = await creationWorkspace(input, actor, parent, projectId, context);
       const timestamp = now();
@@ -553,7 +569,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       role: input.role,
       reportsTo: parent ? agentQualifiedName(parent) : null,
     } as const;
-    const assembled = assemblePrompt(provisional, swarm);
+    const assembled = assemblePrompt(provisional, swarm.source.files);
     const timestamp = now();
     const paseoAgentId = randomUUID();
     const agent: AgentRecord = {
@@ -612,23 +628,52 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     },
   );
 
+  // Roster reconciliation: accepts the swarm directory, its seats and PWA together, in one commit.
+  // No agent is touched; each seat's next mail brings its agent in line.
+  server.handle(directoryUpRpc, async ({ swarmId, projectId, dryRun }) => {
+    const swarm = resolveSwarm({ swarmId, projectId });
+    const desired = readDesired(swarm, swarmSeats(swarm.id));
+    let plan!: RosterPlan;
+    await store.commit((state) => {
+      const result = planRoster(findSwarm(swarm.id), desired, state);
+      plan = result.plan;
+      if (dryRun) return [];
+      if (plan.refusals.length > 0) throw new Error(`swarm up refused: ${plan.refusals.join(" ")}`);
+      return result.changes;
+    });
+    return { swarm: swarmSummary(findSwarm(swarm.id)), plan };
+  });
+  server.handle(statusReadRpc, async ({ swarmId, projectId }) => {
+    const swarm = resolveSwarm({ swarmId, projectId });
+    let unapplied: RosterPlan | null = null;
+    let invalid: string | null = null;
+    try {
+      const plan = planRoster(swarm, readDesired(swarm, swarmSeats(swarm.id)), store.read()).plan;
+      const empty =
+        plan.source === null &&
+        [plan.reserve, plan.restore, plan.update, plan.retire, plan.refusals].every(
+          (entries) => entries.length === 0,
+        );
+      unapplied = empty ? null : plan;
+    } catch (error) {
+      invalid = error instanceof Error ? error.message : String(error);
+    }
+    return {
+      swarm: swarmSummary(swarm),
+      unapplied,
+      invalid,
+      seats: swarmSeats(swarm.id).map(seatView),
+    };
+  });
+
   server.handle(refreshPromptRpc, async ({ paseoAgentId }) => {
     const current = seatOfAgent(paseoAgentId);
     if (!current) throw new Error(`Unknown active Swarm agent: ${paseoAgentId}`);
-    const assembled = assemblePrompt(current, swarmOf(current));
+    const assembled = assemblePrompt(current, swarmOf(current).source.files);
     const previousRevision = current.prompt?.revision ?? null;
     const changed = previousRevision !== assembled.received.revision;
-    await store.commit((state) => {
-      const agent = state.agents.find((candidate) => candidate.id === current.id);
-      if (!agent) throw new Error(`Unknown active Swarm agent: ${paseoAgentId}`);
-      return [
-        {
-          op: "put",
-          collection: "agents",
-          record: { ...agent, prompt: assembled.received, updatedAt: now() },
-        },
-      ];
-    });
+    // Read only. A tool result is not a delivery Swarm can vouch for, so the seat's receipt stays
+    // as it is, and the reconciler still sends a changed prompt ahead of the next mail.
     return {
       revision: assembled.received.revision,
       previousRevision,

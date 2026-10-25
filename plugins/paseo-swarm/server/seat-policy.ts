@@ -17,9 +17,6 @@ export type SeatPlan =
   | { kind: "revive"; reason: string; occupant: PastOccupant }
   | { kind: "replace"; reason: string };
 
-// The plan a seat view reports: what the next mail does to the agent, or null to keep it.
-export type PendingPlan = { kind: Exclude<SeatPlan["kind"], "keep">; reason: string } | null;
-
 // What an in-place change sends to the live agent; see the agent handle's applyConfig.
 export interface AgentConfigApply {
   modelId?: string;
@@ -135,11 +132,6 @@ export function planSeat(
     .find((past) => past.generation === generation && changes(wanted, past.config).length === 0);
   if (earlier) return { kind: "revive", reason, occupant: earlier };
   return { kind: "replace", reason };
-}
-
-export function pendingPlan(seat: Parameters<typeof planSeat>[0]): PendingPlan {
-  const plan = planSeat(seat);
-  return plan.kind === "keep" ? null : { kind: plan.kind, reason: plan.reason };
 }
 
 // The stamp an agent carries after an in-place change: what Swarm gave it before, with the seat's

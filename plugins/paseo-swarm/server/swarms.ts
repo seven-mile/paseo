@@ -1,9 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Activity, AgentRecord, SwarmRecord, Task } from "../shared/models";
 import { agentQualifiedName } from "../shared/models";
-import { listPwaRoles, pwaFilesRevision, readPwa, readPwaFiles, type PwaFiles } from "./pwa";
+import {
+  listPwaRoles,
+  pwaFilesRevision,
+  readPwa,
+  readPwaFiles,
+  SWARM_FILE,
+  type PwaFiles,
+} from "./pwa";
 import { readPwaSource } from "./source";
 import {
   getMigrationReportPath,
@@ -114,7 +121,8 @@ export function swarmOfSeatName(name: string): SwarmRecord {
 }
 
 // A swarm instantiated from a PWA directory, for a project that has none. The directory is
-// checked first, so a project is never attached to a swarm that cannot run.
+// checked first, so a project is never attached to a swarm that cannot run. A roster in the
+// directory comes along unaccepted, so the first `up` reserves its seats.
 export async function createSwarm(input: {
   sourceDirectory: string;
   projectId: string | null;
@@ -126,6 +134,8 @@ export async function createSwarm(input: {
     name: basename(input.sourceDirectory),
     projectId: input.projectId,
   });
+  const roster = join(input.sourceDirectory, SWARM_FILE);
+  if (existsSync(roster)) copyFileSync(roster, join(swarm.directory, SWARM_FILE));
   await store.commit((state) =>
     state.swarms.some((candidate) => candidate.projectId === input.projectId)
       ? []

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { readPwa, readPwaFiles } from "../server/pwa";
+import { readPwaFiles } from "../server/pwa";
 import { assemblePrompt, findSeat } from "../server/seats";
 import { getConfigPath, getMigrationReportPath, store, type SwarmChange } from "../server/state";
 import { backfillSwarms, createSwarm, swarmOf, swarmTasks } from "../server/swarms";
@@ -121,18 +121,7 @@ test("records from before swarms join one swarm per project, copied from the sou
 
   // The receipt each occupant holds was stamped from the files the project used.
   const stamped = (record: AgentRecord, directory: string): AgentRecord => {
-    const files = readPwaFiles(directory);
-    const pwa = readPwa(files, record.role);
-    const received = assemblePrompt(record, {
-      id: "legacy",
-      name: "legacy",
-      directory,
-      projectId: null,
-      source: { revision: "", files },
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    }).received;
-    assert.equal(received.pwaRevision, pwa.revision);
+    const received = assemblePrompt(record, readPwaFiles(directory)).received;
     return { ...record, prompt: { ...received, receivedAt: timestamp } };
   };
   const lead = stamped(seat({ id: "lead", name: "lead", projectId: "alpha" }), shared);
@@ -206,7 +195,7 @@ test("records from before swarms join one swarm per project, copied from the sou
     const migrated = bySeat.get(record.id)!;
     assert.deepEqual(migrated, { ...record, swarmId: swarm.id });
     assert.equal(
-      assemblePrompt(migrated, swarmOf(migrated)).received.revision,
+      assemblePrompt(migrated, swarmOf(migrated).source.files).received.revision,
       record.prompt!.revision,
     );
   }

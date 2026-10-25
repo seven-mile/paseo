@@ -11,11 +11,66 @@ import {
   taskSchema,
 } from "./models";
 
-// A seat with the plan its next mail carries out, or null when its agent fits the seat.
+// A seat with the work its next mail carries out first, or null when its agent fits the seat. The
+// kind is what happens to the agent, or refresh when only its standing prompt is out of date; the
+// reason says when a refresh follows the change.
 export const seatSchema = agentRecordSchema.extend({
   pending: z
-    .object({ kind: z.enum(["start", "adjust", "revive", "replace"]), reason: z.string() })
+    .object({
+      kind: z.enum(["start", "adjust", "revive", "replace", "refresh"]),
+      reason: z.string(),
+    })
     .nullable(),
+});
+
+// What `up` does to a swarm's accepted state, or would do. Refusals stop the whole plan.
+export const rosterPlanSchema = z.object({
+  reserve: z.array(z.object({ seat: z.string(), role: z.string() })),
+  // Retired seats the file names again; they come back with their Tasks and history.
+  restore: z.array(z.object({ seat: z.string(), changes: z.array(z.string()) })),
+  update: z.array(z.object({ seat: z.string(), changes: z.array(z.string()) })),
+  // Each retiring seat with the Tasks that name it and the mail that will fail.
+  retire: z.array(
+    z.object({ seat: z.string(), tasks: z.array(z.string()), queuedMessages: z.number() }),
+  ),
+  // PWA files that changed, and the occupants whose standing prompt changes with them.
+  source: z.object({ files: z.array(z.string()), prompts: z.array(z.string()) }).nullable(),
+  refusals: z.array(z.string()),
+});
+export type RosterPlan = z.infer<typeof rosterPlanSchema>;
+
+const swarmSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  directory: z.string(),
+  projectId: z.string().nullable(),
+  revision: z.string(),
+});
+
+const swarmScopeSchema = {
+  swarmId: z.string().min(1).optional(),
+  projectId: z.string().min(1).optional(),
+};
+
+// Accepts the swarm directory, or with dryRun shows what accepting it would do (`swarm diff`). A
+// plan with refusals is not applied, and up fails with them.
+export const directoryUpRpc = defineRpc({
+  name: "swarm.directory.up",
+  input: z.object({ ...swarmScopeSchema, dryRun: z.boolean().default(false) }),
+  output: z.object({ swarm: swarmSummarySchema, plan: rosterPlanSchema }),
+});
+
+// Unapplied directory changes, and the occupant work each seat's next mail carries out.
+export const statusReadRpc = defineRpc({
+  name: "swarm.status.read",
+  input: z.object(swarmScopeSchema),
+  output: z.object({
+    swarm: swarmSummarySchema,
+    unapplied: rosterPlanSchema.nullable(),
+    // Why the directory cannot be accepted as it stands.
+    invalid: z.string().nullable(),
+    seats: z.array(seatSchema),
+  }),
 });
 
 export const boardReadRpc = defineRpc({

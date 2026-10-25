@@ -14,7 +14,8 @@ import { forgetRunningTurns } from "../server/mailbox";
 import { notifyManager, registerOperations } from "../server/operations";
 import { seatView } from "../server/seats";
 import { pwaFilesRevision, readPwaFiles } from "../server/pwa";
-import { backfillSwarms, createSwarm, swarmOf } from "../server/swarms";
+import { createSwarm, swarmOf } from "../server/swarms";
+import { joinSwarm } from "./fixtures";
 import {
   getConfigPath,
   getEventLogPath,
@@ -39,7 +40,7 @@ import {
   refreshPromptRpc,
 } from "../shared/swarm";
 
-async function seed(seeded: SwarmState): Promise<void> {
+async function seed(seeded: SwarmState, options?: { stamp: boolean }): Promise<void> {
   await store.commit(() => [
     ...seeded.agents.map((record): SwarmChange => ({ op: "put", collection: "agents", record })),
     ...seeded.tasks.map((record): SwarmChange => ({ op: "put", collection: "tasks", record })),
@@ -48,7 +49,7 @@ async function seed(seeded: SwarmState): Promise<void> {
     ),
   ]);
   // Seeded records join a swarm the way records from before swarms do.
-  await backfillSwarms();
+  await joinSwarm(options);
 }
 
 function readDisk(): string {
@@ -898,7 +899,7 @@ test("roster reads filter native availability without releasing historical names
     const [seated] = store.read().agents;
     assert.ok(seated.swarmId);
     assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, [
-      { ...agent, swarmId: seated.swarmId, pending: null },
+      { ...seated, pending: null },
     ]);
     available = false;
     assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, []);
@@ -1107,47 +1108,48 @@ test("prompt refresh re-assembles the standing prompt and records the received r
     assert.match(changed.prompt, /supersedes/);
     assert.match(changed.prompt, /Role two\./);
     assert.doesNotMatch(changed.prompt, /Role one\./);
-    const stored = store.read().agents.find((agent) => agent.paseoAgentId === prepared.agentId);
-    assert.equal(stored?.prompt?.revision, changed.revision);
-    assert.notEqual(stored?.prompt?.pwaRevision, created.pwaRevision);
-    assert.equal((await refresh(prepared.agentId)).changed, false);
+    // The tool only reads: the receipt moves when the reconciler delivers the prompt.
+    const receipt = () =>
+      store.read().agents.find((agent) => agent.paseoAgentId === prepared.agentId)?.prompt
+        ?.revision;
+    assert.equal(receipt(), created.revision);
+    assert.equal((await refresh(prepared.agentId)).changed, true);
 
     // An agent registered before revisions were recorded has nothing to compare.
-    await seed({
-      ...emptyState(),
-      agents: [
-        {
-          id: "legacy-record",
-          paseoAgentId: "legacy-agent",
-          name: "legacy",
-          qualifiedName: "legacy",
-          aliases: [],
-          roleClass: "planner",
-          role: "planner",
-          reportsTo: null,
-          workspaceId: null,
-          retired: false,
-          createdAt: "2026-10-06T00:00:00Z",
-          updatedAt: "2026-10-06T00:00:00Z",
-        },
-      ],
-    });
+    await seed(
+      {
+        ...emptyState(),
+        agents: [
+          {
+            id: "legacy-record",
+            paseoAgentId: "legacy-agent",
+            name: "legacy",
+            qualifiedName: "legacy",
+            aliases: [],
+            roleClass: "planner",
+            role: "planner",
+            reportsTo: null,
+            workspaceId: null,
+            retired: false,
+            createdAt: "2026-10-06T00:00:00Z",
+            updatedAt: "2026-10-06T00:00:00Z",
+          },
+        ],
+      },
+      { stamp: false },
+    );
     const legacy = await refresh("legacy-agent");
     assert.equal(legacy.previousRevision, null);
     assert.equal(legacy.changed, true);
     assert.equal(
-      store.read().agents.find((agent) => agent.paseoAgentId === "legacy-agent")?.prompt?.revision,
-      legacy.revision,
+      store.read().agents.find((agent) => agent.paseoAgentId === "legacy-agent")?.prompt,
+      undefined,
     );
 
     await assert.rejects(async () => refresh("missing-agent"), /Unknown active Swarm agent/);
     writeFileSync(join(swarm.directory, "roles", "planner.md"), "invalid");
-    assert.equal((await refresh(prepared.agentId)).changed, false);
-    assert.equal(
-      store.read().agents.find((agent) => agent.paseoAgentId === prepared.agentId)?.prompt
-        ?.revision,
-      changed.revision,
-    );
+    assert.equal((await refresh(prepared.agentId)).revision, changed.revision);
+    assert.equal(receipt(), created.revision);
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
     else process.env.PASEO_HOME = previousHome;
