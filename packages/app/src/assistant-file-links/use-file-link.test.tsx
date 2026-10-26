@@ -155,6 +155,7 @@ const CANONICAL_BOARD = {
   version: 1,
   agents: [
     {
+      id: "worker-seat",
       paseoAgentId: "raw-agent",
       name: "worker",
       qualifiedName: "planner.worker",
@@ -391,7 +392,9 @@ describe("canonical assistant links", () => {
           reference,
         }),
       );
-      expect(canonicalPlugin?.invoke).toHaveBeenCalledExactlyOnceWith("swarm.board.read", {});
+      expect(canonicalPlugin?.invoke).toHaveBeenCalledExactlyOnceWith("swarm.board.read", {
+        includeReserved: true,
+      });
       expect(openedFiles).toEqual([]);
       expect(getDirectorySuggestions).not.toHaveBeenCalled();
       expect(openExternalUrl).not.toHaveBeenCalled();
@@ -416,7 +419,9 @@ describe("canonical assistant links", () => {
         { variant: "error" },
       ),
     );
-    expect(canonicalPlugin?.invoke).toHaveBeenCalledExactlyOnceWith("swarm.board.read", {});
+    expect(canonicalPlugin?.invoke).toHaveBeenCalledExactlyOnceWith("swarm.board.read", {
+      includeReserved: true,
+    });
     expect(openSwarmReference).not.toHaveBeenCalled();
     expect(openedFiles).toEqual([]);
     expect(getDirectorySuggestions).not.toHaveBeenCalled();
