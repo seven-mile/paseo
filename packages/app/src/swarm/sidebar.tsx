@@ -848,7 +848,8 @@ function HostRoster({
   const query = useFetchQuery(
     {
       queryKey: ["swarm", "roster", plugin.serverId],
-      queryFn: async () => rosterSchema.parse(await plugin.invoke("swarm.board.read", {})),
+      queryFn: async () =>
+        rosterSchema.parse(await plugin.invoke("swarm.board.read", { includeReserved: true })),
       refetchInterval: 3000,
       dataShape: "value",
       staleTimeMs: 2500,

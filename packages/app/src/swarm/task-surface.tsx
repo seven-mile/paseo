@@ -229,7 +229,10 @@ function TaskSurface({
       queryKey: ["swarm", "task-board", serverId, projectId],
       queryFn: async () =>
         swarmTaskBoardSchema.parse(
-          await invoke("swarm.board.read", { projectId: projectId ?? undefined }),
+          await invoke("swarm.board.read", {
+            projectId: projectId ?? undefined,
+            includeReserved: true,
+          }),
         ),
       enabled: Boolean(plugin) && Boolean(projectId) && hydrated && online && active,
       dataShape: "value",

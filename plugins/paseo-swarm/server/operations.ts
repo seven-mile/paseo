@@ -360,7 +360,7 @@ async function creationWorkspace(
 
 export function registerOperations(server: Pick<PluginServerContext, "handle">): void {
   // The board of one swarm, or of every swarm when the request names none, as before swarms.
-  server.handle(boardReadRpc, async ({ projectId, swarmId }, context) => {
+  server.handle(boardReadRpc, async ({ projectId, swarmId, includeReserved }, context) => {
     if (projectId) await projectRoot(projectId, context);
     const availableIds = new Set((await availableAgents(context)).map((agent) => agent.id));
     const saved = store.read();
@@ -373,9 +373,13 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       records.filter((record) => record.swarmId !== undefined && inScope.has(record.swarmId));
     const board = {
       version: saved.version,
-      // Reserved seats have no agent yet; they appear once their first mail starts one.
+      // A reserved seat has no agent until its first mail starts one; a person can send that mail.
       agents: scoped(saved.agents)
-        .filter((agent) => agent.paseoAgentId !== null && availableIds.has(agent.paseoAgentId))
+        .filter((agent) =>
+          agent.paseoAgentId === null
+            ? includeReserved === true
+            : availableIds.has(agent.paseoAgentId),
+        )
         .map(seatView),
       tasks: scoped(saved.tasks),
       activities: scoped(saved.activities),

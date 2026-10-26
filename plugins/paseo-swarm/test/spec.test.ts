@@ -13,6 +13,7 @@ import { store } from "../server/state";
 import { createSwarm } from "../server/swarms";
 import { mailboxMessageStatus, type AgentRecord, type MailboxMessage } from "../shared/models";
 import {
+  boardReadRpc,
   createSeatRpc,
   directoryRecoverRpc,
   directoryUpRpc,
@@ -39,6 +40,10 @@ const context = {
     },
     agents: {
       ref: () => ({ refresh: async () => ({ agent: { workspaceId: "lead-workspace" } }) }),
+      list: async () => ({
+        entries: [{ agent: { id: "planner-agent" } }, { agent: { id: "lead-agent" } }],
+        pageInfo: { nextCursor: null },
+      }),
     },
   },
 } as unknown as PluginHandlerContext;
@@ -159,6 +164,13 @@ test("a hire is in swarm.yaml and accepted when the tool returns, and comments s
   // Nothing for up to undo.
   assert.equal((await status()).unapplied, null);
   assert.deepEqual(store.read().intents, []);
+  // A person can message the reserved seat, so clients that read it see it on the board.
+  const boardNames = async (includeReserved?: boolean) =>
+    (await call(boardReadRpc, includeReserved ? { includeReserved } : {})).agents.map(
+      (agent) => agent.qualifiedName,
+    );
+  assert.deepEqual(await boardNames(), ["planner", "planner.lead"]);
+  assert.deepEqual(await boardNames(true), ["planner", "planner.lead", "planner.lead.dev"]);
   await assert.rejects(() => hire("helper", "planner"), /team holds supervisors/);
   await assert.rejects(
     () =>

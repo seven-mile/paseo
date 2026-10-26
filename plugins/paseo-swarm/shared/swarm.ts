@@ -86,6 +86,9 @@ export const boardReadRpc = defineRpc({
   input: z.object({
     projectId: z.string().min(1).optional(),
     swarmId: z.string().min(1).optional(),
+    // COMPAT(boardReservedSeats): added in v0.11.0, remove after 2027-01-26. Clients that read a
+    // null paseoAgentId ask for seats with no agent yet; older clients would fail to parse them.
+    includeReserved: z.boolean().optional(),
   }),
   output: z.object({
     version: z.literal(1),
