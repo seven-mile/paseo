@@ -143,10 +143,11 @@ error until a later flush gets the prompt through. An agent can read the current
 `swarm_prompt_refresh`, which leaves the receipt alone. The refresh lives in the conversation only;
 the stored session config keeps the creation-time prompt.
 
-Swarm planners must prepare a separate workspace and pass its `workspaceId` when creating
-a supervisor seat. This keeps supervisor execution out of the planner's workspace; omitting placement
-does not bypass the separation. Other seats default to their creator's
-workspace. Explicit placement keeps the reporting relationship unchanged.
+Swarm places a seat when its first agent starts, so a seat change the spec refuses leaves no
+workspace behind. A planner works at its project's root. A supervisor gets a new worktree, and
+fails to start rather than share the project's checkout when Paseo cannot create one. A worker
+shares its manager's workspace, and placing it places the manager first. A manager can pass the
+`workspaceId` of a workspace it made instead; it holds only the manager and its reports.
 
 Built-ins run in process and remain active independently of `pluginsEnabled`. They are
 absent from the installed plugin list and source configuration; their client bundles

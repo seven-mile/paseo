@@ -288,11 +288,10 @@ function findTaskFor(input: { swarmId?: string; projectId?: string }, taskId: st
 
 async function assertCreationWorkspace(
   actor: AgentRecord | null,
-  workspaceId: string | null,
+  workspaceId: string,
   context: PluginHandlerContext,
 ): Promise<void> {
   if (actor) {
-    if (!workspaceId) throw new Error(`Caller has no workspace: ${agentQualifiedName(actor)}`);
     const seats = store.read().agents.filter((candidate) => !candidate.retired);
     const allowed = seats.filter(
       (candidate) => candidate.id === actor.id || candidate.reportsTo === agentQualifiedName(actor),
@@ -328,34 +327,27 @@ function seatConfig(input: RpcInput<typeof createSeatRpc>): AgentConfig {
   };
 }
 
-// The workspace a new seat works in. A planner's supervisor gets a workspace of its own; a worker
-// shares its supervisor's unless told otherwise. A seat with nowhere to go gets a new workspace at
-// the project root.
-async function creationWorkspace(
+// A new seat gets its workspace when its first agent starts (placeSeat in server/seats.ts), so a
+// change the spec refuses leaves no workspace behind. A manager can still name one it made itself.
+async function namedWorkspace(
   input: RpcInput<typeof createSeatRpc>,
   actor: AgentRecord | null,
   parent: AgentRecord | null,
-  projectId: string | undefined,
   context: PluginHandlerContext,
-): Promise<string> {
+): Promise<string | null> {
+  if (!input.workspaceId) return null;
   const owner = actor ?? parent;
-  const ownerWorkspaceId = owner ? await seatWorkspaceId(owner, context) : null;
   if (
     input.roleClass === "supervisor" &&
-    owner?.roleClass === "planner" &&
-    (!input.workspaceId || input.workspaceId === ownerWorkspaceId)
+    owner &&
+    input.workspaceId === (await seatWorkspaceId(owner, context))
   ) {
-    throw new Error("Prepare a separate workspace for the supervisor and pass its workspaceId.");
+    throw new Error(
+      "A supervisor works in a workspace of its own. Leave workspaceId out and Swarm gives it a new worktree.",
+    );
   }
-  const workspaceId = input.workspaceId ?? ownerWorkspaceId;
-  await assertCreationWorkspace(actor, workspaceId, context);
-  if (workspaceId) return workspaceId;
-  const path = projectId ? await projectRoot(projectId, context) : process.cwd();
-  const workspace = await context.paseo.workspaces.create({
-    source: { kind: "directory", path, ...(projectId ? { projectId } : {}) },
-    title: input.name,
-  });
-  return workspace.id;
+  await assertCreationWorkspace(actor, input.workspaceId, context);
+  return input.workspaceId;
 }
 
 export function registerOperations(server: Pick<PluginServerContext, "handle">): void {
@@ -466,7 +458,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         },
         swarm.source.files,
       );
-      const workspaceId = await creationWorkspace(input, actor, parent, projectId, context);
+      const workspaceId = await namedWorkspace(input, actor, parent, context);
       const timestamp = now();
       const seat: AgentRecord = {
         id: id("agent"),

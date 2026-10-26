@@ -60,7 +60,7 @@ A rename or a move is a retirement plus a new seat. The plan lists the Tasks tha
 
 Retiring leaves the occupant and its workspace as they are, so a restore can bring the agent back. A retired seat's agent loses its Swarm tools at its next call, since the daemon looks up the caller's seat on each one.
 
-A seat that `up` reserved has no workspace until its first agent starts. A worker then shares its manager's workspace; any other seat gets a new workspace at the project root.
+A seat has no workspace until its first agent starts, however it was created. `placeSeat` in `plugins/paseo-swarm/server/seats.ts` then picks one: a planner works at the project root, a supervisor gets a worktree of its own, and a worker shares its manager's, placing the manager first. A supervisor that cannot get a worktree does not start, and its mail stays queued with the reason. Two supervisors never edit the same checkout.
 
 ## Seat tools
 

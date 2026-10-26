@@ -299,32 +299,49 @@ async function replaceOccupant(
   });
 }
 
-// A seat that `up` reserved has no workspace until its first agent starts. A worker then shares
-// its manager's, as a worker an agent hires does; any other seat gets a new workspace at its
-// project's root. The workspace is the seat's local binding from then on.
+// Where a seat works, chosen when its first agent starts and kept from then on. A planner works
+// at its project's root. A supervisor gets a worktree of its own, so supervisors never edit the
+// same checkout; a worker shares its manager's workspace, placing the manager first if needed.
 async function placeSeat(seat: AgentRecord, context: SeatContext): Promise<string> {
   if (seat.workspaceId) return seat.workspaceId;
+  const pending = placing.get(seat.id);
+  if (pending) return pending;
+  const placed = placeNewSeat(seat, context).finally(() => placing.delete(seat.id));
+  placing.set(seat.id, placed);
+  return placed;
+}
+
+// Seats being placed, by id, so two deliveries never make two workspaces for one seat.
+const placing = new Map<string, Promise<string>>();
+
+async function placeNewSeat(seat: AgentRecord, context: SeatContext): Promise<string> {
   const name = agentQualifiedName(seat);
   let workspaceId: string;
-  if (seat.roleClass === "worker" && seat.reportsTo) {
-    const manager = findSeat(seat.swarmId, seat.reportsTo);
-    if (!manager.workspaceId) {
-      throw new Error(`Seat ${name} shares the workspace of ${seat.reportsTo}, which has none yet`);
-    }
-    workspaceId = manager.workspaceId;
+  if (seat.roleClass === "worker") {
+    if (!seat.reportsTo)
+      throw new Error(`Worker seat ${name} has no manager to share a workspace with`);
+    workspaceId = await placeSeat(findSeat(seat.swarmId, seat.reportsTo), context);
   } else {
-    const { projectId } = swarmOf(seat);
+    const projectId = swarmOf(seat).projectId ?? seat.projectId;
     const project = projectId
       ? (await context.paseo.projects.list({})).projects.find(
           (candidate) => candidate.projectId === projectId,
         )
       : undefined;
     if (!project) throw new Error(`Seat ${name} has no workspace and no project to make one in`);
-    const workspace = await context.paseo.workspaces.create({
-      source: { kind: "directory", path: project.projectRootPath, projectId: project.projectId },
-      title: seat.name,
-    });
-    workspaceId = workspace.id;
+    workspaceId =
+      seat.roleClass === "planner"
+        ? (
+            await context.paseo.workspaces.create({
+              source: {
+                kind: "directory",
+                path: project.projectRootPath,
+                projectId: project.projectId,
+              },
+              title: seat.name,
+            })
+          ).id
+        : await supervisorWorktree(seat, project.projectId, context);
   }
   await store.commit((state) => {
     const current = state.agents.find((agent) => agent.id === seat.id);
@@ -332,6 +349,35 @@ async function placeSeat(seat: AgentRecord, context: SeatContext): Promise<strin
     return [{ op: "put", collection: "agents", record: { ...current, workspaceId } }];
   });
   return workspaceId;
+}
+
+// A supervisor never falls back to the project's own checkout: without a worktree it does not start.
+async function supervisorWorktree(
+  seat: AgentRecord,
+  projectId: string,
+  context: SeatContext,
+): Promise<string> {
+  const name = agentQualifiedName(seat);
+  try {
+    const workspace = await context.paseo.workspaces.create({
+      source: {
+        kind: "worktree",
+        projectId,
+        action: "branch-off",
+        worktreeSlug: name.replace(/[^a-z0-9]+/gi, "-").toLowerCase(),
+      },
+      title: seat.name,
+    });
+    return workspace.id;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Seat ${name} needs a worktree of its own, and Paseo could not create one: ${detail}`,
+      {
+        cause: error,
+      },
+    );
+  }
 }
 
 // Starts the first agent of a reserved seat, in the seat's workspace with the standing prompt from

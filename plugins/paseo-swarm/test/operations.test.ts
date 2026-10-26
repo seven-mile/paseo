@@ -74,7 +74,7 @@ function boardOf({
   };
 }
 
-test("supervisors require independent placement, workers keep caller defaults, and foreign occupants are rejected", async () => {
+test("seats are placed when their first agent starts: supervisors in worktrees of their own, workers with their manager", async () => {
   const home = mkdtempSync(join(tmpdir(), "swarm-operations-"));
   const previousHome = process.env.PASEO_HOME;
   const previousPwa = process.env.PASEO_SWARM_PWA_ROOT;
@@ -109,7 +109,9 @@ test("supervisors require independent placement, workers keep caller defaults, a
   const agentCreations: Array<{ workspaceId: string; parent: string | undefined }> = [];
   const runtimeWorkspaces = new Map([[planner.paseoAgentId, "planner-workspace"]]);
   const prompts: string[] = [];
+  let worktreeFailure: string | null = null;
   const workspace = (workspaceId: string) => ({
+    id: workspaceId,
     async refresh() {
       return { projectId: workspaceId === "other-workspace" ? "other" : "project" };
     },
@@ -176,6 +178,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
         ref: workspace,
         async create(options: unknown) {
           workspaceCreations.push(options);
+          if (worktreeFailure) throw new Error(worktreeFailure);
           return workspace("supervisor-workspace");
         },
       },
@@ -217,28 +220,24 @@ test("supervisors require independent placement, workers keep caller defaults, a
     );
     assert.equal(store.read().agents.length, 1);
     assert.equal(workspaceCreations.length, 0);
-    const placementError =
-      /Prepare a separate workspace for the supervisor and pass its workspaceId/;
-    for (const workspaceId of [undefined, null, "planner-workspace"]) {
-      await assert.rejects(
-        async () =>
-          invoke(
-            createSeatRpc.name,
-            createSeatRpc.input.parse({
-              name: "invalid-placement",
-              roleClass: "supervisor",
-              role: "supervisor",
-              actorName: "planner",
-              provider: "codex/gpt-6.1-sol",
-              reportsTo: "planner",
-              workspaceId,
-            }),
-          ),
-        placementError,
-      );
-      assert.equal(store.read().agents.length, 1);
-      assert.equal(agentCreations.length, 0);
-    }
+    await assert.rejects(
+      async () =>
+        invoke(
+          createSeatRpc.name,
+          createSeatRpc.input.parse({
+            name: "invalid-placement",
+            roleClass: "supervisor",
+            role: "supervisor",
+            actorName: "planner",
+            provider: "codex/gpt-6.1-sol",
+            reportsTo: "planner",
+            workspaceId: "planner-workspace",
+          }),
+        ),
+      /A supervisor works in a workspace of its own/,
+    );
+    assert.equal(store.read().agents.length, 1);
+    assert.equal(agentCreations.length, 0);
     const supervisor = (await invoke(
       createSeatRpc.name,
       createSeatRpc.input.parse({
@@ -265,7 +264,8 @@ test("supervisors require independent placement, workers keep caller defaults, a
         provider: "codex/gpt-6.1-sol",
       }),
     )) as AgentRecord;
-    assert.equal(worker.workspaceId, supervisor.workspaceId);
+    // A worker is placed with its manager when its first agent starts.
+    assert.equal(worker.workspaceId, null);
     assert.equal(workspaceCreations.length, 0);
     // A new seat has no agent until its first message starts one, with no Paseo parent.
     assert.equal(supervisor.paseoAgentId, null);
@@ -295,6 +295,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
     ]);
     const seatOf = (seat: AgentRecord) =>
       store.read().agents.find((agent) => agent.id === seat.id)!;
+    assert.equal(seatOf(worker).workspaceId, "supervisor-workspace");
     const supervisorAgent = seatOf(supervisor).paseoAgentId!;
     const workerAgent = seatOf(worker).paseoAgentId!;
     assert.equal(seatOf(supervisor).occupant?.number, 1);
@@ -307,6 +308,85 @@ test("supervisors require independent placement, workers keep caller defaults, a
     );
     assert.equal(supervisor.projectId, "project");
     assert.equal(worker.projectId, "project");
+    // A supervisor named with no workspace gets a worktree when the first agent of its team starts,
+    // and never the project's own checkout. Its workers share that worktree.
+    const unplaced = (await invoke(
+      createSeatRpc.name,
+      createSeatRpc.input.parse({
+        name: "lead",
+        roleClass: "supervisor",
+        role: "supervisor",
+        actorName: "planner",
+        reportsTo: "planner",
+        provider: "codex/gpt-6.1-sol",
+      }),
+    )) as AgentRecord;
+    const unplacedWorker = (await invoke(
+      createSeatRpc.name,
+      createSeatRpc.input.parse({
+        name: "helper",
+        roleClass: "worker",
+        role: "researcher",
+        actorName: "planner.lead",
+        reportsTo: "planner.lead",
+        provider: "codex/gpt-6.1-sol",
+      }),
+    )) as AgentRecord;
+    assert.equal(unplaced.workspaceId, null);
+    assert.deepEqual(workspaceCreations, []);
+    await invoke(
+      sendMessageRpc.name,
+      sendMessageRpc.input.parse({
+        senderName: "human",
+        recipientName: "planner.lead.helper",
+        body: "Look around",
+      }),
+    );
+    assert.deepEqual(workspaceCreations, [
+      {
+        source: {
+          kind: "worktree",
+          projectId: "project",
+          action: "branch-off",
+          worktreeSlug: "planner-lead",
+        },
+        title: "lead",
+      },
+    ]);
+    assert.equal(seatOf(unplaced).workspaceId, "supervisor-workspace");
+    assert.equal(seatOf(unplaced).paseoAgentId, null);
+    assert.equal(seatOf(unplacedWorker).workspaceId, "supervisor-workspace");
+    assert.notEqual(seatOf(unplacedWorker).paseoAgentId, null);
+    // Without a worktree a supervisor does not start; it never falls back to the project root.
+    const isolated = (await invoke(
+      createSeatRpc.name,
+      createSeatRpc.input.parse({
+        name: "isolated",
+        roleClass: "supervisor",
+        role: "supervisor",
+        actorName: "planner",
+        reportsTo: "planner",
+        provider: "codex/gpt-6.1-sol",
+      }),
+    )) as AgentRecord;
+    worktreeFailure = "not a git repository";
+    const refused = sendMessageRpc.output.parse(
+      await invoke(
+        sendMessageRpc.name,
+        sendMessageRpc.input.parse({
+          senderName: "human",
+          recipientName: "planner.isolated",
+          body: "Start",
+        }),
+      ),
+    );
+    assert.equal(refused.delivered, false);
+    assert.match(refused.receipt, /needs a worktree of its own.*not a git repository/);
+    assert.equal(seatOf(isolated).workspaceId, null);
+    assert.deepEqual(
+      workspaceCreations.map((creation) => (creation as { source: { kind: string } }).source.kind),
+      ["worktree", "worktree"],
+    );
     const createChild = (actor: AgentRecord, name: string, workspaceId?: string) =>
       invoke(
         createSeatRpc.name,

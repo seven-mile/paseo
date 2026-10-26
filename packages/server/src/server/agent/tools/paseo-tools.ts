@@ -934,7 +934,7 @@ export async function createPaseoToolCatalog(
         registerTool(
           "swarm_seat_create",
           {
-            description: `Create a ${childRoleClass} seat that reports to you, with a role from swarm_role_list. The seat has no agent until its first message, which starts one with the provider and settings given here. provider is provider/model. A planner gives each supervisor a workspace of its own: prepare one and pass its workspaceId. A supervisor's workers share its workspace unless given another, and every agent in that workspace must be the supervisor or one of its reports.`,
+            description: `Create a ${childRoleClass} seat that reports to you, with a role from swarm_role_list. The seat has no agent until its first message, which starts one with the provider and settings given here. provider is provider/model. Swarm places the seat when its first agent starts: a supervisor gets a worktree of its own, and a worker shares its supervisor's workspace. Pass workspaceId only to place the seat in a workspace you made; every agent in it must be you or one of your reports.`,
             inputSchema: {
               name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
               role: z.string().min(1),
