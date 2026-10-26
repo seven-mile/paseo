@@ -1,25 +1,6 @@
 import { useInstalledPlugin } from "@/plugins/registry";
 import { useCallback } from "react";
 
-export type SwarmRoleClass = "planner" | "supervisor" | "worker";
-
-export interface SwarmRoleOption {
-  role: string;
-  roleClass: SwarmRoleClass;
-  title: string;
-  description: string;
-}
-
-export interface SwarmAgentSummary {
-  paseoAgentId: string;
-  name: string;
-  qualifiedName?: string;
-  roleClass: SwarmRoleClass;
-  reportsTo: string | null;
-  workspaceId: string | null;
-  retired: boolean;
-}
-
 export function useSwarmRpc(serverId: string) {
   const plugin = useInstalledPlugin(serverId, "paseo-swarm");
   const invoke = useCallback(

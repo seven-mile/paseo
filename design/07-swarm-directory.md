@@ -64,7 +64,9 @@ A seat that `up` reserved has no workspace until its first agent starts. A worke
 
 ## Seat tools
 
-Seat tools change `swarm.yaml` and the accepted seats together, so the next `up` has nothing of theirs to undo. That covers a hire (`swarm_seat_create`, `swarm.agent.prepare`, a new `swarm.agent.register`), an agent change (`paseo-swarm swarm seat set`), and `paseo-swarm swarm seat retire`. A reset, a re-registration, and `bind_workspace` change local bindings only and leave the file alone. The steps are in `mutateSpec` in `plugins/paseo-swarm/server/spec.ts`.
+A seat comes from one of two places: you name it in `swarm.yaml` and run `up`, or a seat's agent hires it with `swarm_seat_create`. Both check the same rules, and both give the seat the `agent` block its first agent starts from. The app creates no seats. It sends your message to a seat through its mailbox (`swarm.message.send`), and that message starts a seat's first agent.
+
+Seat tools change `swarm.yaml` and the accepted seats together, so the next `up` has nothing of theirs to undo. That covers a hire (`swarm_seat_create`), an agent change (`paseo-swarm swarm seat set`), and `paseo-swarm swarm seat retire`. A reset changes local bindings only and leaves the file alone. The steps are in `mutateSpec` in `plugins/paseo-swarm/server/spec.ts`.
 
 A change checks only the section it writes against what the swarm accepted. Edits you have not run `up` on elsewhere in the file do not block it:
 

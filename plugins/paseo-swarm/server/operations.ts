@@ -3,16 +3,9 @@ import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { listPwaRoles, readPwa, readPwaFiles } from "./pwa";
-import {
-  initialPrompt,
-  messagePrompt,
-  messageReceipt,
-  refreshedPrompt,
-  turnDigestRow,
-} from "./prompts";
+import { messagePrompt, messageReceipt, refreshedPrompt, turnDigestRow } from "./prompts";
 import {
   assemblePrompt,
-  assertRoleClass,
   findSeat,
   listSeats,
   readSeatHistory,
@@ -54,7 +47,6 @@ import {
   createTaskRpc,
   directoryRecoverRpc,
   directoryUpRpc,
-  registerAgentRpc,
   statusReadRpc,
   type RosterPlan,
   sendMessageRpc,
@@ -62,8 +54,6 @@ import {
   pwaSourceReadRpc,
   pwaSourceSetRpc,
   pwaRolesReadRpc,
-  prepareAgentRpc,
-  bindPreparedAgentRpc,
   mailboxReadRpc,
   refreshPromptRpc,
   seatHistoryReadRpc,
@@ -446,85 +436,6 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     return roles.filter((role) => !roleClass || role.roleClass === roleClass);
   });
 
-  server.handle(registerAgentRpc, async (input: RpcInput<typeof registerAgentRpc>, context) => {
-    const snapshot = (await context.paseo.agents.ref(input.paseoAgentId).refresh())?.agent;
-    if (!snapshot?.workspaceId) throw new Error(`Unknown agent workspace: ${input.paseoAgentId}`);
-    if (input.workspaceId && input.workspaceId !== snapshot.workspaceId)
-      throw new Error("Agent workspace does not match registration.");
-    const swarm = await requestSwarm({ ...input, workspaceId: snapshot.workspaceId }, context);
-    const parent = input.reportsTo ? findAgent(swarm.id, input.reportsTo) : null;
-    const projectId = await projectScope(
-      { ...input, workspaceId: snapshot.workspaceId, parent },
-      context,
-    );
-    assertSwarmProject(swarm, projectId);
-    assertRoleClass(readPwa(swarm.source.files, input.role).roleClass, input.roleClass, input.role);
-    const timestamp = now();
-    const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
-    const reportsTo = parent ? agentQualifiedName(parent) : null;
-    const registered = store
-      .read()
-      .agents.find((agent) => agent.paseoAgentId === input.paseoAgentId);
-    if (!registered) {
-      // A new seat joins swarm.yaml with its agent.
-      const [added] = await mutateSpec(swarm.id, () => {
-        ensureUniqueName(swarm.id, input.name, qualifiedName, parent);
-        const seat: AgentRecord = {
-          id: id("agent"),
-          swarmId: swarm.id,
-          paseoAgentId: input.paseoAgentId,
-          name: input.name,
-          qualifiedName,
-          aliases: input.aliases,
-          roleClass: input.roleClass,
-          role: input.role,
-          reportsTo,
-          workspaceId: snapshot.workspaceId ?? null,
-          projectId,
-          retired: false,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        };
-        return [{ kind: "add", seat }];
-      });
-      return added.seat;
-    }
-    // Registering a seat again only refreshes where its agent runs.
-    let result!: AgentRecord;
-    await store.commit((state) => {
-      const existing = state.agents.find((agent) => agent.paseoAgentId === input.paseoAgentId);
-      if (!existing) throw new Error(`Swarm seat disappeared: ${input.paseoAgentId}`);
-      if (existing.swarmId !== swarm.id) {
-        throw new Error(`Agent ${input.paseoAgentId} already sits in another swarm`);
-      }
-      // Whether a seat exists is the spec's to say; registering again only rebinds its agent.
-      if (existing.retired) {
-        throw new Error(
-          `Seat ${agentQualifiedName(existing)} is retired. Name it in swarm.yaml and run \`paseo-swarm swarm up\` to restore it.`,
-        );
-      }
-      if (
-        existing.name !== input.name ||
-        existing.roleClass !== input.roleClass ||
-        existing.role !== input.role ||
-        agentQualifiedName(existing) !== qualifiedName
-      ) {
-        throw new Error(`Agent identity and hierarchy are immutable: ${input.paseoAgentId}`);
-      }
-      result = {
-        ...existing,
-        ...input,
-        workspaceId: snapshot.workspaceId ?? null,
-        projectId,
-        qualifiedName,
-        reportsTo,
-        updatedAt: timestamp,
-      };
-      return [{ op: "put", collection: "agents", record: result }];
-    });
-    return result;
-  });
-
   server.handle(
     createSeatRpc,
     async (input: RpcInput<typeof createSeatRpc>, context: PluginHandlerContext) => {
@@ -576,87 +487,6 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         return [{ kind: "add", seat }];
       });
       return seatView(seat);
-    },
-  );
-
-  server.handle(prepareAgentRpc, async (input: RpcInput<typeof prepareAgentRpc>, context) => {
-    const actor = input.actorPaseoAgentId ? (seatOfAgent(input.actorPaseoAgentId) ?? null) : null;
-    if (input.actorPaseoAgentId && !actor) {
-      throw new Error(`Unknown active Paseo actor: ${input.actorPaseoAgentId}`);
-    }
-    const swarm = actor ? swarmOf(actor) : await requestSwarm(input, context);
-    const parent = parentFor(swarm.id, actor, input.reportsTo);
-    assertCanCreateAgent(actor, parent, input.roleClass);
-    const projectId = await projectScope({ ...input, parent }, context);
-    assertSwarmProject(swarm, projectId);
-    const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
-    ensureUniqueName(swarm.id, input.name, qualifiedName, parent);
-    const provisional = {
-      name: input.name,
-      qualifiedName,
-      roleClass: input.roleClass,
-      role: input.role,
-      reportsTo: parent ? agentQualifiedName(parent) : null,
-    } as const;
-    const assembled = assemblePrompt(provisional, swarm.source.files);
-    const timestamp = now();
-    const paseoAgentId = randomUUID();
-    const agent: AgentRecord = {
-      id: id("agent"),
-      swarmId: swarm.id,
-      paseoAgentId,
-      name: input.name,
-      qualifiedName,
-      aliases: input.aliases,
-      roleClass: input.roleClass,
-      role: input.role,
-      reportsTo: parent ? agentQualifiedName(parent) : null,
-      workspaceId: null,
-      projectId,
-      prompt: assembled.received,
-      retired: false,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-    const systemPrompt = initialPrompt({
-      pwa: assembled.pwa,
-      agent: provisional,
-      brief: input.brief,
-    });
-    await mutateSpec(swarm.id, () => {
-      ensureUniqueName(swarm.id, input.name, qualifiedName, parent);
-      return [{ kind: "add", seat: agent }];
-    });
-    return { agentId: paseoAgentId, systemPrompt, agent };
-  });
-
-  server.handle(
-    bindPreparedAgentRpc,
-    async (input: RpcInput<typeof bindPreparedAgentRpc>, context) => {
-      const prepared = store
-        .read()
-        .agents.find((candidate) => candidate.paseoAgentId === input.agentId && !candidate.retired);
-      if (!prepared) throw new Error(`Unknown prepared agent: ${input.agentId}`);
-      const snapshot = (await context.paseo.agents.ref(input.agentId).refresh())?.agent;
-      if (!snapshot || snapshot.workspaceId !== input.workspaceId)
-        throw new Error("Agent workspace does not match binding.");
-      const swarm = swarmOf(prepared);
-      const parent = prepared.reportsTo ? findAgent(swarm.id, prepared.reportsTo) : null;
-      const projectId = await projectScope(
-        { projectId: prepared.projectId, workspaceId: input.workspaceId, parent },
-        context,
-      );
-      assertSwarmProject(swarm, projectId);
-      let result!: AgentRecord;
-      await store.commit((state) => {
-        const agent = state.agents.find(
-          (candidate) => candidate.paseoAgentId === input.agentId && !candidate.retired,
-        );
-        if (!agent) throw new Error(`Unknown prepared agent: ${input.agentId}`);
-        result = { ...agent, workspaceId: input.workspaceId, projectId, updatedAt: now() };
-        return [{ op: "put", collection: "agents", record: result }];
-      });
-      return result;
     },
   );
 

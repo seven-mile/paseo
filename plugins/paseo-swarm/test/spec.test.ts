@@ -16,7 +16,6 @@ import {
   createSeatRpc,
   directoryRecoverRpc,
   directoryUpRpc,
-  registerAgentRpc,
   seatListRpc,
   seatRetireRpc,
   seatUpdateRpc,
@@ -324,22 +323,11 @@ test("retiring a seat takes it out of swarm.yaml and fails its queued mail", asy
   assert.equal((await status()).unapplied, null);
 });
 
-test("a retired seat stays retired, and its agent stays a Swarm agent", async (t) => {
+test("the agent of a retired seat is still found as a Swarm agent", async (t) => {
   const { call } = await setup(t);
   await call(seatRetireRpc, { seat: "planner.lead" });
   const listed = (includeRetired: boolean) =>
     call(seatListRpc, { paseoAgentId: "lead-agent", includeRetired });
   assert.deepEqual((await listed(false)).seats, []);
   assert.equal((await listed(true)).seats[0]?.qualifiedName, "planner.lead");
-  await assert.rejects(
-    () =>
-      call(registerAgentRpc, {
-        paseoAgentId: "lead-agent",
-        name: "lead",
-        roleClass: "supervisor",
-        role: "supervisor",
-        reportsTo: "planner",
-      }),
-    /Seat planner\.lead is retired/,
-  );
 });

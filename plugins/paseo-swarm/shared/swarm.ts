@@ -126,22 +126,6 @@ export const pwaRolesReadRpc = defineRpc({
   ),
 });
 
-export const registerAgentRpc = defineRpc({
-  name: "swarm.agent.register",
-  input: z.object({
-    swarmId: z.string().min(1).optional(),
-    projectId: z.string().min(1).optional(),
-    paseoAgentId: z.string(),
-    name: slugNameSchema,
-    aliases: z.array(z.string()).default([]),
-    roleClass: z.enum(["planner", "supervisor", "worker"]),
-    role: z.string().min(1),
-    reportsTo: z.string().nullable().default(null),
-    workspaceId: z.string().nullable().default(null),
-  }),
-  output: agentRecordSchema,
-});
-
 // Reserves a seat. It has no agent until its first mail arrives, which starts one with the seat's
 // agentConfig, so provider is "provider/model".
 export const createSeatRpc = defineRpc({
@@ -164,32 +148,6 @@ export const createSeatRpc = defineRpc({
     workspaceId: z.string().nullable().default(null),
   }),
   output: seatSchema,
-});
-
-export const prepareAgentRpc = defineRpc({
-  name: "swarm.agent.prepare",
-  input: z.object({
-    swarmId: z.string().min(1).optional(),
-    projectId: z.string().min(1).optional(),
-    name: slugNameSchema,
-    aliases: z.array(z.string()).default([]),
-    roleClass: z.enum(["planner", "supervisor", "worker"]),
-    role: z.string().min(1),
-    reportsTo: z.string().nullable().default(null),
-    actorPaseoAgentId: z.string().nullable().default(null),
-    brief: z.string().default("Wait for an explicit assignment."),
-  }),
-  output: z.object({
-    agentId: z.string(),
-    systemPrompt: z.string(),
-    agent: agentRecordSchema,
-  }),
-});
-
-export const bindPreparedAgentRpc = defineRpc({
-  name: "swarm.agent.bind_workspace",
-  input: z.object({ agentId: z.string(), workspaceId: z.string() }),
-  output: agentRecordSchema,
 });
 
 export const refreshPromptRpc = defineRpc({

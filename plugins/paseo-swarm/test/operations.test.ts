@@ -12,9 +12,9 @@ import type {
 import contribute from "../index.server";
 import { forgetRunningTurns } from "../server/mailbox";
 import { notifyManager, registerOperations } from "../server/operations";
-import { seatView } from "../server/seats";
+import { assemblePrompt, seatView } from "../server/seats";
 import { pwaFilesRevision, readPwaFiles } from "../server/pwa";
-import { createSwarm, swarmOf } from "../server/swarms";
+import { createSwarm, resolveSwarm, swarmForProject } from "../server/swarms";
 import { joinSwarm } from "./fixtures";
 import {
   getConfigPath,
@@ -35,8 +35,6 @@ import {
   pwaSourceSetRpc,
   pwaSourceReadRpc,
   pwaRolesReadRpc,
-  prepareAgentRpc,
-  bindPreparedAgentRpc,
   refreshPromptRpc,
 } from "../shared/swarm";
 
@@ -355,19 +353,6 @@ test("supervisors require independent placement, workers keep caller defaults, a
     runtimeWorkspaces.delete("ordinary-native-agent");
     assert.equal(store.read().agents.length, savedCount);
     assert.equal(agentCreations.length, createdCount);
-    const prepareLegacy = (name: string) =>
-      invoke(
-        prepareAgentRpc.name,
-        prepareAgentRpc.input.parse({ name, roleClass: "planner", role: "planner" }),
-      ) as Promise<{ agentId: string; systemPrompt: string; agent: AgentRecord }>;
-    const legacyDefault = await prepareLegacy("legacy-default");
-    assert.equal(legacyDefault.agent.projectId, undefined);
-    runtimeWorkspaces.set(legacyDefault.agentId, "supervisor-workspace");
-    const bound = (await invoke(bindPreparedAgentRpc.name, {
-      agentId: legacyDefault.agentId,
-      workspaceId: "supervisor-workspace",
-    })) as AgentRecord;
-    assert.equal(bound.projectId, "project");
     // A project given a PWA directory gets a swarm of its own: a copy, so the chosen directory is
     // never written.
     const source = join(home, "agreement");
@@ -416,40 +401,21 @@ test("supervisors require independent placement, workers keep caller defaults, a
       boardReadRpc.output.parse(await invoke(boardReadRpc.name, { projectId: "project" })).statuses;
     assert.deepEqual(await readStatuses(), []);
     assert.deepEqual(await invoke(boardReadRpc.name, {}), boardOf(store.read()));
-    const prepare = (name: string) =>
-      invoke(
-        prepareAgentRpc.name,
-        prepareAgentRpc.input.parse({
-          name,
-          projectId: "project",
-          roleClass: "worker",
-          role: "researcher",
-        }),
-      ) as Promise<{ agentId: string; systemPrompt: string; agent: AgentRecord }>;
-    const first = await prepare("fresh-one");
-    assert.match(first.systemPrompt, /Fresh project/);
-    assert.match(first.systemPrompt, /First role/);
+    // Prompts assemble from the accepted copy, so an invalid edit on disk reaches no one.
+    const researcher = {
+      name: "fresh",
+      qualifiedName: "fresh",
+      roleClass: "worker",
+      role: "researcher",
+      reportsTo: null,
+    } as const;
+    const accepted = () => resolveSwarm({ projectId: "project" }).source.files;
+    const before = assemblePrompt(researcher, accepted()).pwa;
+    assert.match(before.projectBody, /Fresh project/);
+    assert.match(before.roleBody, /First role/);
     writeFileSync(join(attached.path, "roles", "researcher.md"), "invalid");
-    const second = await prepare("fresh-two");
-    assert.match(second.systemPrompt, /First role/);
+    assert.match(assemblePrompt(researcher, accepted()).pwa.roleBody, /First role/);
     assert.doesNotMatch(prompts[1], /Fresh project/);
-    runtimeWorkspaces.set(first.agentId, "other-workspace");
-    await assert.rejects(
-      async () =>
-        invoke(bindPreparedAgentRpc.name, {
-          agentId: first.agentId,
-          workspaceId: "other-workspace",
-        }),
-      /selected project/,
-    );
-    const stored = () => store.read().agents.find((agent) => agent.paseoAgentId === first.agentId);
-    assert.equal(stored()?.workspaceId, null);
-    runtimeWorkspaces.set(first.agentId, "supervisor-workspace");
-    await invoke(bindPreparedAgentRpc.name, {
-      agentId: first.agentId,
-      workspaceId: "supervisor-workspace",
-    });
-    assert.equal(stored()?.workspaceId, "supervisor-workspace");
     const initialSends = sends.length;
     await notifyManager(
       { id: workerAgent },
@@ -1071,20 +1037,36 @@ test("prompt refresh re-assembles the standing prompt and records the received r
   const refresh = async (paseoAgentId: string) =>
     refreshPromptRpc.output.parse(await invoke(refreshPromptRpc.name, { paseoAgentId }));
   try {
-    const prepared = (await invoke(
-      prepareAgentRpc.name,
-      prepareAgentRpc.input.parse({
-        name: "lead",
-        roleClass: "planner",
-        role: "planner",
-        brief: "One-time orientation.",
-      }),
-    )) as { agentId: string; systemPrompt: string; agent: AgentRecord };
-    const created = prepared.agent.prompt;
-    assert.ok(created);
-    assert.match(prepared.systemPrompt, /One-time orientation/);
+    const swarm = await swarmForProject(undefined);
+    const lead: AgentRecord = {
+      id: "lead-seat",
+      swarmId: swarm.id,
+      paseoAgentId: "lead-agent",
+      name: "lead",
+      qualifiedName: "lead",
+      aliases: [],
+      roleClass: "planner",
+      role: "planner",
+      reportsTo: null,
+      workspaceId: null,
+      prompt: assemblePrompt(
+        {
+          name: "lead",
+          qualifiedName: "lead",
+          roleClass: "planner",
+          role: "planner",
+          reportsTo: null,
+        },
+        swarm.source.files,
+      ).received,
+      retired: false,
+      createdAt: "2026-10-06T00:00:00Z",
+      updatedAt: "2026-10-06T00:00:00Z",
+    };
+    await store.commit(() => [{ op: "put", collection: "agents", record: lead }]);
+    const created = lead.prompt!;
 
-    const unchanged = await refresh(prepared.agentId);
+    const unchanged = await refresh("lead-agent");
     assert.equal(unchanged.changed, false);
     assert.equal(unchanged.previousRevision, created.revision);
     assert.equal(unchanged.revision, created.revision);
@@ -1092,12 +1074,10 @@ test("prompt refresh re-assembles the standing prompt and records the received r
     assert.match(unchanged.prompt, /nothing changed/);
     assert.match(unchanged.prompt, /<paseo-swarm-system-settings>/);
     assert.match(unchanged.prompt, /Role one\./);
-    assert.doesNotMatch(unchanged.prompt, /One-time orientation/);
 
     // An edit on disk is not accepted, so it reaches no prompt.
-    const swarm = swarmOf(prepared.agent);
     writeRole("Role two.", swarm.directory);
-    assert.equal((await refresh(prepared.agentId)).changed, false);
+    assert.equal((await refresh("lead-agent")).changed, false);
     const files = readPwaFiles(swarm.directory);
     await store.commit(() => [
       {
@@ -1106,7 +1086,7 @@ test("prompt refresh re-assembles the standing prompt and records the received r
         record: { ...swarm, source: { revision: pwaFilesRevision(files), files } },
       },
     ]);
-    const changed = await refresh(prepared.agentId);
+    const changed = await refresh("lead-agent");
     assert.equal(changed.changed, true);
     assert.equal(changed.previousRevision, created.revision);
     assert.notEqual(changed.revision, created.revision);
@@ -1115,10 +1095,9 @@ test("prompt refresh re-assembles the standing prompt and records the received r
     assert.doesNotMatch(changed.prompt, /Role one\./);
     // The tool only reads: the receipt moves when the reconciler delivers the prompt.
     const receipt = () =>
-      store.read().agents.find((agent) => agent.paseoAgentId === prepared.agentId)?.prompt
-        ?.revision;
+      store.read().agents.find((agent) => agent.paseoAgentId === "lead-agent")?.prompt?.revision;
     assert.equal(receipt(), created.revision);
-    assert.equal((await refresh(prepared.agentId)).changed, true);
+    assert.equal((await refresh("lead-agent")).changed, true);
 
     // An agent registered before revisions were recorded has nothing to compare.
     await seed(
@@ -1153,7 +1132,7 @@ test("prompt refresh re-assembles the standing prompt and records the received r
 
     await assert.rejects(async () => refresh("missing-agent"), /Unknown active Swarm agent/);
     writeFileSync(join(swarm.directory, "roles", "planner.md"), "invalid");
-    assert.equal((await refresh(prepared.agentId)).revision, changed.revision);
+    assert.equal((await refresh("lead-agent")).revision, changed.revision);
     assert.equal(receipt(), created.revision);
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;

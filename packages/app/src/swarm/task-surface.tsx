@@ -998,7 +998,7 @@ function TaskDetail({
   const openAgent = useCallback(
     (name: string) => {
       const agent = findSwarmTaskAgent(board.agents, name);
-      if (!agent) {
+      if (!agent?.paseoAgentId) {
         setActor(name);
         return;
       }

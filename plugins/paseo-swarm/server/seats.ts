@@ -47,7 +47,7 @@ function seatLabels(seat: AgentRecord): Record<string, string> {
 
 const now = () => new Date().toISOString();
 
-export function assertRoleClass(
+function assertRoleClass(
   pwaRoleClass: AgentRecord["roleClass"],
   agentRoleClass: AgentRecord["roleClass"],
   role: string,
