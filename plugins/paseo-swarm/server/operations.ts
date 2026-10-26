@@ -2,17 +2,11 @@ import type { RpcInput } from "@getpaseo/plugin";
 import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { listPwaRoles, readPwa } from "./pwa";
-import {
-  initialPrompt,
-  messagePrompt,
-  messageReceipt,
-  refreshedPrompt,
-  turnDigestRow,
-} from "./prompts";
+import { listPwaRoles, readPwa, readPwaFiles } from "./pwa";
+import { messagePrompt, messageReceipt, refreshedPrompt, turnDigestRow } from "./prompts";
 import {
   assemblePrompt,
-  assertRoleClass,
+  findSeat,
   listSeats,
   readSeatHistory,
   resetSeats,
@@ -24,34 +18,65 @@ import {
 import type { TurnSummary } from "./turns";
 import { flushMailbox, sendThroughMailbox } from "./mailbox";
 import { store } from "./state";
-import { readPwaSource, requirePwaSource, writePwaSource } from "./source";
+import { readPwaSource } from "./source";
+import {
+  createSwarm,
+  findSwarm,
+  resolveSwarm,
+  swarmForProject,
+  swarmOf,
+  swarmOfSeatName,
+  swarmSeats,
+  swarmTasks,
+} from "./swarms";
 import { resolveActivityRefs } from "./refs";
+import { planRoster, readDesired } from "./roster";
+import {
+  assertNoConflict,
+  mutateSpec,
+  pendingConflict,
+  recoverIntents,
+  resolveConflict,
+  withSwarmLock,
+} from "./spec";
 import {
   appendActivityRpc,
   appendHumanActivityRpc,
   boardReadRpc,
   createSeatRpc,
   createTaskRpc,
-  registerAgentRpc,
+  directoryRecoverRpc,
+  directoryUpRpc,
+  statusReadRpc,
+  type RosterPlan,
   sendMessageRpc,
   updateTaskRpc,
   pwaSourceReadRpc,
   pwaSourceSetRpc,
   pwaRolesReadRpc,
-  prepareAgentRpc,
-  bindPreparedAgentRpc,
   mailboxReadRpc,
   refreshPromptRpc,
   seatHistoryReadRpc,
   seatListRpc,
   seatResetRpc,
+  seatRetireRpc,
   seatUpdateRpc,
 } from "../shared/swarm";
-import type { AgentConfig, AgentRecord, SwarmState, Task } from "../shared/models";
+import type { AgentConfig, AgentRecord, SwarmRecord, SwarmState, Task } from "../shared/models";
 import { agentQualifiedName, currentOccupant, mailboxMessageStatus } from "../shared/models";
 
 const now = () => new Date().toISOString();
 const id = (prefix: string) => `${prefix}-${randomUUID()}`;
+
+function swarmSummary(swarm: SwarmRecord) {
+  return {
+    id: swarm.id,
+    name: swarm.name,
+    directory: swarm.directory,
+    projectId: swarm.projectId,
+    revision: swarm.source.revision,
+  };
+}
 
 async function availableAgents(context: PluginHandlerContext) {
   const agents: Array<{ id: string; workspaceId?: string }> = [];
@@ -115,8 +140,8 @@ async function seatWorkspaceId(
   return snapshot.workspaceId ?? null;
 }
 
-function findAgent(reference: string, scopeName?: string): AgentRecord {
-  const agents = store.read().agents.filter((candidate) => !candidate.retired);
+function findAgent(swarmId: string, reference: string, scopeName?: string): AgentRecord {
+  const agents = swarmSeats(swarmId);
   const qualified = agents.filter((candidate) => agentQualifiedName(candidate) === reference);
   if (qualified.length === 1) return qualified[0];
 
@@ -138,7 +163,7 @@ function findAgent(reference: string, scopeName?: string): AgentRecord {
 
 function resolveTaskWorkers(workerNames: string[], manager: AgentRecord): string[] {
   return workerNames.map((workerName) => {
-    const worker = findAgent(workerName, agentQualifiedName(manager));
+    const worker = findAgent(swarmOf(manager).id, workerName, agentQualifiedName(manager));
     if (worker.roleClass !== "worker") {
       throw new Error(`Task worker must have role class worker: ${worker.name}`);
     }
@@ -152,12 +177,13 @@ function resolveTaskWorkers(workerNames: string[], manager: AgentRecord): string
 }
 
 function ensureUniqueName(
+  swarmId: string,
   name: string,
   qualifiedName: string,
   parent: AgentRecord | null,
   exceptPaseoAgentId?: string,
 ): void {
-  const agents = store.read().agents;
+  const agents = swarmSeats(swarmId, true);
   if (
     agents.some(
       (candidate) =>
@@ -181,8 +207,45 @@ function ensureUniqueName(
 }
 
 // The manager of a new seat: reportsTo when given, else the seat that asks.
-function parentFor(actor: AgentRecord | null, reportsTo: string | null): AgentRecord | null {
-  return reportsTo ? findAgent(reportsTo, actor ? agentQualifiedName(actor) : undefined) : actor;
+function parentFor(
+  swarmId: string,
+  actor: AgentRecord | null,
+  reportsTo: string | null,
+): AgentRecord | null {
+  return reportsTo
+    ? findAgent(swarmId, reportsTo, actor ? agentQualifiedName(actor) : undefined)
+    : actor;
+}
+
+// The swarm a request that may create seats acts in: the one it names, else its actor's or its
+// manager's, else its project's, which a project with a PWA directory chosen before swarms gets on
+// first use.
+async function requestSwarm(
+  input: {
+    swarmId?: string;
+    projectId?: string;
+    workspaceId?: string | null;
+    actorName?: string | null;
+    reportsTo?: string | null;
+  },
+  context: PluginHandlerContext,
+): Promise<SwarmRecord> {
+  if (input.swarmId) return findSwarm(input.swarmId);
+  if (input.actorName) return swarmOfSeatName(input.actorName);
+  if (input.reportsTo) return swarmOfSeatName(input.reportsTo);
+  return swarmForProject(await projectScope({ ...input, parent: null }, context));
+}
+
+// A project-attached swarm takes seats only from its own project.
+function assertSwarmProject(swarm: SwarmRecord, projectId: string | undefined): void {
+  if (swarm.projectId !== null && swarm.projectId !== projectId) {
+    throw new Error("Choose a manager and workspace in the selected project.");
+  }
+}
+
+// The swarm an actor-named request acts in.
+function actorSwarm(input: { swarmId?: string }, actorName: string): SwarmRecord {
+  return input.swarmId ? findSwarm(input.swarmId) : swarmOfSeatName(actorName);
 }
 
 function assertCanCreateAgent(
@@ -208,19 +271,27 @@ function assertCanCreateAgent(
   }
 }
 
-function findTask(taskId: string): Task {
-  const value = store.read().tasks.find((candidate) => candidate.id === taskId);
+function findTask(swarmId: string, taskId: string): Task {
+  const value = swarmTasks(swarmId).find((candidate) => candidate.id === taskId);
   if (!value) throw new Error(`Unknown Task: ${taskId}`);
   return value;
 }
 
+// A Task named by a request with no actor: in the swarm it names, else the one Task with that id.
+function findTaskFor(input: { swarmId?: string; projectId?: string }, taskId: string): Task {
+  if (input.swarmId || input.projectId) return findTask(resolveSwarm(input).id, taskId);
+  const tasks = store.read().tasks.filter((task) => task.swarmId && task.id === taskId);
+  if (tasks.length > 1) throw new Error(`Task ${taskId} exists in several swarms. Name the swarm.`);
+  if (tasks.length === 0) throw new Error(`Unknown Task: ${taskId}`);
+  return tasks[0];
+}
+
 async function assertCreationWorkspace(
   actor: AgentRecord | null,
-  workspaceId: string | null,
+  workspaceId: string,
   context: PluginHandlerContext,
 ): Promise<void> {
   if (actor) {
-    if (!workspaceId) throw new Error(`Caller has no workspace: ${agentQualifiedName(actor)}`);
     const seats = store.read().agents.filter((candidate) => !candidate.retired);
     const allowed = seats.filter(
       (candidate) => candidate.id === actor.id || candidate.reportsTo === agentQualifiedName(actor),
@@ -256,147 +327,125 @@ function seatConfig(input: RpcInput<typeof createSeatRpc>): AgentConfig {
   };
 }
 
-// The workspace a new seat works in. A planner's supervisor gets a workspace of its own; a worker
-// shares its supervisor's unless told otherwise. A seat with nowhere to go gets a new workspace at
-// the project root.
-async function creationWorkspace(
+// A new seat gets its workspace when its first agent starts (placeSeat in server/seats.ts), so a
+// change the spec refuses leaves no workspace behind. A manager can still name one it made itself.
+async function namedWorkspace(
   input: RpcInput<typeof createSeatRpc>,
   actor: AgentRecord | null,
   parent: AgentRecord | null,
-  projectId: string | undefined,
   context: PluginHandlerContext,
-): Promise<string> {
+): Promise<string | null> {
+  if (!input.workspaceId) return null;
   const owner = actor ?? parent;
-  const ownerWorkspaceId = owner ? await seatWorkspaceId(owner, context) : null;
   if (
     input.roleClass === "supervisor" &&
-    owner?.roleClass === "planner" &&
-    (!input.workspaceId || input.workspaceId === ownerWorkspaceId)
+    owner &&
+    input.workspaceId === (await seatWorkspaceId(owner, context))
   ) {
-    throw new Error("Prepare a separate workspace for the supervisor and pass its workspaceId.");
+    throw new Error(
+      "A supervisor works in a workspace of its own. Leave workspaceId out and Swarm gives it a new worktree.",
+    );
   }
-  const workspaceId = input.workspaceId ?? ownerWorkspaceId;
-  await assertCreationWorkspace(actor, workspaceId, context);
-  if (workspaceId) return workspaceId;
-  const path = projectId ? await projectRoot(projectId, context) : process.cwd();
-  const workspace = await context.paseo.workspaces.create({
-    source: { kind: "directory", path, ...(projectId ? { projectId } : {}) },
-    title: input.name,
-  });
-  return workspace.id;
+  await assertCreationWorkspace(actor, input.workspaceId, context);
+  return input.workspaceId;
 }
 
 export function registerOperations(server: Pick<PluginServerContext, "handle">): void {
-  server.handle(boardReadRpc, async ({ projectId }, context) => {
+  // The board of one swarm, or of every swarm when the request names none, as before swarms.
+  server.handle(boardReadRpc, async ({ projectId, swarmId, includeReserved }, context) => {
+    if (projectId) await projectRoot(projectId, context);
     const availableIds = new Set((await availableAgents(context)).map((agent) => agent.id));
     const saved = store.read();
+    const swarms = saved.swarms.filter(
+      (swarm) =>
+        (!swarmId || swarm.id === swarmId) && (!projectId || swarm.projectId === projectId),
+    );
+    const inScope = new Set(swarms.map((swarm) => swarm.id));
+    const scoped = <T extends { swarmId?: string }>(records: readonly T[]) =>
+      records.filter((record) => record.swarmId !== undefined && inScope.has(record.swarmId));
     const board = {
       version: saved.version,
-      // Reserved seats have no agent yet; they appear once their first mail starts one.
-      agents: saved.agents
-        .filter((agent) => agent.paseoAgentId !== null && availableIds.has(agent.paseoAgentId))
+      // A reserved seat has no agent until its first mail starts one; a person can send that mail.
+      agents: scoped(saved.agents)
+        .filter((agent) =>
+          agent.paseoAgentId === null
+            ? includeReserved === true
+            : availableIds.has(agent.paseoAgentId),
+        )
         .map(seatView),
-      tasks: saved.tasks,
-      activities: saved.activities,
+      tasks: scoped(saved.tasks),
+      activities: scoped(saved.activities),
     };
-    if (!projectId) return board;
-    await projectRoot(projectId, context);
-    const directory = readPwaSource(projectId);
-    if (!directory) return { ...board, statuses: [] };
-    const planner = listPwaRoles(directory).find((role) => role.roleClass === "planner");
-    if (!planner) throw new Error(`The PWA directory must contain a planner role: ${directory}`);
-    return { ...board, statuses: readPwa(directory, planner.role).statuses };
+    if (!projectId && !swarmId) return board;
+    if (swarms.length !== 1) return { ...board, statuses: [] };
+    const { files } = swarms[0].source;
+    const planner = listPwaRoles(files).find((role) => role.roleClass === "planner");
+    if (!planner) return { ...board, statuses: [] };
+    return { ...board, statuses: readPwa(files, planner.role).statuses };
   });
+  // A project's swarm directory, or the PWA directory chosen before swarms that its swarm will
+  // be instantiated from.
   server.handle(pwaSourceReadRpc, async ({ projectId }, context) => {
     if (projectId) await projectRoot(projectId, context);
-    return { path: readPwaSource(projectId) };
+    const swarm = store
+      .read()
+      .swarms.find((candidate) => candidate.projectId === (projectId ?? null));
+    return { path: swarm?.directory ?? readPwaSource(projectId) };
   });
+  // Instantiates the chosen directory as the project's swarm. The chosen directory is copied, so
+  // a template or a directory shared by several projects is never written.
   server.handle(pwaSourceSetRpc, async ({ path, projectId }, context) => {
-    const root = projectId ? await projectRoot(projectId, context) : undefined;
-    return { path: writePwaSource({ path, projectId, projectRoot: root }) };
-  });
-  server.handle(pwaRolesReadRpc, async ({ roleClass, path, projectId }, context) => {
     const root = projectId ? await projectRoot(projectId, context) : process.cwd();
-    const directory = path ? resolve(root, path) : requirePwaSource(projectId);
-    const roles = listPwaRoles(directory);
-    for (const role of roles) readPwa(directory, role.role);
-    return roles.filter((role) => !roleClass || role.roleClass === roleClass);
-  });
-
-  server.handle(registerAgentRpc, async (input: RpcInput<typeof registerAgentRpc>, context) => {
-    const parent = input.reportsTo ? findAgent(input.reportsTo) : null;
-    const snapshot = (await context.paseo.agents.ref(input.paseoAgentId).refresh())?.agent;
-    if (!snapshot?.workspaceId) throw new Error(`Unknown agent workspace: ${input.paseoAgentId}`);
-    if (input.workspaceId && input.workspaceId !== snapshot.workspaceId)
-      throw new Error("Agent workspace does not match registration.");
-    const projectId = await projectScope(
-      { ...input, workspaceId: snapshot.workspaceId, parent },
-      context,
-    );
-    assertRoleClass(
-      readPwa(requirePwaSource(projectId), input.role).roleClass,
-      input.roleClass,
-      input.role,
-    );
-    const timestamp = now();
-    let result!: AgentRecord;
-    await store.commit((state) => {
-      const existing = state.agents.find((agent) => agent.paseoAgentId === input.paseoAgentId);
-      const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
-      if (!existing) ensureUniqueName(input.name, qualifiedName, parent);
-      if (
-        existing &&
-        (existing.name !== input.name ||
-          existing.roleClass !== input.roleClass ||
-          existing.role !== input.role ||
-          agentQualifiedName(existing) !== qualifiedName)
-      ) {
-        throw new Error(`Agent identity and hierarchy are immutable: ${input.paseoAgentId}`);
-      }
-      const reportsTo = parent ? agentQualifiedName(parent) : null;
-      result = existing
-        ? {
-            ...existing,
-            ...input,
-            workspaceId: snapshot.workspaceId ?? null,
-            projectId,
-            qualifiedName,
-            reportsTo,
-            retired: false,
-            updatedAt: timestamp,
-          }
-        : {
-            id: id("agent"),
-            paseoAgentId: input.paseoAgentId,
-            name: input.name,
-            qualifiedName,
-            aliases: input.aliases,
-            roleClass: input.roleClass,
-            role: input.role,
-            reportsTo: parent ? agentQualifiedName(parent) : null,
-            workspaceId: snapshot.workspaceId ?? null,
-            projectId,
-            retired: false,
-            createdAt: timestamp,
-            updatedAt: timestamp,
-          };
-      return [{ op: "put", collection: "agents", record: result }];
+    if (store.read().swarms.some((swarm) => swarm.projectId === (projectId ?? null))) {
+      throw new Error(
+        "This project already has a swarm. Edit its directory and run `paseo-swarm swarm up`.",
+      );
+    }
+    const trimmed = path.trim();
+    if (!trimmed) throw new Error("Enter a PWA directory.");
+    const swarm = await createSwarm({
+      sourceDirectory: resolve(root, trimmed),
+      projectId: projectId ?? null,
     });
-    return result;
+    return { path: swarm.directory };
+  });
+  // The roles a seat can take: from a directory being chosen, else from the swarm's accepted PWA.
+  server.handle(pwaRolesReadRpc, async ({ roleClass, path, projectId, swarmId }, context) => {
+    const root = projectId ? await projectRoot(projectId, context) : process.cwd();
+    let files;
+    if (path) {
+      files = readPwaFiles(resolve(root, path));
+    } else if (
+      swarmId ||
+      store.read().swarms.some((swarm) => swarm.projectId === (projectId ?? null))
+    ) {
+      files = resolveSwarm({ swarmId, projectId }).source.files;
+    } else {
+      const directory = readPwaSource(projectId);
+      if (!directory) {
+        throw new Error("No PWA directory configured. Choose one in Project Settings → Swarm.");
+      }
+      files = readPwaFiles(directory);
+    }
+    const roles = listPwaRoles(files);
+    for (const role of roles) readPwa(files, role.role);
+    return roles.filter((role) => !roleClass || role.roleClass === roleClass);
   });
 
   server.handle(
     createSeatRpc,
     async (input: RpcInput<typeof createSeatRpc>, context: PluginHandlerContext) => {
-      const actor = input.actorName ? findAgent(input.actorName) : null;
-      const parent = parentFor(actor, input.reportsTo);
+      const swarm = await requestSwarm(input, context);
+      const actor = input.actorName ? findAgent(swarm.id, input.actorName) : null;
+      const parent = parentFor(swarm.id, actor, input.reportsTo);
       assertCanCreateAgent(actor, parent, input.roleClass);
       if (!input.provider.includes("/")) {
         throw new Error(`A new seat needs provider/model, not ${input.provider}`);
       }
       const projectId = await projectScope({ ...input, parent }, context);
+      assertSwarmProject(swarm, projectId);
       const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
-      ensureUniqueName(input.name, qualifiedName, parent);
+      ensureUniqueName(swarm.id, input.name, qualifiedName, parent);
       const reportsTo = parent ? agentQualifiedName(parent) : null;
       // Fails now, rather than at the first mail, when the role is not in the PWA.
       assemblePrompt(
@@ -407,12 +456,13 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
           role: input.role,
           reportsTo,
         },
-        projectId,
+        swarm.source.files,
       );
-      const workspaceId = await creationWorkspace(input, actor, parent, projectId, context);
+      const workspaceId = await namedWorkspace(input, actor, parent, context);
       const timestamp = now();
       const seat: AgentRecord = {
         id: id("agent"),
+        swarmId: swarm.id,
         paseoAgentId: null,
         name: input.name,
         qualifiedName,
@@ -428,106 +478,77 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         createdAt: timestamp,
         updatedAt: timestamp,
       };
-      await store.commit(() => [{ op: "put", collection: "agents", record: seat }]);
+      await mutateSpec(swarm.id, () => {
+        ensureUniqueName(swarm.id, input.name, qualifiedName, parent);
+        return [{ kind: "add", seat }];
+      });
       return seatView(seat);
     },
   );
 
-  server.handle(prepareAgentRpc, async (input: RpcInput<typeof prepareAgentRpc>, context) => {
-    const actor = input.actorPaseoAgentId ? (seatOfAgent(input.actorPaseoAgentId) ?? null) : null;
-    if (input.actorPaseoAgentId && !actor) {
-      throw new Error(`Unknown active Paseo actor: ${input.actorPaseoAgentId}`);
-    }
-    const parent = parentFor(actor, input.reportsTo);
-    assertCanCreateAgent(actor, parent, input.roleClass);
-    const projectId = await projectScope({ ...input, parent }, context);
-    const qualifiedName = parent ? `${agentQualifiedName(parent)}.${input.name}` : input.name;
-    ensureUniqueName(input.name, qualifiedName, parent);
-    const provisional = {
-      name: input.name,
-      qualifiedName,
-      roleClass: input.roleClass,
-      role: input.role,
-      reportsTo: parent ? agentQualifiedName(parent) : null,
-    } as const;
-    const assembled = assemblePrompt(provisional, projectId);
-    const timestamp = now();
-    const paseoAgentId = randomUUID();
-    const agent: AgentRecord = {
-      id: id("agent"),
-      paseoAgentId,
-      name: input.name,
-      qualifiedName,
-      aliases: input.aliases,
-      roleClass: input.roleClass,
-      role: input.role,
-      reportsTo: parent ? agentQualifiedName(parent) : null,
-      workspaceId: null,
-      projectId,
-      prompt: assembled.received,
-      retired: false,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-    const systemPrompt = initialPrompt({
-      pwa: assembled.pwa,
-      agent: provisional,
-      brief: input.brief,
-    });
-    await store.commit(() => [{ op: "put", collection: "agents", record: agent }]);
-    return { agentId: paseoAgentId, systemPrompt, agent };
-  });
-
-  server.handle(
-    bindPreparedAgentRpc,
-    async (input: RpcInput<typeof bindPreparedAgentRpc>, context) => {
-      const prepared = store
-        .read()
-        .agents.find((candidate) => candidate.paseoAgentId === input.agentId && !candidate.retired);
-      if (!prepared) throw new Error(`Unknown prepared agent: ${input.agentId}`);
-      const snapshot = (await context.paseo.agents.ref(input.agentId).refresh())?.agent;
-      if (!snapshot || snapshot.workspaceId !== input.workspaceId)
-        throw new Error("Agent workspace does not match binding.");
-      const parent = prepared.reportsTo ? findAgent(prepared.reportsTo) : null;
-      const projectId = await projectScope(
-        { projectId: prepared.projectId, workspaceId: input.workspaceId, parent },
-        context,
-      );
-      if (!prepared.projectId && projectId && readPwaSource(projectId) !== readPwaSource()) {
-        throw new Error(
-          "Prepare this agent with the selected project before binding its PWA directory.",
-        );
-      }
-      let result!: AgentRecord;
+  // Roster reconciliation: accepts the swarm directory, its seats and PWA together, in one commit.
+  // No agent is touched; each seat's next mail brings its agent in line.
+  server.handle(directoryUpRpc, async ({ swarmId, projectId, dryRun }) => {
+    const swarm = resolveSwarm({ swarmId, projectId });
+    // Under the lock seat tools take, so up never reads a file a seat change is writing.
+    const plan = await withSwarmLock(swarm.id, async () => {
+      await recoverIntents(swarm.id);
+      if (!dryRun) assertNoConflict(swarm.id);
+      const desired = readDesired(swarm, swarmSeats(swarm.id));
+      let result!: RosterPlan;
       await store.commit((state) => {
-        const agent = state.agents.find(
-          (candidate) => candidate.paseoAgentId === input.agentId && !candidate.retired,
-        );
-        if (!agent) throw new Error(`Unknown prepared agent: ${input.agentId}`);
-        result = { ...agent, workspaceId: input.workspaceId, projectId, updatedAt: now() };
-        return [{ op: "put", collection: "agents", record: result }];
+        const planned = planRoster(findSwarm(swarm.id), desired, state);
+        result = planned.plan;
+        if (dryRun) return [];
+        if (result.refusals.length > 0) {
+          throw new Error(`swarm up refused: ${result.refusals.join(" ")}`);
+        }
+        return planned.changes;
       });
       return result;
-    },
-  );
+    });
+    return { swarm: swarmSummary(findSwarm(swarm.id)), plan };
+  });
+  server.handle(directoryRecoverRpc, async ({ swarmId, projectId, keep }) => {
+    const swarm = resolveSwarm({ swarmId, projectId });
+    const intent = await resolveConflict(swarm.id, keep);
+    return {
+      swarm: swarmSummary(findSwarm(swarm.id)),
+      seats: intent.changes.map((change) => agentQualifiedName(change.seat)),
+    };
+  });
+  server.handle(statusReadRpc, async ({ swarmId, projectId }) => {
+    const swarm = resolveSwarm({ swarmId, projectId });
+    let unapplied: RosterPlan | null = null;
+    let invalid: string | null = null;
+    try {
+      const plan = planRoster(swarm, readDesired(swarm, swarmSeats(swarm.id)), store.read()).plan;
+      const empty =
+        plan.source === null &&
+        [plan.reserve, plan.restore, plan.update, plan.retire, plan.refusals].every(
+          (entries) => entries.length === 0,
+        );
+      unapplied = empty ? null : plan;
+    } catch (error) {
+      invalid = error instanceof Error ? error.message : String(error);
+    }
+    return {
+      swarm: swarmSummary(swarm),
+      unapplied,
+      invalid,
+      recovery: pendingConflict(swarm.id)?.conflict ?? null,
+      seats: swarmSeats(swarm.id).map(seatView),
+    };
+  });
 
   server.handle(refreshPromptRpc, async ({ paseoAgentId }) => {
     const current = seatOfAgent(paseoAgentId);
     if (!current) throw new Error(`Unknown active Swarm agent: ${paseoAgentId}`);
-    const assembled = assemblePrompt(current, current.projectId);
+    const assembled = assemblePrompt(current, swarmOf(current).source.files);
     const previousRevision = current.prompt?.revision ?? null;
     const changed = previousRevision !== assembled.received.revision;
-    await store.commit((state) => {
-      const agent = state.agents.find((candidate) => candidate.id === current.id);
-      if (!agent) throw new Error(`Unknown active Swarm agent: ${paseoAgentId}`);
-      return [
-        {
-          op: "put",
-          collection: "agents",
-          record: { ...agent, prompt: assembled.received, updatedAt: now() },
-        },
-      ];
-    });
+    // Read only. A tool result is not a delivery Swarm can vouch for, so the seat's receipt stays
+    // as it is, and the reconciler still sends a changed prompt ahead of the next mail.
     return {
       revision: assembled.received.revision,
       previousRevision,
@@ -537,8 +558,9 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   });
 
   server.handle(createTaskRpc, async (input: RpcInput<typeof createTaskRpc>) => {
-    const actor = findAgent(input.createdBy);
-    const manager = findAgent(input.managerName, agentQualifiedName(actor));
+    const swarm = actorSwarm(input, input.createdBy);
+    const actor = findAgent(swarm.id, input.createdBy);
+    const manager = findAgent(swarm.id, input.managerName, agentQualifiedName(actor));
     if (actor.roleClass === "worker") {
       throw new Error(`Worker ${actor.name} cannot create a Task`);
     }
@@ -552,11 +574,12 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     let result!: Task;
     const timestamp = now();
     await store.commit((state) => {
-      if (state.tasks.some((task) => task.id === input.id)) {
+      if (state.tasks.some((task) => task.swarmId === swarm.id && task.id === input.id)) {
         throw new Error(`Task id already exists: ${input.id}`);
       }
       result = {
         ...input,
+        swarmId: swarm.id,
         managerName: agentQualifiedName(manager),
         workerNames,
         createdBy: agentQualifiedName(actor),
@@ -569,8 +592,9 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   });
 
   server.handle(updateTaskRpc, async (input: RpcInput<typeof updateTaskRpc>) => {
-    const currentTask = findTask(input.taskId);
-    const actor = findAgent(input.actorName);
+    const swarm = actorSwarm(input, input.actorName);
+    const currentTask = findTask(swarm.id, input.taskId);
+    const actor = findAgent(swarm.id, input.actorName);
     if (
       actor.roleClass === "worker" ||
       (actor.roleClass !== "planner" &&
@@ -579,12 +603,14 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     ) {
       throw new Error(`Agent ${input.actorName} cannot update Task ${input.taskId}`);
     }
-    const manager = findAgent(currentTask.managerName);
+    const manager = findAgent(swarm.id, currentTask.managerName);
     const workerNames =
       input.workerNames === undefined ? undefined : resolveTaskWorkers(input.workerNames, manager);
     let result!: Task;
     await store.commit((state) => {
-      const value = state.tasks.find((candidate) => candidate.id === input.taskId);
+      const value = state.tasks.find(
+        (candidate) => candidate.swarmId === swarm.id && candidate.id === input.taskId,
+      );
       if (!value) throw new Error(`Unknown Task: ${input.taskId}`);
       result = {
         ...value,
@@ -601,8 +627,9 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   });
 
   server.handle(appendActivityRpc, async (input: RpcInput<typeof appendActivityRpc>) => {
-    const currentTask = findTask(input.taskId);
-    const actor = findAgent(input.actorName);
+    const swarm = actorSwarm(input, input.actorName);
+    const currentTask = findTask(swarm.id, input.taskId);
+    const actor = findAgent(swarm.id, input.actorName);
     const actorReference = agentQualifiedName(actor);
     if (actor.roleClass === "worker") {
       throw new Error(`Worker ${input.actorName} cannot append Activity`);
@@ -613,7 +640,12 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     let result!: ReturnType<typeof makeActivity>;
     await store.commit((state) => {
       result = makeActivity(
-        { ...input, actorKind: "agent", actorOccupant: currentOccupant(actor).number },
+        {
+          ...input,
+          swarmId: swarm.id,
+          actorKind: "agent",
+          actorOccupant: currentOccupant(actor).number,
+        },
         state,
       );
       return [{ op: "put", collection: "activities", record: result }];
@@ -624,15 +656,16 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   server.handle(
     appendHumanActivityRpc,
     async (input: RpcInput<typeof appendHumanActivityRpc>, context: PluginHandlerContext) => {
-      const task = findTask(input.taskId);
+      const task = findTaskFor(input, input.taskId);
+      const swarmId = swarmOf(task).id;
       let result!: ReturnType<typeof makeActivity>;
       await store.commit((state) => {
-        result = makeActivity({ ...input, actorKind: "human" }, state);
+        result = makeActivity({ ...input, swarmId, actorKind: "human" }, state);
         return [{ op: "put", collection: "activities", record: result }];
       });
       let manager: AgentRecord;
       try {
-        manager = findAgent(task.managerName);
+        manager = findAgent(swarmId, task.managerName);
       } catch (error) {
         return {
           ...result,
@@ -678,11 +711,12 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
           `Message sender ${input.senderName} does not match actor ${input.actorName}`,
         );
       }
-      const recipient = findAgent(input.recipientName);
+      const swarm = actorSwarm(input, input.actorName ?? input.recipientName);
+      const recipient = findAgent(swarm.id, input.recipientName);
       const recipientReference = agentQualifiedName(recipient);
       if (input.taskId) {
-        const task = findTask(input.taskId);
-        const actor = input.actorName ? findAgent(input.actorName) : null;
+        const task = findTask(swarm.id, input.taskId);
+        const actor = input.actorName ? findAgent(swarm.id, input.actorName) : null;
         if (!actor) throw new Error("Task-scoped messages require an authenticated agent");
         const actorReference = agentQualifiedName(actor);
         const recipientIsMember =
@@ -744,13 +778,42 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     const seats = await resetSeats(input, context);
     return { seats: input.dryRun ? seats : await afterFlush(seats, context) };
   });
+  server.handle(seatRetireRpc, async (input) => {
+    const seat = findSeat(input.swarmId, input.seat);
+    const name = agentQualifiedName(seat);
+    if (input.actorName) {
+      const actor = findAgent(seat.swarmId!, input.actorName);
+      if (actor.roleClass !== "planner" && seat.reportsTo !== agentQualifiedName(actor)) {
+        throw new Error(`Agent ${agentQualifiedName(actor)} cannot retire seat ${name}`);
+      }
+    }
+    await mutateSpec(seat.swarmId!, (state) => {
+      const current = state.agents.find((candidate) => candidate.id === seat.id);
+      if (!current || current.retired) throw new Error(`Seat ${name} is already retired`);
+      const team = state.agents.filter(
+        (candidate) =>
+          candidate.swarmId === seat.swarmId && !candidate.retired && candidate.reportsTo === name,
+      );
+      if (team.length > 0) {
+        throw new Error(
+          `Retire the seats that report to ${name} first: ${team.map(agentQualifiedName).join(", ")}`,
+        );
+      }
+      return [{ kind: "retire", seat: current, reason: `Seat ${name} was retired` }];
+    });
+    return { seat: seatView(store.read().agents.find((candidate) => candidate.id === seat.id)!) };
+  });
   server.handle(seatHistoryReadRpc, async (input, context) => readSeatHistory(input, context));
 
   server.handle(mailboxReadRpc, async (input: RpcInput<typeof mailboxReadRpc>, context) => {
     await flushMailbox(context);
+    const inSwarm = input.swarmId
+      ? new Set(swarmSeats(input.swarmId, true).map((seat) => seat.id))
+      : null;
     const messages = [];
     for (const message of store.read().messages.toReversed()) {
       if (messages.length === input.limit) break;
+      if (inSwarm && !inSwarm.has(message.recipientAgentId)) continue;
       const status = mailboxMessageStatus(message);
       if (input.recipientName && message.recipientName !== input.recipientName) continue;
       if (input.senderName && message.senderName !== input.senderName) continue;
@@ -763,6 +826,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
 
 function makeActivity(
   input: {
+    swarmId: string;
     taskId: string;
     actorName: string;
     actorKind: "agent" | "human";
@@ -777,6 +841,7 @@ function makeActivity(
 ) {
   return {
     id: id("activity"),
+    swarmId: input.swarmId,
     taskId: input.taskId,
     actorName: input.actorName,
     actorKind: input.actorKind,
@@ -786,7 +851,7 @@ function makeActivity(
     kind: input.kind,
     body: input.body,
     data: input.data,
-    refs: resolveActivityRefs(input.body, state),
+    refs: resolveActivityRefs(input.body, state, input.swarmId),
     createdAt: now(),
   };
 }
@@ -808,7 +873,7 @@ export async function notifyManager(
 ): Promise<void> {
   const managed = store.read().agents.find((candidate) => candidate.paseoAgentId === agent.id);
   if (!managed?.reportsTo) return;
-  const manager = findAgent(managed.reportsTo);
+  const manager = findAgent(swarmOf(managed).id, managed.reportsTo);
   const taskId = lastAssignedTask(managed);
   await sendThroughMailbox(
     {

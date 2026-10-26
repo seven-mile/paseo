@@ -11,16 +11,85 @@ import {
   taskSchema,
 } from "./models";
 
-// A seat with the plan its next mail carries out, or null when its agent fits the seat.
+// A seat with the work its next mail carries out first, or null when its agent fits the seat. The
+// kind is what happens to the agent, or refresh when only its standing prompt is out of date; the
+// reason says when a refresh follows the change.
 export const seatSchema = agentRecordSchema.extend({
   pending: z
-    .object({ kind: z.enum(["start", "adjust", "revive", "replace"]), reason: z.string() })
+    .object({
+      kind: z.enum(["start", "adjust", "revive", "replace", "refresh"]),
+      reason: z.string(),
+    })
     .nullable(),
+});
+
+// What `up` does to a swarm's accepted state, or would do. Refusals stop the whole plan.
+export const rosterPlanSchema = z.object({
+  reserve: z.array(z.object({ seat: z.string(), role: z.string() })),
+  // Retired seats the file names again; they come back with their Tasks and history.
+  restore: z.array(z.object({ seat: z.string(), changes: z.array(z.string()) })),
+  update: z.array(z.object({ seat: z.string(), changes: z.array(z.string()) })),
+  // Each retiring seat with the Tasks that name it and the mail that will fail.
+  retire: z.array(
+    z.object({ seat: z.string(), tasks: z.array(z.string()), queuedMessages: z.number() }),
+  ),
+  // PWA files that changed, and the occupants whose standing prompt changes with them.
+  source: z.object({ files: z.array(z.string()), prompts: z.array(z.string()) }).nullable(),
+  refusals: z.array(z.string()),
+});
+export type RosterPlan = z.infer<typeof rosterPlanSchema>;
+
+const swarmSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  directory: z.string(),
+  projectId: z.string().nullable(),
+  revision: z.string(),
+});
+
+const swarmScopeSchema = {
+  swarmId: z.string().min(1).optional(),
+  projectId: z.string().min(1).optional(),
+};
+
+// Accepts the swarm directory, or with dryRun shows what accepting it would do (`swarm diff`). A
+// plan with refusals is not applied, and up fails with them.
+export const directoryUpRpc = defineRpc({
+  name: "swarm.directory.up",
+  input: z.object({ ...swarmScopeSchema, dryRun: z.boolean().default(false) }),
+  output: z.object({ swarm: swarmSummarySchema, plan: rosterPlanSchema }),
+});
+
+// Unapplied directory changes, and the occupant work each seat's next mail carries out.
+export const statusReadRpc = defineRpc({
+  name: "swarm.status.read",
+  input: z.object(swarmScopeSchema),
+  output: z.object({
+    swarm: swarmSummarySchema,
+    unapplied: rosterPlanSchema.nullable(),
+    // Why the directory cannot be accepted as it stands.
+    invalid: z.string().nullable(),
+    // A seat change a crash left half written, which `recover` resolves.
+    recovery: z.string().nullable(),
+    seats: z.array(seatSchema),
+  }),
+});
+
+export const directoryRecoverRpc = defineRpc({
+  name: "swarm.directory.recover",
+  input: z.object({ ...swarmScopeSchema, keep: z.enum(["file", "intent"]) }),
+  output: z.object({ swarm: swarmSummarySchema, seats: z.array(z.string()) }),
 });
 
 export const boardReadRpc = defineRpc({
   name: "swarm.board.read",
-  input: z.object({ projectId: z.string().min(1).optional() }),
+  input: z.object({
+    projectId: z.string().min(1).optional(),
+    swarmId: z.string().min(1).optional(),
+    // COMPAT(boardReservedSeats): added in v0.11.0, remove after 2027-01-26. Clients that read a
+    // null paseoAgentId ask for seats with no agent yet; older clients would fail to parse them.
+    includeReserved: z.boolean().optional(),
+  }),
   output: z.object({
     version: z.literal(1),
     agents: z.array(seatSchema),
@@ -45,6 +114,7 @@ export const pwaSourceSetRpc = defineRpc({
 export const pwaRolesReadRpc = defineRpc({
   name: "swarm.pwa_roles.read",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     roleClass: roleClassSchema.optional(),
     path: z.string().min(1).optional(),
     projectId: z.string().min(1).optional(),
@@ -59,26 +129,12 @@ export const pwaRolesReadRpc = defineRpc({
   ),
 });
 
-export const registerAgentRpc = defineRpc({
-  name: "swarm.agent.register",
-  input: z.object({
-    projectId: z.string().min(1).optional(),
-    paseoAgentId: z.string(),
-    name: slugNameSchema,
-    aliases: z.array(z.string()).default([]),
-    roleClass: z.enum(["planner", "supervisor", "worker"]),
-    role: z.string().min(1),
-    reportsTo: z.string().nullable().default(null),
-    workspaceId: z.string().nullable().default(null),
-  }),
-  output: agentRecordSchema,
-});
-
 // Reserves a seat. It has no agent until its first mail arrives, which starts one with the seat's
 // agentConfig, so provider is "provider/model".
 export const createSeatRpc = defineRpc({
   name: "swarm.seat.create",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     projectId: z.string().min(1).optional(),
     name: slugNameSchema,
     aliases: z.array(z.string()).default([]),
@@ -97,31 +153,6 @@ export const createSeatRpc = defineRpc({
   output: seatSchema,
 });
 
-export const prepareAgentRpc = defineRpc({
-  name: "swarm.agent.prepare",
-  input: z.object({
-    projectId: z.string().min(1).optional(),
-    name: slugNameSchema,
-    aliases: z.array(z.string()).default([]),
-    roleClass: z.enum(["planner", "supervisor", "worker"]),
-    role: z.string().min(1),
-    reportsTo: z.string().nullable().default(null),
-    actorPaseoAgentId: z.string().nullable().default(null),
-    brief: z.string().default("Wait for an explicit assignment."),
-  }),
-  output: z.object({
-    agentId: z.string(),
-    systemPrompt: z.string(),
-    agent: agentRecordSchema,
-  }),
-});
-
-export const bindPreparedAgentRpc = defineRpc({
-  name: "swarm.agent.bind_workspace",
-  input: z.object({ agentId: z.string(), workspaceId: z.string() }),
-  output: agentRecordSchema,
-});
-
 export const refreshPromptRpc = defineRpc({
   name: "swarm.agent.refresh_prompt",
   input: z.object({ paseoAgentId: z.string().min(1) }),
@@ -136,6 +167,7 @@ export const refreshPromptRpc = defineRpc({
 export const createTaskRpc = defineRpc({
   name: "swarm.task.create",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     id: slugNameSchema,
     title: z.string().min(1),
     brief: z.string().min(1),
@@ -151,6 +183,7 @@ export const createTaskRpc = defineRpc({
 export const updateTaskRpc = defineRpc({
   name: "swarm.task.update",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     taskId: slugNameSchema,
     actorName: z.string(),
     status: z.string().min(1).optional(),
@@ -165,6 +198,7 @@ export const updateTaskRpc = defineRpc({
 export const appendActivityRpc = defineRpc({
   name: "swarm.activity.append",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     taskId: slugNameSchema,
     actorName: z.string(),
     replyTo: z.string().nullable().default(null),
@@ -179,6 +213,8 @@ export const appendActivityRpc = defineRpc({
 export const appendHumanActivityRpc = defineRpc({
   name: "swarm.activity.append_human",
   input: z.object({
+    projectId: z.string().min(1).optional(),
+    swarmId: z.string().min(1).optional(),
     taskId: slugNameSchema,
     actorName: z.string().min(1).default("human"),
     replyTo: z.string().nullable().default(null),
@@ -193,6 +229,7 @@ export const appendHumanActivityRpc = defineRpc({
 export const sendMessageRpc = defineRpc({
   name: "swarm.message.send",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     taskId: slugNameSchema.nullable().default(null),
     actorName: z.string().nullable().default(null),
     senderName: z.string().min(1),
@@ -210,6 +247,7 @@ export const sendMessageRpc = defineRpc({
 export const mailboxReadRpc = defineRpc({
   name: "swarm.mailbox.read",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     recipientName: z.string().min(1).optional(),
     senderName: z.string().min(1).optional(),
     status: mailboxStatusSchema.optional(),
@@ -223,9 +261,11 @@ export const mailboxReadRpc = defineRpc({
 export const seatListRpc = defineRpc({
   name: "swarm.seat.list",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     projectId: z.string().min(1).optional(),
     includeRetired: z.boolean().default(false),
-    // Only the seat this Paseo agent occupies, or is arriving in while its session opens.
+    // Only the seat this Paseo agent occupies, or is arriving in while its session opens. With
+    // includeRetired, else the seat it occupied before that seat retired or replaced it.
     paseoAgentId: z.string().min(1).optional(),
   }),
   output: z.object({ seats: z.array(seatSchema) }),
@@ -237,6 +277,7 @@ const seatReferencesSchema = z.array(z.string().min(1)).min(1);
 export const seatUpdateRpc = defineRpc({
   name: "swarm.seat.update",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     seats: seatReferencesSchema,
     agentConfig: z.object({
       provider: z.string().min(1).nullable().optional(),
@@ -252,6 +293,7 @@ export const seatUpdateRpc = defineRpc({
 export const seatResetRpc = defineRpc({
   name: "swarm.seat.reset",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     seats: seatReferencesSchema,
     // Withdraws a Reset that has not taken effect yet.
     cancel: z.boolean().default(false),
@@ -260,9 +302,22 @@ export const seatResetRpc = defineRpc({
   output: z.object({ seats: z.array(seatSchema) }),
 });
 
+// Retires a seat that has no active team: it leaves swarm.yaml, and its queued mail fails.
+export const seatRetireRpc = defineRpc({
+  name: "swarm.seat.retire",
+  input: z.object({
+    swarmId: z.string().min(1).optional(),
+    seat: z.string().min(1),
+    // Set when an agent retires: planners retire any seat, others the seats that report to them.
+    actorName: z.string().min(1).optional(),
+  }),
+  output: z.object({ seat: seatSchema }),
+});
+
 export const seatHistoryReadRpc = defineRpc({
   name: "swarm.seat.history.read",
   input: z.object({
+    swarmId: z.string().min(1).optional(),
     seat: z.string().min(1),
     // Set when an agent reads: planners read any seat, others their own and the seats under them.
     actorName: z.string().min(1).optional(),

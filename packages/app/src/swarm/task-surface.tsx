@@ -229,7 +229,10 @@ function TaskSurface({
       queryKey: ["swarm", "task-board", serverId, projectId],
       queryFn: async () =>
         swarmTaskBoardSchema.parse(
-          await invoke("swarm.board.read", { projectId: projectId ?? undefined }),
+          await invoke("swarm.board.read", {
+            projectId: projectId ?? undefined,
+            includeReserved: true,
+          }),
         ),
       enabled: Boolean(plugin) && Boolean(projectId) && hydrated && online && active,
       dataShape: "value",
@@ -998,7 +1001,7 @@ function TaskDetail({
   const openAgent = useCallback(
     (name: string) => {
       const agent = findSwarmTaskAgent(board.agents, name);
-      if (!agent) {
+      if (!agent?.paseoAgentId) {
         setActor(name);
         return;
       }
@@ -1035,7 +1038,8 @@ function TaskDetail({
     let savedReceiptId: string | null = null;
     const sent = await model.submit(async (input) => {
       const receipt = swarmHumanActivityReceiptSchema.parse(
-        await invoke("swarm.activity.append_human", input),
+        // Task ids are unique only within a swarm.
+        await invoke("swarm.activity.append_human", { ...input, swarmId: task.swarmId }),
       );
       savedReceiptId = receipt.id;
       return receipt;
@@ -1055,7 +1059,7 @@ function TaskDetail({
       }
       onRefresh();
     }
-  }, [invoke, model, onRefresh, online]);
+  }, [invoke, model, onRefresh, online, task.swarmId]);
   const handleActivityKeyPress = useCallback<
     NonNullable<ComponentProps<typeof FormTextInput>["onKeyPress"]>
   >(

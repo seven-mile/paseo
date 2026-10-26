@@ -12,14 +12,16 @@ import type {
 import contribute from "../index.server";
 import { forgetRunningTurns } from "../server/mailbox";
 import { notifyManager, registerOperations } from "../server/operations";
-import { seatView } from "../server/seats";
+import { assemblePrompt, seatView } from "../server/seats";
+import { pwaFilesRevision, readPwaFiles } from "../server/pwa";
+import { createSwarm, resolveSwarm, swarmForProject } from "../server/swarms";
+import { seed as seedRecords, type Seeded } from "./fixtures";
 import {
   getConfigPath,
   getEventLogPath,
   getSnapshotPath,
   StateStore,
   store,
-  type SwarmChange,
 } from "../server/state";
 import { emptyState, type AgentRecord, type SwarmState } from "../shared/models";
 import {
@@ -32,19 +34,11 @@ import {
   pwaSourceSetRpc,
   pwaSourceReadRpc,
   pwaRolesReadRpc,
-  prepareAgentRpc,
-  bindPreparedAgentRpc,
   refreshPromptRpc,
 } from "../shared/swarm";
 
-async function seed(seeded: SwarmState): Promise<void> {
-  await store.commit(() => [
-    ...seeded.agents.map((record): SwarmChange => ({ op: "put", collection: "agents", record })),
-    ...seeded.tasks.map((record): SwarmChange => ({ op: "put", collection: "tasks", record })),
-    ...seeded.activities.map(
-      (record): SwarmChange => ({ op: "put", collection: "activities", record }),
-    ),
-  ]);
+async function seed(seeded: Seeded, options?: { stamp: boolean }): Promise<void> {
+  await seedRecords(seeded, options);
 }
 
 function readDisk(): string {
@@ -59,14 +53,19 @@ function readDisk(): string {
     .join("\0");
 }
 
-function boardOf({ messages: _messages, ...board }: Readonly<SwarmState>) {
+function boardOf({
+  messages: _messages,
+  swarms: _swarms,
+  intents: _intents,
+  ...board
+}: Readonly<SwarmState>) {
   return {
     ...board,
     agents: board.agents.filter((agent) => agent.paseoAgentId !== null).map(seatView),
   };
 }
 
-test("supervisors require independent placement, workers keep caller defaults, and foreign occupants are rejected", async () => {
+test("seats are placed when their first agent starts: supervisors in worktrees of their own, workers with their manager", async () => {
   const home = mkdtempSync(join(tmpdir(), "swarm-operations-"));
   const previousHome = process.env.PASEO_HOME;
   const previousPwa = process.env.PASEO_SWARM_PWA_ROOT;
@@ -101,7 +100,9 @@ test("supervisors require independent placement, workers keep caller defaults, a
   const agentCreations: Array<{ workspaceId: string; parent: string | undefined }> = [];
   const runtimeWorkspaces = new Map([[planner.paseoAgentId, "planner-workspace"]]);
   const prompts: string[] = [];
+  let worktreeFailure: string | null = null;
   const workspace = (workspaceId: string) => ({
+    id: workspaceId,
     async refresh() {
       return { projectId: workspaceId === "other-workspace" ? "other" : "project" };
     },
@@ -168,6 +169,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
         ref: workspace,
         async create(options: unknown) {
           workspaceCreations.push(options);
+          if (worktreeFailure) throw new Error(worktreeFailure);
           return workspace("supervisor-workspace");
         },
       },
@@ -209,28 +211,24 @@ test("supervisors require independent placement, workers keep caller defaults, a
     );
     assert.equal(store.read().agents.length, 1);
     assert.equal(workspaceCreations.length, 0);
-    const placementError =
-      /Prepare a separate workspace for the supervisor and pass its workspaceId/;
-    for (const workspaceId of [undefined, null, "planner-workspace"]) {
-      await assert.rejects(
-        async () =>
-          invoke(
-            createSeatRpc.name,
-            createSeatRpc.input.parse({
-              name: "invalid-placement",
-              roleClass: "supervisor",
-              role: "supervisor",
-              actorName: "planner",
-              provider: "codex/gpt-6.1-sol",
-              reportsTo: "planner",
-              workspaceId,
-            }),
-          ),
-        placementError,
-      );
-      assert.equal(store.read().agents.length, 1);
-      assert.equal(agentCreations.length, 0);
-    }
+    await assert.rejects(
+      async () =>
+        invoke(
+          createSeatRpc.name,
+          createSeatRpc.input.parse({
+            name: "invalid-placement",
+            roleClass: "supervisor",
+            role: "supervisor",
+            actorName: "planner",
+            provider: "codex/gpt-6.1-sol",
+            reportsTo: "planner",
+            workspaceId: "planner-workspace",
+          }),
+        ),
+      /A supervisor works in a workspace of its own/,
+    );
+    assert.equal(store.read().agents.length, 1);
+    assert.equal(agentCreations.length, 0);
     const supervisor = (await invoke(
       createSeatRpc.name,
       createSeatRpc.input.parse({
@@ -257,7 +255,8 @@ test("supervisors require independent placement, workers keep caller defaults, a
         provider: "codex/gpt-6.1-sol",
       }),
     )) as AgentRecord;
-    assert.equal(worker.workspaceId, supervisor.workspaceId);
+    // A worker is placed with its manager when its first agent starts.
+    assert.equal(worker.workspaceId, null);
     assert.equal(workspaceCreations.length, 0);
     // A new seat has no agent until its first message starts one, with no Paseo parent.
     assert.equal(supervisor.paseoAgentId, null);
@@ -287,6 +286,7 @@ test("supervisors require independent placement, workers keep caller defaults, a
     ]);
     const seatOf = (seat: AgentRecord) =>
       store.read().agents.find((agent) => agent.id === seat.id)!;
+    assert.equal(seatOf(worker).workspaceId, "supervisor-workspace");
     const supervisorAgent = seatOf(supervisor).paseoAgentId!;
     const workerAgent = seatOf(worker).paseoAgentId!;
     assert.equal(seatOf(supervisor).occupant?.number, 1);
@@ -299,6 +299,85 @@ test("supervisors require independent placement, workers keep caller defaults, a
     );
     assert.equal(supervisor.projectId, "project");
     assert.equal(worker.projectId, "project");
+    // A supervisor named with no workspace gets a worktree when the first agent of its team starts,
+    // and never the project's own checkout. Its workers share that worktree.
+    const unplaced = (await invoke(
+      createSeatRpc.name,
+      createSeatRpc.input.parse({
+        name: "lead",
+        roleClass: "supervisor",
+        role: "supervisor",
+        actorName: "planner",
+        reportsTo: "planner",
+        provider: "codex/gpt-6.1-sol",
+      }),
+    )) as AgentRecord;
+    const unplacedWorker = (await invoke(
+      createSeatRpc.name,
+      createSeatRpc.input.parse({
+        name: "helper",
+        roleClass: "worker",
+        role: "researcher",
+        actorName: "planner.lead",
+        reportsTo: "planner.lead",
+        provider: "codex/gpt-6.1-sol",
+      }),
+    )) as AgentRecord;
+    assert.equal(unplaced.workspaceId, null);
+    assert.deepEqual(workspaceCreations, []);
+    await invoke(
+      sendMessageRpc.name,
+      sendMessageRpc.input.parse({
+        senderName: "human",
+        recipientName: "planner.lead.helper",
+        body: "Look around",
+      }),
+    );
+    assert.deepEqual(workspaceCreations, [
+      {
+        source: {
+          kind: "worktree",
+          projectId: "project",
+          action: "branch-off",
+          worktreeSlug: "planner-lead",
+        },
+        title: "lead",
+      },
+    ]);
+    assert.equal(seatOf(unplaced).workspaceId, "supervisor-workspace");
+    assert.equal(seatOf(unplaced).paseoAgentId, null);
+    assert.equal(seatOf(unplacedWorker).workspaceId, "supervisor-workspace");
+    assert.notEqual(seatOf(unplacedWorker).paseoAgentId, null);
+    // Without a worktree a supervisor does not start; it never falls back to the project root.
+    const isolated = (await invoke(
+      createSeatRpc.name,
+      createSeatRpc.input.parse({
+        name: "isolated",
+        roleClass: "supervisor",
+        role: "supervisor",
+        actorName: "planner",
+        reportsTo: "planner",
+        provider: "codex/gpt-6.1-sol",
+      }),
+    )) as AgentRecord;
+    worktreeFailure = "not a git repository";
+    const refused = sendMessageRpc.output.parse(
+      await invoke(
+        sendMessageRpc.name,
+        sendMessageRpc.input.parse({
+          senderName: "human",
+          recipientName: "planner.isolated",
+          body: "Start",
+        }),
+      ),
+    );
+    assert.equal(refused.delivered, false);
+    assert.match(refused.receipt, /needs a worktree of its own.*not a git repository/);
+    assert.equal(seatOf(isolated).workspaceId, null);
+    assert.deepEqual(
+      workspaceCreations.map((creation) => (creation as { source: { kind: string } }).source.kind),
+      ["worktree", "worktree"],
+    );
     const createChild = (actor: AgentRecord, name: string, workspaceId?: string) =>
       invoke(
         createSeatRpc.name,
@@ -345,21 +424,8 @@ test("supervisors require independent placement, workers keep caller defaults, a
     runtimeWorkspaces.delete("ordinary-native-agent");
     assert.equal(store.read().agents.length, savedCount);
     assert.equal(agentCreations.length, createdCount);
-    const prepareLegacy = (name: string) =>
-      invoke(
-        prepareAgentRpc.name,
-        prepareAgentRpc.input.parse({ name, roleClass: "planner", role: "planner" }),
-      ) as Promise<{ agentId: string; systemPrompt: string; agent: AgentRecord }>;
-    const legacyDefault = await prepareLegacy("legacy-default");
-    assert.equal(legacyDefault.agent.projectId, undefined);
-    runtimeWorkspaces.set(legacyDefault.agentId, "supervisor-workspace");
-    const bound = (await invoke(bindPreparedAgentRpc.name, {
-      agentId: legacyDefault.agentId,
-      workspaceId: "supervisor-workspace",
-    })) as AgentRecord;
-    assert.equal(bound.projectId, "project");
-    const legacyOverride = await prepareLegacy("legacy-override");
-    runtimeWorkspaces.set(legacyOverride.agentId, "supervisor-workspace");
+    // A project given a PWA directory gets a swarm of its own: a copy, so the chosen directory is
+    // never written.
     const source = join(home, "agreement");
     mkdirSync(join(source, "roles"), { recursive: true });
     writeFileSync(
@@ -370,33 +436,19 @@ test("supervisors require independent placement, workers keep caller defaults, a
       join(source, "roles", "director.md"),
       "---\nversion: 1\nroleClass: planner\n---\nDirect.\n",
     );
-    writeFileSync(
-      join(source, "roles", "researcher.md"),
-      "---\nversion: 1\nroleClass: worker\n---\nFirst role.\n",
-    );
-    assert.deepEqual(
-      await invoke(pwaSourceSetRpc.name, { projectId: "project", path: "agreement" }),
-      { path: source },
-    );
-    assert.deepEqual(await invoke(pwaSourceReadRpc.name, { projectId: "project" }), {
-      path: source,
-    });
-    const legacyPrompt = legacyOverride.systemPrompt;
+    const firstRole = "---\nversion: 1\nroleClass: worker\n---\nFirst role.\n";
+    writeFileSync(join(source, "roles", "researcher.md"), firstRole);
+    const attached = (await invoke(pwaSourceSetRpc.name, {
+      projectId: "project",
+      path: "agreement",
+    })) as { path: string };
+    assert.notEqual(attached.path, source);
+    assert.equal(readFileSync(join(attached.path, "roles", "researcher.md"), "utf8"), firstRole);
+    assert.deepEqual(await invoke(pwaSourceReadRpc.name, { projectId: "project" }), attached);
     await assert.rejects(
-      async () =>
-        invoke(bindPreparedAgentRpc.name, {
-          agentId: legacyOverride.agentId,
-          workspaceId: "supervisor-workspace",
-        }),
-      /Prepare this agent with the selected project before binding its PWA directory/,
+      async () => invoke(pwaSourceSetRpc.name, { projectId: "project", path: "agreement" }),
+      /already has a swarm/,
     );
-    const unbound = store
-      .read()
-      .agents.find((agent) => agent.paseoAgentId === legacyOverride.agentId);
-    assert.equal(unbound?.workspaceId, null);
-    assert.equal(unbound?.projectId, undefined);
-    assert.equal(legacyOverride.systemPrompt, legacyPrompt);
-
     await assert.rejects(
       async () => invoke(pwaSourceSetRpc.name, { projectId: "missing", path: source }),
       /Unknown project/,
@@ -409,62 +461,32 @@ test("supervisors require independent placement, workers keep caller defaults, a
       choices.map((role) => role.role),
       ["director"],
     );
-    writeFileSync(
-      join(source, "PWA.md"),
-      "---\nversion: 1\nproject: Override\nstatuses: [review, survey, completed]\n---\nFresh project.\n",
-    );
+    // Edits to the chosen directory or to the swarm's own reach no one until the swarm accepts them.
+    for (const directory of [source, attached.path]) {
+      writeFileSync(
+        join(directory, "PWA.md"),
+        "---\nversion: 1\nproject: Override\nstatuses: [review, survey, completed]\n---\nEdited.\n",
+      );
+    }
     const readStatuses = async () =>
       boardReadRpc.output.parse(await invoke(boardReadRpc.name, { projectId: "project" })).statuses;
-    assert.deepEqual(await readStatuses(), ["review", "survey", "completed"]);
-    writeFileSync(
-      join(source, "PWA.md"),
-      "---\nversion: 1\nproject: Override\nstatuses: [completed, review]\n---\nFresh project.\n",
-    );
-    assert.deepEqual(await readStatuses(), ["completed", "review"]);
-    assert.equal("statuses" in store.read(), false);
+    assert.deepEqual(await readStatuses(), []);
     assert.deepEqual(await invoke(boardReadRpc.name, {}), boardOf(store.read()));
-    const prepare = (name: string) =>
-      invoke(
-        prepareAgentRpc.name,
-        prepareAgentRpc.input.parse({
-          name,
-          roleClass: "worker",
-          role: "researcher",
-          reportsTo: "planner.supervisor",
-        }),
-      ) as Promise<{ agentId: string; systemPrompt: string; agent: AgentRecord }>;
-    const first = await prepare("fresh-one");
-    assert.match(first.systemPrompt, /Fresh project/);
-    assert.match(first.systemPrompt, /First role/);
-    writeFileSync(
-      join(source, "roles", "researcher.md"),
-      "---\nversion: 1\nroleClass: worker\n---\nSecond role.\n",
-    );
-    const second = await prepare("fresh-two");
-    assert.match(second.systemPrompt, /Second role/);
-    assert.doesNotMatch(first.systemPrompt, /Second role/);
+    // Prompts assemble from the accepted copy, so an invalid edit on disk reaches no one.
+    const researcher = {
+      name: "fresh",
+      qualifiedName: "fresh",
+      roleClass: "worker",
+      role: "researcher",
+      reportsTo: null,
+    } as const;
+    const accepted = () => resolveSwarm({ projectId: "project" }).source.files;
+    const before = assemblePrompt(researcher, accepted()).pwa;
+    assert.match(before.projectBody, /Fresh project/);
+    assert.match(before.roleBody, /First role/);
+    writeFileSync(join(attached.path, "roles", "researcher.md"), "invalid");
+    assert.match(assemblePrompt(researcher, accepted()).pwa.roleBody, /First role/);
     assert.doesNotMatch(prompts[1], /Fresh project/);
-    const count = store.read().agents.length;
-    writeFileSync(join(source, "roles", "researcher.md"), "invalid");
-    await assert.rejects(async () => prepare("invalid-preparation"), /YAML frontmatter/);
-    assert.equal(store.read().agents.length, count);
-    runtimeWorkspaces.set(first.agentId, "other-workspace");
-    await assert.rejects(
-      async () =>
-        invoke(bindPreparedAgentRpc.name, {
-          agentId: first.agentId,
-          workspaceId: "other-workspace",
-        }),
-      /selected project/,
-    );
-    const stored = () => store.read().agents.find((agent) => agent.paseoAgentId === first.agentId);
-    assert.equal(stored()?.workspaceId, null);
-    runtimeWorkspaces.set(first.agentId, "supervisor-workspace");
-    await invoke(bindPreparedAgentRpc.name, {
-      agentId: first.agentId,
-      workspaceId: "supervisor-workspace",
-    });
-    assert.equal(stored()?.workspaceId, "supervisor-workspace");
     const initialSends = sends.length;
     await notifyManager(
       { id: workerAgent },
@@ -786,7 +808,7 @@ test("human Activity stays saved when notification fails; storage failure still 
   }
 });
 
-test("plain board reads bypass absent or corrupt sources; project reads resolve PWA statuses", async () => {
+test("board reads never read a PWA directory; a project's statuses come from its accepted PWA", async () => {
   const home = mkdtempSync(join(tmpdir(), "swarm-board-"));
   const previousHome = process.env.PASEO_HOME;
   const previousPwa = process.env.PASEO_SWARM_PWA_ROOT;
@@ -817,24 +839,33 @@ test("plain board reads bypass absent or corrupt sources; project reads resolve 
   try {
     await seed(emptyState());
     const original = boardOf(store.read());
+    const statuses = async (projectId: string) =>
+      boardReadRpc.output.parse(await invoke(projectId)).statuses;
     assert.deepEqual(await invoke(), original);
-    assert.deepEqual(boardReadRpc.output.parse(await invoke("project")).statuses, []);
+    assert.deepEqual(await statuses("project"), []);
     await assert.rejects(async () => invoke("missing"), /Unknown project/);
     process.env.PASEO_SWARM_PWA_ROOT = join(home, "missing");
-    assert.deepEqual(await invoke(), original);
-    await assert.rejects(async () => invoke("project"), /ENOENT/);
     mkdirSync(dirname(getConfigPath()), { recursive: true });
     writeFileSync(getConfigPath(), "corrupt config");
     assert.deepEqual(await invoke(), original);
-    await assert.rejects(async () => invoke("project"), SyntaxError);
-    writeFileSync(getConfigPath(), JSON.stringify({ pwaRoot: home }));
-    mkdirSync(join(home, "roles"));
+    assert.deepEqual(await statuses("project"), []);
+    const source = join(home, "agreement");
+    mkdirSync(join(source, "roles"), { recursive: true });
     writeFileSync(
-      join(home, "roles", "developer.md"),
-      "---\nversion: 1\nroleClass: worker\n---\nDevelop.\n",
+      join(source, "PWA.md"),
+      "---\nversion: 1\nproject: Board\nstatuses: [survey, completed]\n---\nWork.\n",
     );
-    await assert.rejects(async () => invoke("project"), /must contain a planner role/);
-    assert.deepEqual(await invoke(), original);
+    writeFileSync(
+      join(source, "roles", "director.md"),
+      "---\nversion: 1\nroleClass: planner\n---\nDirect.\n",
+    );
+    const swarm = await createSwarm({ sourceDirectory: source, projectId: "project" });
+    assert.deepEqual(await statuses("project"), ["survey", "completed"]);
+    writeFileSync(
+      join(swarm.directory, "PWA.md"),
+      "---\nversion: 1\nproject: Board\nstatuses: [done]\n---\nWork.\n",
+    );
+    assert.deepEqual(await statuses("project"), ["survey", "completed"]);
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
     else process.env.PASEO_HOME = previousHome;
@@ -907,15 +938,17 @@ test("roster reads filter native availability without releasing historical names
       /already exists/,
     );
     available = true;
+    const [seated] = store.read().agents;
+    assert.ok(seated.swarmId);
     assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, [
-      { ...agent, pending: null },
+      { ...seated, pending: null },
     ]);
     available = false;
     assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, []);
     fail = true;
     await assert.rejects(async () => invoke(boardReadRpc, {}), /daemon unavailable/);
     assert.equal(readDisk(), before);
-    assert.deepEqual(store.read().agents, [agent]);
+    assert.deepEqual(store.read().agents, [seated]);
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
     else process.env.PASEO_HOME = previousHome;
@@ -1056,9 +1089,9 @@ test("prompt refresh re-assembles the standing prompt and records the received r
   const source = join(home, "agreement");
   mkdirSync(join(source, "roles"), { recursive: true });
   writeFileSync(join(source, "PWA.md"), "---\nversion: 1\nproject: Refresh\n---\nProject one.\n");
-  const writeRole = (body: string) =>
+  const writeRole = (body: string, directory = source) =>
     writeFileSync(
-      join(source, "roles", "planner.md"),
+      join(directory, "roles", "planner.md"),
       `---\nversion: 1\nroleClass: planner\n---\n${body}\n`,
     );
   writeRole("Role one.");
@@ -1075,20 +1108,36 @@ test("prompt refresh re-assembles the standing prompt and records the received r
   const refresh = async (paseoAgentId: string) =>
     refreshPromptRpc.output.parse(await invoke(refreshPromptRpc.name, { paseoAgentId }));
   try {
-    const prepared = (await invoke(
-      prepareAgentRpc.name,
-      prepareAgentRpc.input.parse({
-        name: "lead",
-        roleClass: "planner",
-        role: "planner",
-        brief: "One-time orientation.",
-      }),
-    )) as { agentId: string; systemPrompt: string; agent: AgentRecord };
-    const created = prepared.agent.prompt;
-    assert.ok(created);
-    assert.match(prepared.systemPrompt, /One-time orientation/);
+    const swarm = await swarmForProject(undefined);
+    const lead: AgentRecord = {
+      id: "lead-seat",
+      swarmId: swarm.id,
+      paseoAgentId: "lead-agent",
+      name: "lead",
+      qualifiedName: "lead",
+      aliases: [],
+      roleClass: "planner",
+      role: "planner",
+      reportsTo: null,
+      workspaceId: null,
+      prompt: assemblePrompt(
+        {
+          name: "lead",
+          qualifiedName: "lead",
+          roleClass: "planner",
+          role: "planner",
+          reportsTo: null,
+        },
+        swarm.source.files,
+      ).received,
+      retired: false,
+      createdAt: "2026-10-06T00:00:00Z",
+      updatedAt: "2026-10-06T00:00:00Z",
+    };
+    await store.commit(() => [{ op: "put", collection: "agents", record: lead }]);
+    const created = lead.prompt!;
 
-    const unchanged = await refresh(prepared.agentId);
+    const unchanged = await refresh("lead-agent");
     assert.equal(unchanged.changed, false);
     assert.equal(unchanged.previousRevision, created.revision);
     assert.equal(unchanged.revision, created.revision);
@@ -1096,57 +1145,66 @@ test("prompt refresh re-assembles the standing prompt and records the received r
     assert.match(unchanged.prompt, /nothing changed/);
     assert.match(unchanged.prompt, /<paseo-swarm-system-settings>/);
     assert.match(unchanged.prompt, /Role one\./);
-    assert.doesNotMatch(unchanged.prompt, /One-time orientation/);
 
-    writeRole("Role two.");
-    const changed = await refresh(prepared.agentId);
+    // An edit on disk is not accepted, so it reaches no prompt.
+    writeRole("Role two.", swarm.directory);
+    assert.equal((await refresh("lead-agent")).changed, false);
+    const files = readPwaFiles(swarm.directory);
+    await store.commit(() => [
+      {
+        op: "put",
+        collection: "swarms",
+        record: { ...swarm, source: { revision: pwaFilesRevision(files), files } },
+      },
+    ]);
+    const changed = await refresh("lead-agent");
     assert.equal(changed.changed, true);
     assert.equal(changed.previousRevision, created.revision);
     assert.notEqual(changed.revision, created.revision);
     assert.match(changed.prompt, /supersedes/);
     assert.match(changed.prompt, /Role two\./);
     assert.doesNotMatch(changed.prompt, /Role one\./);
-    const stored = store.read().agents.find((agent) => agent.paseoAgentId === prepared.agentId);
-    assert.equal(stored?.prompt?.revision, changed.revision);
-    assert.notEqual(stored?.prompt?.pwaRevision, created.pwaRevision);
-    assert.equal((await refresh(prepared.agentId)).changed, false);
+    // The tool only reads: the receipt moves when the reconciler delivers the prompt.
+    const receipt = () =>
+      store.read().agents.find((agent) => agent.paseoAgentId === "lead-agent")?.prompt?.revision;
+    assert.equal(receipt(), created.revision);
+    assert.equal((await refresh("lead-agent")).changed, true);
 
     // An agent registered before revisions were recorded has nothing to compare.
-    await seed({
-      ...emptyState(),
-      agents: [
-        {
-          id: "legacy-record",
-          paseoAgentId: "legacy-agent",
-          name: "legacy",
-          qualifiedName: "legacy",
-          aliases: [],
-          roleClass: "planner",
-          role: "planner",
-          reportsTo: null,
-          workspaceId: null,
-          retired: false,
-          createdAt: "2026-10-06T00:00:00Z",
-          updatedAt: "2026-10-06T00:00:00Z",
-        },
-      ],
-    });
+    await seed(
+      {
+        ...emptyState(),
+        agents: [
+          {
+            id: "legacy-record",
+            paseoAgentId: "legacy-agent",
+            name: "legacy",
+            qualifiedName: "legacy",
+            aliases: [],
+            roleClass: "planner",
+            role: "planner",
+            reportsTo: null,
+            workspaceId: null,
+            retired: false,
+            createdAt: "2026-10-06T00:00:00Z",
+            updatedAt: "2026-10-06T00:00:00Z",
+          },
+        ],
+      },
+      { stamp: false },
+    );
     const legacy = await refresh("legacy-agent");
     assert.equal(legacy.previousRevision, null);
     assert.equal(legacy.changed, true);
     assert.equal(
-      store.read().agents.find((agent) => agent.paseoAgentId === "legacy-agent")?.prompt?.revision,
-      legacy.revision,
+      store.read().agents.find((agent) => agent.paseoAgentId === "legacy-agent")?.prompt,
+      undefined,
     );
 
     await assert.rejects(async () => refresh("missing-agent"), /Unknown active Swarm agent/);
-    writeFileSync(join(source, "roles", "planner.md"), "invalid");
-    await assert.rejects(async () => refresh(prepared.agentId), /YAML frontmatter/);
-    assert.equal(
-      store.read().agents.find((agent) => agent.paseoAgentId === prepared.agentId)?.prompt
-        ?.revision,
-      changed.revision,
-    );
+    writeFileSync(join(swarm.directory, "roles", "planner.md"), "invalid");
+    assert.equal((await refresh("lead-agent")).revision, changed.revision);
+    assert.equal(receipt(), created.revision);
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
     else process.env.PASEO_HOME = previousHome;

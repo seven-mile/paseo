@@ -62,7 +62,9 @@ const referenceSchema = z.discriminatedUnion("kind", [
 export type SwarmTaskReference = z.infer<typeof referenceSchema>;
 
 const agentSchema = z.object({
-  paseoAgentId: z.string(),
+  id: z.string(),
+  // Null until the seat's first message starts its agent.
+  paseoAgentId: z.string().nullable(),
   name: z.string(),
   qualifiedName: z.string().optional(),
   aliases: z.array(z.string()).default([]),
@@ -73,6 +75,7 @@ const agentSchema = z.object({
 });
 const taskSchema = z.object({
   id: z.string(),
+  swarmId: z.string().optional(),
   title: z.string(),
   brief: z.string(),
   status: z.string(),
@@ -115,10 +118,12 @@ export function defaultSwarmTaskScope(
   activeAgentId?: string,
 ) {
   const visited = new Set<string>();
-  let active = board.agents.find((agent) => agent.paseoAgentId === activeAgentId);
+  let active = activeAgentId
+    ? board.agents.find((agent) => agent.paseoAgentId === activeAgentId)
+    : undefined;
   if (active?.workspaceId && active.workspaceId !== workspaceId) active = undefined;
-  while (active && !visited.has(active.paseoAgentId)) {
-    visited.add(active.paseoAgentId);
+  while (active && !visited.has(active.id)) {
+    visited.add(active.id);
     if (!active.retired && active.roleClass !== "worker")
       return active.qualifiedName ?? active.name;
     active = active.reportsTo ? findSwarmTaskAgent(board.agents, active.reportsTo) : undefined;
@@ -170,7 +175,8 @@ export function resolveSwarmTaskReference(
   const kind = match[1].toLowerCase();
   if (kind === "agent" && segments.length === 1) {
     const agent = findSwarmTaskAgent(board.agents, segments[0]);
-    if (!agent) return null;
+    // A seat whose first message has not started its agent has nothing to open yet.
+    if (!agent?.paseoAgentId) return null;
     return {
       kind: "agent",
       paseoAgentId: agent.paseoAgentId,
@@ -237,8 +243,8 @@ function agentScope(
   const agentIds = new Set<string>();
   let workspaceId: string | null = null;
   let agent = findSwarmTaskAgent(agents, reference);
-  while (agent && !agentIds.has(agent.paseoAgentId)) {
-    agentIds.add(agent.paseoAgentId);
+  while (agent && !agentIds.has(agent.id)) {
+    agentIds.add(agent.id);
     if (!workspaceId && agent.workspaceId && knownWorkspaces.has(agent.workspaceId))
       workspaceId = agent.workspaceId;
     agent = agent.reportsTo ? findSwarmTaskAgent(agents, agent.reportsTo) : undefined;
@@ -296,11 +302,10 @@ export function scopedSwarmTasks(
         rootAgents.every(
           (root) =>
             root &&
-            (ownership.agentIds.has(root.paseoAgentId) ||
+            (ownership.agentIds.has(root.id) ||
               (root.roleClass === "worker" &&
                 task.workerNames.some(
-                  (name) =>
-                    findSwarmTaskAgent(board.agents, name)?.paseoAgentId === root.paseoAgentId,
+                  (name) => findSwarmTaskAgent(board.agents, name)?.id === root.id,
                 ))),
         )
       );

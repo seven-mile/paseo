@@ -10,6 +10,7 @@ import {
   resolveSwarmTaskReference,
   scopedSwarmTasks,
   swarmTaskScopeOptions,
+  swarmTaskBoardSchema,
   swarmTaskColumns,
   swarmHumanActivityReceiptSchema,
   unansweredChoices,
@@ -21,6 +22,7 @@ import {
 
 function agent(name: string, parent: string | null, workspaceId: string | null): SwarmTaskAgent {
   return {
+    id: `seat-${name}`,
     paseoAgentId: name,
     name: name.split(".").at(-1) ?? name,
     qualifiedName: name,
@@ -563,6 +565,18 @@ describe("Swarm Task references", () => {
       "paseo-swarm://file/manager-workspace/C%3A/secret",
     ])
       expect(resolveSwarmTaskReference(uri, value, ["manager-workspace"])).toBeNull();
+  });
+  it("keeps a seat with no agent yet in scope, with no agent to open", () => {
+    const value = board();
+    value.agents[1] = { ...value.agents[1], paseoAgentId: null };
+    expect(swarmTaskBoardSchema.parse(value).agents[1].paseoAgentId).toBeNull();
+    expect(resolveSwarmTaskReference("paseo-swarm://agent/planner.manager", value, [])).toBeNull();
+    expect(
+      scopedSwarmTasks(value, {
+        projectWorkspaceIds: ["planner-workspace", "manager-workspace"],
+        agentName: "planner.manager",
+      }).map(taskIdOf),
+    ).toEqual(["planner.manager"]);
   });
 });
 

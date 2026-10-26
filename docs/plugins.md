@@ -110,10 +110,20 @@ PWA directory is content only and does not configure a runtime source.
 Swarm keeps its roster, Tasks, and Activities under `$PASEO_HOME/plugin-data/paseo-swarm/` as
 `snapshot.json` plus an append-only `events.jsonl` of record-level changes (`server/state.ts`).
 A commit is one fsynced line, and the log folds into the snapshot on load and every 500
-commits. A pre-log `state.json` is imported once and renamed to `state.json.imported`. An
+commits. The snapshot's `version` is the store format; a store from an earlier format is
+converted once at startup, as [design/07-swarm-directory.md](../design/07-swarm-directory.md)
+describes, and the runtime reads only the current one. An
 unreadable snapshot, log line, or legacy file stops every Swarm read and write with an error
 naming the file until it is repaired or moved aside; nothing is written meanwhile. Only an unterminated final
 log line, left by a crash mid-append, is dropped automatically.
+
+Seats, Tasks, and Activities belong to a swarm: a directory holding `swarm.yaml`, `PWA.md`, and
+`roles/`, attached to one project and identified by an id the daemon mints. Seat names and Task ids
+are unique within a swarm, so requests that name them carry `swarmId`, or name an actor whose swarm
+Swarm can tell. Choosing a PWA directory in Project Settings copies it to
+`$PASEO_HOME/swarms/<name>-<id>/`; the chosen directory is never written. Edits to the swarm
+directory reach no agent until `paseo-swarm swarm up` accepts them, and `paseo-swarm swarm diff|status` show
+what is not accepted yet. Seat tools write their change into `swarm.yaml` as they accept it. See [design/07-swarm-directory.md](../design/07-swarm-directory.md).
 
 A Swarm seat is an agent record: the roster identity owns the Tasks, Activities, and mailbox, and
 the Paseo agent behind it can change. `swarm_seat_create` only reserves the seat; its first
@@ -127,15 +137,18 @@ conversation skips the mailbox and does not reconcile the seat. See
 
 A Swarm agent's system prompt is fixed when its session starts. The seat keeps the revision its
 agent last received (`prompt.revision`, a hash of the standing prompt), and each mailbox delivery
-compares it with the prompt assembled from the current PWA and plugin. When they differ, the
-current standing prompt goes out ahead of the mail. An agent can also ask for it with
-`swarm_prompt_refresh`. The refresh lives in the conversation only; the stored session config
-keeps the creation-time prompt.
+compares it with the prompt assembled from the swarm's accepted PWA and the plugin. When they
+differ, the current standing prompt goes out ahead of the mail, and the receipt moves only once
+Paseo accepts that send. If the prompt cannot be assembled or sent, the mail stays queued with the
+error until a later flush gets the prompt through. An agent can read the current prompt with
+`swarm_prompt_refresh`, which leaves the receipt alone. The refresh lives in the conversation only;
+the stored session config keeps the creation-time prompt.
 
-Swarm planners must prepare a separate workspace and pass its `workspaceId` when creating
-a supervisor seat. This keeps supervisor execution out of the planner's workspace; omitting placement
-does not bypass the separation. Other seats default to their creator's
-workspace. Explicit placement keeps the reporting relationship unchanged.
+Swarm places a seat when its first agent starts, so a seat change the spec refuses leaves no
+workspace behind. A planner works at its project's root. A supervisor gets a new worktree, and
+fails to start rather than share the project's checkout when Paseo cannot create one. A worker
+shares its manager's workspace, and placing it places the manager first. A manager can pass the
+`workspaceId` of a workspace it made instead; it holds only the manager and its reports.
 
 Built-ins run in process and remain active independently of `pluginsEnabled`. They are
 absent from the installed plugin list and source configuration; their client bundles

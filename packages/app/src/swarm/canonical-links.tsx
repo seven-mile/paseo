@@ -99,7 +99,9 @@ export function SwarmCanonicalLinkProvider({ children }: { children: ReactNode }
         const board = await plugin.queryClient.fetchQuery({
           queryKey: ["swarm", "canonical-link-board", serverId],
           queryFn: async () =>
-            swarmTaskBoardSchema.parse(await plugin.invoke("swarm.board.read", {})),
+            swarmTaskBoardSchema.parse(
+              await plugin.invoke("swarm.board.read", { includeReserved: true }),
+            ),
           staleTime: 0,
           retry: false,
         });
