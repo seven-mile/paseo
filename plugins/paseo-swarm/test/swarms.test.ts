@@ -1,13 +1,12 @@
 import { strict as assert } from "node:assert";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { readPwaFiles } from "../server/pwa";
-import { assemblePrompt, findSeat } from "../server/seats";
-import { getConfigPath, getMigrationReportPath, store, type SwarmChange } from "../server/state";
-import { backfillSwarms, createSwarm, swarmOf, swarmTasks } from "../server/swarms";
-import type { Activity, AgentRecord, MailboxMessage, SwarmState, Task } from "../shared/models";
+import { findSeat } from "../server/seats";
+import { store, type SwarmChange } from "../server/state";
+import { createSwarm, swarmTasks } from "../server/swarms";
+import type { AgentRecord, SwarmState, Task } from "../shared/models";
 
 const timestamp = "2026-10-25T00:00:00Z";
 
@@ -55,10 +54,10 @@ function seat(input: Partial<AgentRecord> & Pick<AgentRecord, "id" | "name">): A
   };
 }
 
-function task(id: string, managerName: string, swarmId?: string): Task {
+function task(id: string, managerName: string, swarmId: string): Task {
   return {
     id,
-    ...(swarmId ? { swarmId } : {}),
+    swarmId,
     title: id,
     brief: "",
     status: "open",
@@ -68,22 +67,6 @@ function task(id: string, managerName: string, swarmId?: string): Task {
     data: {},
     createdAt: timestamp,
     updatedAt: timestamp,
-  };
-}
-
-function activity(id: string, taskId: string): Activity {
-  return {
-    id,
-    taskId,
-    actorName: "lead",
-    actorKind: "agent",
-    replyTo: null,
-    responseProfile: null,
-    kind: "note",
-    body: id,
-    data: {},
-    refs: [],
-    createdAt: timestamp,
   };
 }
 
@@ -103,160 +86,6 @@ async function seed(state: Partial<SwarmState>) {
     ),
   ]);
 }
-
-test("records from before swarms join one swarm per project, copied from the source they used", async (t) => {
-  const home = setup(t);
-  const shared = join(home, "shared-pwa");
-  const bundled = join(home, "bundled-pwa");
-  writePwa(shared, "Shared");
-  writePwa(bundled, "Bundled");
-  process.env.PASEO_SWARM_PWA_ROOT = bundled;
-  mkdirSync(join(getConfigPath(), ".."), { recursive: true });
-  writeFileSync(
-    getConfigPath(),
-    JSON.stringify({ projectSources: { alpha: shared, beta: shared } }),
-  );
-  const sharedBefore = readPwaFiles(shared);
-  const bundledBefore = readPwaFiles(bundled);
-
-  // The receipt each occupant holds was stamped from the files the project used.
-  const stamped = (record: AgentRecord, directory: string): AgentRecord => {
-    const received = assemblePrompt(record, readPwaFiles(directory)).received;
-    return { ...record, prompt: { ...received, receivedAt: timestamp } };
-  };
-  const lead = stamped(seat({ id: "lead", name: "lead", projectId: "alpha" }), shared);
-  const worker = stamped(
-    seat({
-      id: "worker",
-      name: "worker",
-      qualifiedName: "lead.worker",
-      roleClass: "worker",
-      role: "researcher",
-      reportsTo: "lead",
-      projectId: "alpha",
-    }),
-    shared,
-  );
-  const boss = stamped(seat({ id: "boss", name: "boss", projectId: "beta" }), shared);
-  const loner = stamped(seat({ id: "loner", name: "loner" }), bundled);
-  const message: MailboxMessage = {
-    id: "message",
-    recipientAgentId: worker.id,
-    recipientName: "lead.worker",
-    senderName: "lead",
-    taskId: "build",
-    kind: "team",
-    prompt: "Queued before swarms.",
-    createdAt: timestamp,
-    attempts: 1,
-    lastError: "Agent is offline",
-    deliveredAt: null,
-    deliveredToPaseoAgentId: null,
-    consumedAt: null,
-    failedAt: null,
-  };
-  await seed({
-    agents: [lead, worker, boss, loner],
-    tasks: [task("build", "lead"), task("ship", "boss"), task("lost", "ghost")],
-    activities: [activity("built", "build"), activity("shipped", "ship"), activity("gone", "lost")],
-    messages: [message],
-  });
-
-  await backfillSwarms();
-  const state = store.read();
-
-  const swarms = [...state.swarms].sort((left, right) =>
-    String(left.projectId).localeCompare(String(right.projectId)),
-  );
-  assert.deepEqual(
-    swarms.map((swarm) => swarm.projectId),
-    ["alpha", "beta", null],
-  );
-  // Each project gets a directory of its own, holding the files it used. Sources stay unwritten.
-  assert.equal(new Set(swarms.map((swarm) => swarm.directory)).size, 3);
-  for (const swarm of swarms) {
-    assert.ok(swarm.directory.startsWith(join(home, "swarms")));
-    assert.deepEqual(readPwaFiles(swarm.directory), swarm.source.files);
-  }
-  assert.deepEqual(swarms[0].source.files, sharedBefore);
-  assert.deepEqual(swarms[2].source.files, bundledBefore);
-  assert.deepEqual(readPwaFiles(shared), sharedBefore);
-  assert.deepEqual(readPwaFiles(bundled), bundledBefore);
-
-  // Seats keep their occupants and receipts: the copy assembles the prompt they already hold.
-  const [alpha, beta, none] = swarms;
-  const bySeat = new Map(state.agents.map((record) => [record.id, record]));
-  for (const [record, swarm] of [
-    [lead, alpha],
-    [worker, alpha],
-    [boss, beta],
-    [loner, none],
-  ] as const) {
-    const migrated = bySeat.get(record.id)!;
-    assert.deepEqual(migrated, { ...record, swarmId: swarm.id });
-    assert.equal(
-      assemblePrompt(migrated, swarmOf(migrated).source.files).received.revision,
-      record.prompt!.revision,
-    );
-  }
-
-  // Tasks follow their manager's seat and Activities their Task. Mail is left as it was.
-  assert.deepEqual(state.tasks.map((record) => [record.id, record.swarmId]).sort(), [
-    ["build", alpha.id],
-    ["lost", undefined],
-    ["ship", beta.id],
-  ]);
-  assert.deepEqual(state.activities.map((record) => [record.id, record.swarmId]).sort(), [
-    ["built", alpha.id],
-    ["gone", undefined],
-    ["shipped", beta.id],
-  ]);
-  assert.deepEqual(state.messages, [message]);
-  const report = JSON.parse(readFileSync(getMigrationReportPath(), "utf8")) as {
-    issues: Array<{ collection: string; id: string }>;
-  };
-  assert.deepEqual(
-    report.issues.map((issue) => [issue.collection, issue.id]),
-    [
-      ["tasks", "lost"],
-      ["activities", "gone"],
-    ],
-  );
-
-  // A second start finds nothing new to place and changes nothing.
-  await backfillSwarms();
-  assert.deepEqual(store.read().swarms, state.swarms);
-  assert.deepEqual(store.read().agents, state.agents);
-  assert.deepEqual(store.read().tasks, state.tasks);
-  assert.deepEqual(store.read().activities, state.activities);
-});
-
-test("a Task whose manager name leads to several swarms is reported, not guessed", async (t) => {
-  const home = setup(t);
-  const source = join(home, "pwa");
-  writePwa(source, "Two");
-  process.env.PASEO_SWARM_PWA_ROOT = source;
-  await seed({
-    agents: [
-      seat({ id: "alpha-lead", name: "lead", projectId: "alpha" }),
-      seat({ id: "beta-lead", name: "lead", projectId: "beta" }),
-    ],
-    tasks: [task("build", "lead")],
-  });
-
-  await backfillSwarms();
-  const state = store.read();
-  assert.equal(state.swarms.length, 2);
-  assert.deepEqual(state.tasks, [task("build", "lead")]);
-  const report = JSON.parse(readFileSync(getMigrationReportPath(), "utf8")) as {
-    issues: Array<{ id: string; reason: string }>;
-  };
-  assert.deepEqual(
-    report.issues.map((issue) => issue.id),
-    ["build"],
-  );
-  assert.match(report.issues[0].reason, /several swarms/);
-});
 
 test("two swarms can hold seats and Tasks with the same names without crossing", async (t) => {
   const home = setup(t);
@@ -282,14 +111,4 @@ test("two swarms can hold seats and Tasks with the same names without crossing",
   assert.throws(() => findSeat(undefined, "lead"), /several swarms/);
   assert.deepEqual(swarmTasks(alpha.id), [task("build", "lead", alpha.id)]);
   assert.deepEqual(swarmTasks(beta.id), [task("build", "lead", beta.id)]);
-});
-
-test("records whose PWA directory cannot run stay as they were, and the migration says why", async (t) => {
-  const home = setup(t);
-  process.env.PASEO_SWARM_PWA_ROOT = join(home, "missing");
-  await seed({ agents: [seat({ id: "lead", name: "lead", projectId: "alpha" })] });
-  const before = store.read();
-
-  await assert.rejects(() => backfillSwarms(), /cannot migrate the seats of project alpha/);
-  assert.deepEqual(store.read(), before);
 });

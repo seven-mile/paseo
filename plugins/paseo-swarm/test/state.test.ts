@@ -7,8 +7,9 @@ import {
   getEventLogPath,
   getLegacyStatePath,
   getSnapshotPath,
-  StateLoadError,
   StateStore,
+  STORE_VERSION,
+  StoreMigrationPendingError,
   taskKey,
 } from "../server/state";
 import { emptyState, type Task } from "../shared/models";
@@ -16,6 +17,7 @@ import { emptyState, type Task } from "../shared/models";
 function task(id: string, status = "survey"): Task {
   return {
     id,
+    swarmId: "swarm",
     title: id,
     brief: id,
     status,
@@ -46,37 +48,37 @@ function withHome(run: (home: string) => Promise<void>) {
 const read = (path: string) => readFileSync(path, "utf8");
 
 test(
-  "a corrupt legacy state.json fails loudly and is never overwritten",
+  "a store from before swarms is left as it is until the migration converts it",
   withHome(async () => {
     mkdirSync(dirname(getLegacyStatePath()), { recursive: true });
     writeFileSync(getLegacyStatePath(), '{"version": 1, "agents": [');
     const store = new StateStore();
-    assert.throws(() => store.read(), StateLoadError);
+    assert.throws(() => store.read(), StoreMigrationPendingError);
     await assert.rejects(
       store.commit(() => [{ op: "put", collection: "tasks", record: task("a") }]),
-      /state\.json cannot be read/,
+      StoreMigrationPendingError,
     );
     assert.equal(read(getLegacyStatePath()), '{"version": 1, "agents": [');
     assert.equal(existsSync(getSnapshotPath()), false);
     assert.equal(existsSync(getEventLogPath()), false);
+
+    rmSync(getLegacyStatePath());
+    writeFileSync(getSnapshotPath(), JSON.stringify({ version: 1, seq: 0, state: emptyState() }));
+    assert.throws(() => new StateStore().read(), StoreMigrationPendingError);
   }),
 );
 
 test(
-  "a valid legacy state.json is imported into a snapshot once",
+  "a new store marks its format before its first commit, and refuses a format it does not know",
   withHome(async () => {
-    mkdirSync(dirname(getLegacyStatePath()), { recursive: true });
-    writeFileSync(getLegacyStatePath(), JSON.stringify({ ...emptyState(), tasks: [task("a")] }));
-    assert.deepEqual(
-      new StateStore().read().tasks.map((value) => value.id),
-      ["a"],
-    );
-    assert.equal(existsSync(getLegacyStatePath()), false);
-    assert.equal(existsSync(`${getLegacyStatePath()}.imported`), true);
-    assert.deepEqual(
-      new StateStore().read().tasks.map((value) => value.id),
-      ["a"],
-    );
+    const store = new StateStore();
+    assert.deepEqual(store.read(), emptyState());
+    assert.equal(existsSync(getSnapshotPath()), false);
+    await store.commit(() => [{ op: "put", collection: "tasks", record: task("a") }]);
+    assert.equal(JSON.parse(read(getSnapshotPath())).version, STORE_VERSION);
+
+    writeFileSync(getSnapshotPath(), JSON.stringify({ version: 3, seq: 0, state: emptyState() }));
+    assert.throws(() => new StateStore().read(), /unknown store version 3/);
   }),
 );
 

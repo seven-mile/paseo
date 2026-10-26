@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { Activity, AgentRecord, SwarmRecord, Task } from "../shared/models";
+import type { AgentRecord, SwarmRecord, Task } from "../shared/models";
 import { agentQualifiedName } from "../shared/models";
 import {
   listPwaRoles,
@@ -12,13 +12,7 @@ import {
   type PwaFiles,
 } from "./pwa";
 import { readPwaSource } from "./source";
-import {
-  getMigrationReportPath,
-  getSwarmsDirectory,
-  store,
-  taskKey,
-  type SwarmChange,
-} from "./state";
+import { getSwarmsDirectory, store } from "./state";
 
 // A swarm is a directory that describes a team, attached to one Paseo project. Seats, Tasks and
 // Activities belong to one swarm, and names are unique only within it. The swarm's accepted PWA
@@ -44,30 +38,41 @@ function slug(value: string): string {
   );
 }
 
-// A new swarm directory holding exactly the given PWA files. The directory the files came from is
-// only read: it can be a template, or a directory several projects shared before swarms.
-function instantiate(input: {
+// The record of a new swarm, with a directory of its own under the swarms directory. The
+// migration passes its own id, so a retried migration names the same directory.
+export function newSwarmRecord(input: {
   files: PwaFiles;
   name: string;
   projectId: string | null;
+  id?: string;
 }): SwarmRecord {
-  const id = `swarm-${randomUUID()}`;
-  const directory = join(getSwarmsDirectory(), `${slug(input.name)}-${id.slice(6, 14)}`);
-  mkdirSync(directory, { recursive: true });
-  for (const [path, text] of Object.entries(input.files)) {
-    mkdirSync(dirname(join(directory, path)), { recursive: true });
-    writeFileSync(join(directory, path), text, "utf8");
-  }
+  const id = input.id ?? `swarm-${randomUUID()}`;
   const timestamp = now();
   return {
     id,
     name: input.name,
-    directory,
+    directory: join(getSwarmsDirectory(), `${slug(input.name)}-${id.slice(6, 14)}`),
     projectId: input.projectId,
     source: { revision: pwaFilesRevision(input.files), files: { ...input.files } },
     createdAt: timestamp,
     updatedAt: timestamp,
   };
+}
+
+// Writes a swarm's directory with exactly the given PWA files. The directory the files came from
+// is only read: it can be a template, or a directory several projects shared before swarms.
+export function writeSwarmDirectory(swarm: SwarmRecord, files: PwaFiles): void {
+  mkdirSync(swarm.directory, { recursive: true });
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(swarm.directory, path)), { recursive: true });
+    writeFileSync(join(swarm.directory, path), text, "utf8");
+  }
+}
+
+function instantiate(input: { files: PwaFiles; name: string; projectId: string | null }) {
+  const swarm = newSwarmRecord(input);
+  writeSwarmDirectory(swarm, input.files);
+  return swarm;
 }
 
 export function findSwarm(swarmId: string): SwarmRecord {
@@ -77,10 +82,7 @@ export function findSwarm(swarmId: string): SwarmRecord {
 }
 
 // The swarm a seat, Task or Activity belongs to.
-export function swarmOf(record: { swarmId?: string }): SwarmRecord {
-  if (!record.swarmId) {
-    throw new Error("This record predates swarms and has no swarm yet. Restart the daemon.");
-  }
+export function swarmOf(record: { swarmId: string }): SwarmRecord {
   return findSwarm(record.swarmId);
 }
 
@@ -108,10 +110,7 @@ export function swarmOfSeatName(name: string): SwarmRecord {
     store
       .read()
       .agents.filter(
-        (seat) =>
-          !seat.retired &&
-          seat.swarmId &&
-          (agentQualifiedName(seat) === name || seat.name === name),
+        (seat) => !seat.retired && (agentQualifiedName(seat) === name || seat.name === name),
       )
       .map((seat) => seat.swarmId),
   );
@@ -166,132 +165,4 @@ export function swarmSeats(swarmId: string, includeRetired = false): AgentRecord
 
 export function swarmTasks(swarmId: string): Task[] {
   return store.read().tasks.filter((task) => task.swarmId === swarmId);
-}
-
-interface MigrationIssue {
-  collection: "tasks" | "activities";
-  id: string;
-  reason: string;
-}
-
-function onlyOne<T>(values: Set<T>): T | undefined {
-  return values.size === 1 ? [...values][0] : undefined;
-}
-
-// Gives records from before swarms their swarm, once, at startup. Seats join the swarm of their
-// project, instantiated from the PWA directory that project used, which is copied and never
-// written. Tasks follow their manager's seat and Activities their Task. A record whose reference
-// does not lead to exactly one swarm keeps no swarm and is listed in the migration report. No agent
-// is woken: occupants, prompts and mail are left as they are.
-export async function backfillSwarms(): Promise<void> {
-  const state = store.read();
-  const legacySeats = state.agents.filter((seat) => !seat.swarmId);
-  const legacyTasks = state.tasks.filter((task) => !task.swarmId);
-  const legacyActivities = state.activities.filter((activity) => !activity.swarmId);
-  if (legacySeats.length + legacyTasks.length + legacyActivities.length === 0) return;
-
-  const created: SwarmRecord[] = [];
-  const planned: Array<{ files: PwaFiles; name: string; projectId: string | null }> = [];
-  const swarmFor = new Map<string | null, string>();
-  for (const projectId of new Set(legacySeats.map((seat) => seat.projectId ?? null))) {
-    const existing = state.swarms.find((swarm) => swarm.projectId === projectId);
-    if (existing) {
-      swarmFor.set(projectId, existing.id);
-      continue;
-    }
-    // A swarm that cannot run would fail every prompt, so the migration stops before writing
-    // anything, and every request reports why, until the directory is back.
-    const sourceDirectory = readPwaSource(projectId ?? undefined);
-    const owner = projectId ? `project ${projectId}` : "seats with no project";
-    if (!sourceDirectory) {
-      throw new Error(`Swarm cannot migrate the seats of ${owner}: no PWA directory is configured`);
-    }
-    let files: PwaFiles;
-    try {
-      files = readPwaFiles(sourceDirectory);
-      assertRunnablePwa(files, sourceDirectory);
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`Swarm cannot migrate the seats of ${owner}: ${detail}`, { cause: error });
-    }
-    planned.push({ files, name: basename(sourceDirectory), projectId });
-  }
-  for (const input of planned) {
-    const swarm = instantiate(input);
-    created.push(swarm);
-    swarmFor.set(input.projectId, swarm.id);
-  }
-
-  const seats = state.agents.map((seat) =>
-    seat.swarmId ? seat : { ...seat, swarmId: swarmFor.get(seat.projectId ?? null)! },
-  );
-  const issues: MigrationIssue[] = [];
-  const migratedTasks: Task[] = [];
-  for (const task of legacyTasks) {
-    const swarmIds = new Set(
-      seats
-        .filter((seat) => agentQualifiedName(seat) === task.managerName)
-        .map((seat) => seat.swarmId),
-    );
-    const swarmId = onlyOne(swarmIds);
-    if (swarmId) {
-      migratedTasks.push({ ...task, swarmId });
-    } else {
-      issues.push({
-        collection: "tasks",
-        id: task.id,
-        reason:
-          swarmIds.size === 0
-            ? `No seat named ${task.managerName}, its manager`
-            : `Its manager ${task.managerName} names seats in several swarms`,
-      });
-    }
-  }
-  const tasks = [...state.tasks.filter((task) => task.swarmId), ...migratedTasks];
-  const migratedActivities: Activity[] = [];
-  for (const activity of legacyActivities) {
-    const swarmIds = new Set(
-      tasks.filter((task) => task.id === activity.taskId).map((task) => task.swarmId),
-    );
-    const swarmId = onlyOne(swarmIds);
-    if (swarmId) {
-      migratedActivities.push({ ...activity, swarmId });
-    } else {
-      issues.push({
-        collection: "activities",
-        id: activity.id,
-        reason:
-          swarmIds.size === 0
-            ? `Its Task ${activity.taskId} has no swarm`
-            : `Its Task ${activity.taskId} exists in several swarms`,
-      });
-    }
-  }
-
-  const changes: SwarmChange[] = [
-    ...created.map((record): SwarmChange => ({ op: "put", collection: "swarms", record })),
-    ...seats
-      .filter((seat) => legacySeats.some((legacy) => legacy.id === seat.id))
-      .map((record): SwarmChange => ({ op: "put", collection: "agents", record })),
-    // The key of a Task includes its swarm, so the record moves to a new key.
-    ...migratedTasks.flatMap((record): SwarmChange[] => [
-      { op: "delete", collection: "tasks", key: taskKey({ id: record.id }) },
-      { op: "put", collection: "tasks", record },
-    ]),
-    ...migratedActivities.map(
-      (record): SwarmChange => ({ op: "put", collection: "activities", record }),
-    ),
-  ];
-  await store.commit(() => changes);
-  if (issues.length > 0) {
-    mkdirSync(dirname(getMigrationReportPath()), { recursive: true });
-    writeFileSync(
-      getMigrationReportPath(),
-      JSON.stringify({ at: now(), issues }, null, 2) + "\n",
-      "utf8",
-    );
-    console.warn(
-      `[paseo-swarm] ${issues.length} records from before swarms have no swarm; see ${getMigrationReportPath()}`,
-    );
-  }
 }

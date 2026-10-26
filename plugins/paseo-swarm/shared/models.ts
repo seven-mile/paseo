@@ -52,9 +52,7 @@ export type PastOccupant = z.infer<typeof pastOccupantSchema>;
 // A reserved seat has no occupant yet; its first mail starts one.
 export const agentRecordSchema = z.object({
   id: z.string(),
-  // The swarm the seat belongs to. Absent only on records from before swarms, until the startup
-  // backfill assigns one; see server/swarms.ts.
-  swarmId: z.string().optional(),
+  swarmId: z.string(),
   paseoAgentId: z.string().nullable(),
   name: slugNameSchema,
   qualifiedName: z.string().optional(),
@@ -96,7 +94,7 @@ export function providerFamily(provider: string): string {
 // A Task id is unique within its swarm.
 export const taskSchema = z.object({
   id: slugNameSchema,
-  swarmId: z.string().optional(),
+  swarmId: z.string(),
   title: z.string(),
   brief: z.string(),
   status: z.string(),
@@ -111,7 +109,7 @@ export type Task = z.infer<typeof taskSchema>;
 
 export const activitySchema = z.object({
   id: z.string(),
-  swarmId: z.string().optional(),
+  swarmId: z.string(),
   taskId: slugNameSchema,
   actorName: z.string(),
   actorKind: z.preprocess((value) => value ?? "agent", z.enum(["agent", "human"])),
@@ -209,6 +207,8 @@ export const specIntentSchema = z.object({
 });
 export type SpecIntent = z.infer<typeof specIntentSchema>;
 
+// version is the board's wire format, which clients read; the store's own format is the version
+// of its snapshot (server/state.ts).
 export const stateSchema = z.object({
   version: z.literal(1),
   swarms: z.array(swarmRecordSchema).default([]),

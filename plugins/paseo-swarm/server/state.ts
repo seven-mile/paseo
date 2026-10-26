@@ -1,6 +1,5 @@
 import {
   closeSync,
-  existsSync,
   fsyncSync,
   fstatSync,
   ftruncateSync,
@@ -29,7 +28,7 @@ function getPaseoHome(): string {
   return process.env.PASEO_HOME ?? process.env.PASEO_DATA_DIR ?? process.cwd();
 }
 
-function getDataDirectory(): string {
+export function getDataDirectory(): string {
   return join(getPaseoHome(), "plugin-data", "paseo-swarm");
 }
 
@@ -43,7 +42,7 @@ export function getMigrationReportPath(): string {
   return join(getDataDirectory(), "migration-report.json");
 }
 
-// Whole-file store used before the event log. Imported once into a snapshot, then renamed.
+// Whole-file store used before the event log. Only the migration from version 1 reads it.
 export function getLegacyStatePath(): string {
   return join(getDataDirectory(), "state.json");
 }
@@ -104,11 +103,23 @@ const commitSchema = z.object({
   at: z.string(),
   changes: z.array(changeSchema),
 });
-const snapshotSchema = z.object({
-  version: z.literal(1),
-  seq: z.number().int().nonnegative(),
+// The store's format, in its snapshot. Version 1 held records from before swarms; the migration
+// in server/migration.ts converts it once, and the runtime reads only the current version. A
+// daemon from before the migration refuses a version 2 snapshot rather than write over it.
+export const STORE_VERSION = 2;
+
+// How one version of the store reads its records.
+export interface StoreFormat<State> {
+  version: number;
+  state: z.ZodType<State>;
+  record(collection: CollectionName): z.ZodTypeAny;
+}
+
+const currentFormat: StoreFormat<SwarmState> = {
+  version: STORE_VERSION,
   state: stateSchema,
-});
+  record: (collection) => collections[collection].schema,
+};
 
 export class StateLoadError extends Error {
   constructor(path: string, detail: string) {
@@ -116,6 +127,15 @@ export class StateLoadError extends Error {
       `Swarm state at ${path} cannot be read (${detail}). Swarm refuses to write until the file is repaired or moved aside.`,
     );
     this.name = "StateLoadError";
+  }
+}
+
+export class StoreMigrationPendingError extends Error {
+  constructor() {
+    super(
+      `Swarm state at ${getDataDirectory()} is from an earlier version and has not been migrated. Restart the daemon to migrate it; ${getMigrationReportPath()} says why an earlier attempt stopped.`,
+    );
+    this.name = "StoreMigrationPendingError";
   }
 }
 
@@ -144,12 +164,31 @@ function writeAtomic(path: string, text: string): void {
   renameSync(temporary, path);
 }
 
+// Which format the files on disk hold. A current store writes its snapshot before its first
+// commit, so a log or a state.json with no snapshot is from version 1.
+export function storeVersionOnDisk(): number | null {
+  const snapshotPath = getSnapshotPath();
+  const snapshotText = readOptional(snapshotPath);
+  if (snapshotText !== null) {
+    let version: unknown;
+    try {
+      version = (JSON.parse(snapshotText) as { version?: unknown }).version;
+    } catch (error) {
+      throw new StateLoadError(snapshotPath, describe(error));
+    }
+    if (version === 1 || version === STORE_VERSION) return version;
+    throw new StateLoadError(snapshotPath, `unknown store version ${String(version)}`);
+  }
+  if (readOptional(getLegacyStatePath()) !== null || readOptional(getEventLogPath())) return 1;
+  return null;
+}
+
 function keyOf(collection: CollectionName, record: object): string {
   return collections[collection].key(record as { id: string; swarmId?: string });
 }
 
-function applyChange(state: SwarmState, change: SwarmChange): void {
-  const records = state[change.collection] as object[];
+function applyChange(state: object, change: SwarmChange): void {
+  const records = (state as Record<CollectionName, object[]>)[change.collection];
   const key = change.op === "put" ? keyOf(change.collection, change.record) : change.key;
   const index = records.findIndex((record) => keyOf(change.collection, record) === key);
   if (change.op === "delete") {
@@ -158,10 +197,106 @@ function applyChange(state: SwarmState, change: SwarmChange): void {
   else records.push(change.record);
 }
 
-function parseChange(change: z.infer<typeof changeSchema>): SwarmChange {
+function parseChange<State>(
+  format: StoreFormat<State>,
+  change: z.infer<typeof changeSchema>,
+): SwarmChange {
   if (change.op === "delete") return change;
-  const record = collections[change.collection].schema.parse(change.record);
+  const record = format.record(change.collection).parse(change.record);
   return { ...change, record } as SwarmChange;
+}
+
+export interface StoreFiles<State> {
+  state: State;
+  seq: number;
+  // Commits replayed from the log on top of the snapshot.
+  commits: number;
+  // Whether the log ended in an unterminated commit, which was never acknowledged.
+  dropped: boolean;
+}
+
+// Reads the snapshot and replays the log, in one format. Version 1 could also start from the
+// whole-file state.json used before the log. Unreadable files raise StateLoadError instead of
+// loading as empty, so a parse failure can never be persisted over the real swarm.
+export function readStoreFiles<State extends object>(
+  format: StoreFormat<State>,
+  empty: () => State,
+): StoreFiles<State> {
+  const snapshotSchema = z.object({
+    version: z.literal(format.version),
+    seq: z.number().int().nonnegative(),
+    state: format.state,
+  });
+  const snapshotPath = getSnapshotPath();
+  let state = empty();
+  let seq = 0;
+  const snapshotText = readOptional(snapshotPath);
+  if (snapshotText !== null) {
+    try {
+      ({ state, seq } = snapshotSchema.parse(JSON.parse(snapshotText)) as {
+        state: State;
+        seq: number;
+      });
+    } catch (error) {
+      throw new StateLoadError(snapshotPath, describe(error));
+    }
+  } else if (format.version === 1) {
+    const legacyPath = getLegacyStatePath();
+    const text = readOptional(legacyPath);
+    if (text !== null) {
+      try {
+        state = format.state.parse(JSON.parse(text));
+      } catch (error) {
+        throw new StateLoadError(legacyPath, describe(error));
+      }
+    }
+  }
+  const logPath = getEventLogPath();
+  const text = readOptional(logPath);
+  let commits = 0;
+  if (!text) return { state, seq, commits, dropped: false };
+  // A crash during an append leaves at most one unterminated final line. That commit was
+  // never acknowledged, so it is dropped; any other unreadable line is corruption.
+  const lines = text.split("\n");
+  const tail = lines.pop();
+  for (const [index, line] of lines.entries()) {
+    let commit: z.infer<typeof commitSchema>;
+    try {
+      commit = commitSchema.parse(JSON.parse(line));
+    } catch (error) {
+      throw new StateLoadError(logPath, `line ${index + 1}: ${describe(error)}`);
+    }
+    // Commits already folded into the snapshot survive a crash between the snapshot rename
+    // and the log truncation, in whatever format they were written.
+    if (commit.seq <= seq) continue;
+    if (commit.seq !== seq + 1) {
+      throw new StateLoadError(logPath, `line ${index + 1}: expected seq ${seq + 1}`);
+    }
+    let changes: SwarmChange[];
+    try {
+      changes = commit.changes.map((change) => parseChange(format, change));
+    } catch (error) {
+      throw new StateLoadError(logPath, `line ${index + 1}: ${describe(error)}`);
+    }
+    for (const change of changes) applyChange(state, change);
+    seq = commit.seq;
+    commits += 1;
+  }
+  try {
+    format.state.parse(state);
+  } catch (error) {
+    throw new StateLoadError(logPath, describe(error));
+  }
+  if (tail) console.warn(`[paseo-swarm] Dropped an incomplete final commit from ${logPath}`);
+  return { state, seq, commits, dropped: Boolean(tail) };
+}
+
+// Replaces the store with a current-format snapshot at seq and an empty log, in that order, so a
+// crash between the two leaves a snapshot that skips the old log's commits.
+export function writeSnapshot(state: SwarmState, seq: number): void {
+  mkdirSync(getDataDirectory(), { recursive: true });
+  writeAtomic(getSnapshotPath(), JSON.stringify({ version: STORE_VERSION, seq, state }) + "\n");
+  writeFileSync(getEventLogPath(), "");
 }
 
 interface Loaded {
@@ -169,12 +304,12 @@ interface Loaded {
   state: SwarmState;
   seq: number;
   commitsSinceSnapshot: number;
+  snapshotted: boolean;
 }
 
 // Durable Swarm state: a snapshot plus an append-only log of record-level changes. A commit
 // costs one fsynced append however large the board is; the log folds into the snapshot every
-// `compactAfter` commits. Unreadable files raise StateLoadError instead of loading as empty,
-// so a parse failure can never be persisted over the real swarm.
+// `compactAfter` commits.
 export class StateStore {
   private loaded: Loaded | null = null;
 
@@ -184,11 +319,19 @@ export class StateStore {
     return this.load().state;
   }
 
+  // Drops what was read, so the next read loads the files again. The migration calls it after
+  // it replaces them.
+  forget(): void {
+    this.loaded = null;
+  }
+
   // The plan reads the current state and returns the changes to make. It must not mutate the
   // state it is given; throwing from it, or a failed append, leaves state and disk unchanged.
   async commit(plan: (state: Readonly<SwarmState>) => SwarmChange[]): Promise<SwarmState> {
     const loaded = this.load();
-    const changes = plan(loaded.state).map((change) => parseChange(changeSchema.parse(change)));
+    const changes = plan(loaded.state).map((change) =>
+      parseChange(currentFormat, changeSchema.parse(change)),
+    );
     if (changes.length === 0) return loaded.state;
     // Records are replaced, never mutated, so copying the touched arrays is enough.
     const next: SwarmState = { ...loaded.state };
@@ -197,6 +340,8 @@ export class StateStore {
     }
     for (const change of changes) applyChange(next, change);
     stateSchema.parse(next);
+    // The snapshot marks the store's format, so a new store writes one before its first commit.
+    if (!loaded.snapshotted) this.compact(loaded);
     const seq = loaded.seq + 1;
     this.append(loaded.directory, { seq, at: new Date().toISOString(), changes });
     loaded.state = next;
@@ -210,82 +355,20 @@ export class StateStore {
     const directory = getDataDirectory();
     if (this.loaded?.directory === directory) return this.loaded;
     this.loaded = null;
-    const snapshotPath = getSnapshotPath();
-    let state = emptyState();
-    let seq = 0;
-    let imported = false;
-    const snapshotText = readOptional(snapshotPath);
-    if (snapshotText !== null) {
-      try {
-        ({ state, seq } = snapshotSchema.parse(JSON.parse(snapshotText)));
-      } catch (error) {
-        throw new StateLoadError(snapshotPath, describe(error));
-      }
-    } else {
-      const legacy = this.importLegacy();
-      if (legacy) {
-        state = legacy;
-        imported = true;
-      }
-    }
-    const replayed = this.replay(state, seq);
-    const loaded = { directory, state, seq: replayed.seq, commitsSinceSnapshot: replayed.commits };
+    const version = storeVersionOnDisk();
+    if (version === 1) throw new StoreMigrationPendingError();
+    const files = readStoreFiles(currentFormat, emptyState);
+    const loaded = {
+      directory,
+      state: files.state,
+      seq: files.seq,
+      commitsSinceSnapshot: files.commits,
+      snapshotted: version !== null,
+    };
     // Folding on load keeps startup replay short and clears a dropped tail before the next append.
-    if (imported || replayed.commits > 0 || replayed.dropped) this.compact(loaded);
+    if (files.commits > 0 || files.dropped) this.compact(loaded);
     this.loaded = loaded;
     return loaded;
-  }
-
-  private importLegacy(): SwarmState | null {
-    const legacyPath = getLegacyStatePath();
-    const text = readOptional(legacyPath);
-    if (text === null) return null;
-    try {
-      return stateSchema.parse(JSON.parse(text));
-    } catch (error) {
-      throw new StateLoadError(legacyPath, describe(error));
-    }
-  }
-
-  private replay(
-    state: SwarmState,
-    snapshotSeq: number,
-  ): { seq: number; commits: number; dropped: boolean } {
-    const logPath = getEventLogPath();
-    const text = readOptional(logPath);
-    let seq = snapshotSeq;
-    let commits = 0;
-    if (!text) return { seq, commits, dropped: false };
-    // A crash during an append leaves at most one unterminated final line. That commit was
-    // never acknowledged, so it is dropped; any other unreadable line is corruption.
-    const lines = text.split("\n");
-    const tail = lines.pop();
-    for (const [index, line] of lines.entries()) {
-      let commit: z.infer<typeof commitSchema>;
-      let changes: SwarmChange[];
-      try {
-        commit = commitSchema.parse(JSON.parse(line));
-        changes = commit.changes.map(parseChange);
-      } catch (error) {
-        throw new StateLoadError(logPath, `line ${index + 1}: ${describe(error)}`);
-      }
-      // Commits already folded into the snapshot survive a crash between the snapshot rename
-      // and the log truncation.
-      if (commit.seq <= seq) continue;
-      if (commit.seq !== seq + 1) {
-        throw new StateLoadError(logPath, `line ${index + 1}: expected seq ${seq + 1}`);
-      }
-      for (const change of changes) applyChange(state, change);
-      seq = commit.seq;
-      commits += 1;
-    }
-    try {
-      stateSchema.parse(state);
-    } catch (error) {
-      throw new StateLoadError(logPath, describe(error));
-    }
-    if (tail) console.warn(`[paseo-swarm] Dropped an incomplete final commit from ${logPath}`);
-    return { seq, commits, dropped: Boolean(tail) };
   }
 
   private append(directory: string, commit: z.infer<typeof commitSchema>): void {
@@ -309,15 +392,9 @@ export class StateStore {
   }
 
   private compact(loaded: Loaded): void {
-    mkdirSync(loaded.directory, { recursive: true });
-    writeAtomic(
-      getSnapshotPath(),
-      JSON.stringify({ version: 1, seq: loaded.seq, state: loaded.state }) + "\n",
-    );
-    const legacyPath = getLegacyStatePath();
-    if (existsSync(legacyPath)) renameSync(legacyPath, `${legacyPath}.imported`);
-    writeFileSync(getEventLogPath(), "");
+    writeSnapshot(loaded.state, loaded.seq);
     loaded.commitsSinceSnapshot = 0;
+    loaded.snapshotted = true;
   }
 }
 

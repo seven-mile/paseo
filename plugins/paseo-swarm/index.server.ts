@@ -1,15 +1,15 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { flushMailbox, markConsumed, noteTurnEnded, noteTurnStarted } from "./server/mailbox";
+import { migrateStore } from "./server/migration";
 import { notifyManager, registerOperations } from "./server/operations";
 import { recoverIntents } from "./server/spec";
-import { backfillSwarms } from "./server/swarms";
 import { summarizeTurn } from "./server/turns";
 
 export default function contribute(server: PluginServerContext) {
-  // Records from before swarms get theirs before any request or hook reads them, and seat changes
+  // A store from before swarms is migrated before any request or hook reads it, and seat changes
   // a crash left half written are settled. A failure fails every request with its error, rather
-  // than serving unscoped records.
-  const ready = backfillSwarms().then(() => recoverIntents());
+  // than serving records from before the migration.
+  const ready = migrateStore().then(() => recoverIntents());
   ready.catch((error) => {
     console.error("[paseo-swarm] Could not prepare Swarm state", error);
   });

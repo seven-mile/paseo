@@ -90,13 +90,16 @@ Before writing the file, Swarm commits an intent with the file's hash before and
 
 ## Migration from before swarms
 
-Records from before swarms get a swarm at plugin start, before any request or hook runs:
+Every seat, Task, and Activity names its swarm. A store from before swarms is format version 1, and Swarm converts it to version 2 once, at plugin start, before any request or hook runs (`server/migration.ts`):
 
 - Each project's seats join a swarm instantiated from the PWA directory that project used. The copy goes to `$PASEO_HOME/swarms/<name>-<id>/`, and the chosen directory, which can be a bundled template or one several projects share, is never written.
-- Tasks follow their manager's seat, and Activities their Task. Mail is scoped through its recipient seat.
-- A record whose reference leads to no swarm, or to several, keeps none and is listed in `plugin-data/paseo-swarm/migration-report.json`.
+- Tasks follow their manager's seat, and Activities their Task. Mail follows its recipient seat.
+- A seat with no agent block gets its occupant's config as one. Seats with neither are listed in the report, because their next agent has nothing to start from.
+- A Task, Activity, or message whose reference leads to no swarm, or to several, is moved whole to `plugin-data/paseo-swarm/legacy-archive.json`. The live state holds no record without a swarm.
 
-The copy is byte-identical, so prompt revisions stay valid and no agent is woken. Running it again changes nothing.
+The migration builds and checks the whole version 2 state before it writes anything. It then copies the version 1 files to `backup-v1-<time>/`, writes the archive and the swarm directories, and replaces the store with a version 2 snapshot in one rename. `migration-report.json` lists what was created, archived, and left without an agent block. A failure before the rename leaves the version 1 store as it was and writes the error to the report; the store refuses reads and writes until a later start migrates it. A daemon from before the migration refuses the version 2 snapshot instead of writing over it.
+
+The copy is byte-identical, so prompt revisions stay valid and no agent is woken.
 
 ## Later
 

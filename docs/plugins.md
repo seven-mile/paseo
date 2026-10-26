@@ -110,7 +110,9 @@ PWA directory is content only and does not configure a runtime source.
 Swarm keeps its roster, Tasks, and Activities under `$PASEO_HOME/plugin-data/paseo-swarm/` as
 `snapshot.json` plus an append-only `events.jsonl` of record-level changes (`server/state.ts`).
 A commit is one fsynced line, and the log folds into the snapshot on load and every 500
-commits. A pre-log `state.json` is imported once and renamed to `state.json.imported`. An
+commits. The snapshot's `version` is the store format; a store from an earlier format is
+converted once at startup, as [design/07-swarm-directory.md](../design/07-swarm-directory.md)
+describes, and the runtime reads only the current one. An
 unreadable snapshot, log line, or legacy file stops every Swarm read and write with an error
 naming the file until it is repaired or moved aside; nothing is written meanwhile. Only an unterminated final
 log line, left by a crash mid-append, is dropped automatically.
@@ -121,8 +123,7 @@ are unique within a swarm, so requests that name them carry `swarmId`, or name a
 Swarm can tell. Choosing a PWA directory in Project Settings copies it to
 `$PASEO_HOME/swarms/<name>-<id>/`; the chosen directory is never written. Edits to the swarm
 directory reach no agent until `paseo-swarm swarm up` accepts them, and `paseo-swarm swarm diff|status` show
-what is not accepted yet. Seat tools write their change into `swarm.yaml` as they accept it. See [design/07-swarm-directory.md](../design/07-swarm-directory.md),
-which also covers the startup migration of records from before swarms.
+what is not accepted yet. Seat tools write their change into `swarm.yaml` as they accept it. See [design/07-swarm-directory.md](../design/07-swarm-directory.md).
 
 A Swarm seat is an agent record: the roster identity owns the Tasks, Activities, and mailbox, and
 the Paseo agent behind it can change. `swarm_seat_create` only reserves the seat; its first

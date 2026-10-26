@@ -15,14 +15,13 @@ import { notifyManager, registerOperations } from "../server/operations";
 import { assemblePrompt, seatView } from "../server/seats";
 import { pwaFilesRevision, readPwaFiles } from "../server/pwa";
 import { createSwarm, resolveSwarm, swarmForProject } from "../server/swarms";
-import { joinSwarm } from "./fixtures";
+import { seed as seedRecords, type Seeded } from "./fixtures";
 import {
   getConfigPath,
   getEventLogPath,
   getSnapshotPath,
   StateStore,
   store,
-  type SwarmChange,
 } from "../server/state";
 import { emptyState, type AgentRecord, type SwarmState } from "../shared/models";
 import {
@@ -38,16 +37,8 @@ import {
   refreshPromptRpc,
 } from "../shared/swarm";
 
-async function seed(seeded: SwarmState, options?: { stamp: boolean }): Promise<void> {
-  await store.commit(() => [
-    ...seeded.agents.map((record): SwarmChange => ({ op: "put", collection: "agents", record })),
-    ...seeded.tasks.map((record): SwarmChange => ({ op: "put", collection: "tasks", record })),
-    ...seeded.activities.map(
-      (record): SwarmChange => ({ op: "put", collection: "activities", record }),
-    ),
-  ]);
-  // Seeded records join a swarm the way records from before swarms do.
-  await joinSwarm(options);
+async function seed(seeded: Seeded, options?: { stamp: boolean }): Promise<void> {
+  await seedRecords(seeded, options);
 }
 
 function readDisk(): string {
