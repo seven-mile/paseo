@@ -58,6 +58,7 @@ describe("canonical CLI surface", () => {
       "ls",
       "set",
       "reset",
+      "retire",
       "history",
     ]);
     for (const name of ["set", "reset"]) {
