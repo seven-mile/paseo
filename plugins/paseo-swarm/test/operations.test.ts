@@ -875,7 +875,7 @@ test("board reads never read a PWA directory; a project's statuses come from its
   }
 });
 
-test("roster reads filter native availability without releasing historical names", async () => {
+test("board reads keep seats whose occupants are archived or unavailable without releasing their names", async () => {
   const home = mkdtempSync(join(tmpdir(), "swarm-roster-"));
   const previousHome = process.env.PASEO_HOME;
   process.env.PASEO_HOME = home;
@@ -900,22 +900,11 @@ test("roster reads filter native availability without releasing historical names
       handlers.set(contract.name, handler);
     },
   });
-  let available = false;
-  let fail = false;
-  const cursors: Array<string | undefined> = [];
   const context = {
     paseo: {
       agents: {
-        async list(options: { filter: { includeArchived: boolean }; page: { cursor?: string } }) {
-          assert.equal(options.filter.includeArchived, false);
-          if (fail) throw new Error("daemon unavailable");
-          cursors.push(options.page.cursor);
-          return options.page.cursor
-            ? {
-                entries: available ? [{ agent: { id: agent.paseoAgentId } }] : [],
-                pageInfo: { nextCursor: null },
-              }
-            : { entries: [{ agent: { id: "unregistered" } }], pageInfo: { nextCursor: "next" } };
+        async list() {
+          throw new Error("Occupant availability must not determine seat visibility");
         },
       },
     },
@@ -923,10 +912,24 @@ test("roster reads filter native availability without releasing historical names
   const invoke = (rpc: typeof boardReadRpc | typeof createSeatRpc, input: unknown) =>
     handlers.get(rpc.name)!(rpc.input.parse(input) as never, context);
   try {
-    await seed({ ...emptyState(), agents: [agent] });
+    const reserved = {
+      ...agent,
+      id: "reserved-record",
+      name: "reserved",
+      qualifiedName: "reserved",
+      paseoAgentId: null,
+    };
+    await seed({ ...emptyState(), agents: [agent, reserved] });
     const before = readDisk();
-    assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, []);
-    assert.deepEqual(cursors, [undefined, "next"]);
+    const [seated, unoccupied] = store.read().agents;
+    assert.ok(seated.swarmId);
+    assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, [
+      seatView(seated),
+    ]);
+    assert.deepEqual(
+      boardReadRpc.output.parse(await invoke(boardReadRpc, { includeReserved: true })).agents,
+      [seatView(seated), seatView(unoccupied)],
+    );
     await assert.rejects(
       async () =>
         invoke(createSeatRpc, {
@@ -937,18 +940,8 @@ test("roster reads filter native availability without releasing historical names
         }),
       /already exists/,
     );
-    available = true;
-    const [seated] = store.read().agents;
-    assert.ok(seated.swarmId);
-    assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, [
-      { ...seated, pending: null },
-    ]);
-    available = false;
-    assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, []);
-    fail = true;
-    await assert.rejects(async () => invoke(boardReadRpc, {}), /daemon unavailable/);
     assert.equal(readDisk(), before);
-    assert.deepEqual(store.read().agents, [seated]);
+    assert.deepEqual(store.read().agents, [seated, unoccupied]);
   } finally {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
     else process.env.PASEO_HOME = previousHome;

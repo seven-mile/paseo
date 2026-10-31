@@ -916,7 +916,7 @@ function HostRoster({
     ({ item: planner, drag, isActive, dragHandleProps }: DraggableRenderItemInfo<Agent>) => (
       <PlannerGroup
         planner={planner}
-        agents={agents}
+        agents={agents.filter((agent) => agent.swarmId === planner.swarmId)}
         serverId={plugin.serverId}
         selectedAgent={selectedAgent}
         workspaceStates={workspaceStates}

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { z } from "zod";
 import {
@@ -24,6 +24,7 @@ import {
   getLegacyStatePath,
   getMigrationReportPath,
   getSnapshotPath,
+  getSwarmsDirectory,
   readStoreFiles,
   store,
   storeVersionOnDisk,
@@ -93,7 +94,92 @@ function onlyOne<T>(values: Set<T>): T | undefined {
   return values.size === 1 ? [...values][0] : undefined;
 }
 
+function readOptionalJson(path: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+// Pre-seat records kept project and launch settings only in Paseo's workspace/agent stores.
+function hydrateLegacySeats(seats: V1State["agents"]): V1State["agents"] {
+  const home = join(getSwarmsDirectory(), "..");
+  const workspaces = z
+    .array(z.object({ workspaceId: z.string(), projectId: z.string() }))
+    .parse(readOptionalJson(join(home, "projects", "workspaces.json")) ?? []);
+  const agentsDirectory = join(home, "agents");
+  const directories = existsSync(agentsDirectory)
+    ? readdirSync(agentsDirectory, { withFileTypes: true }).filter((entry) => entry.isDirectory())
+    : [];
+  const savedAgentSchema = z.object({
+    provider: z.string().min(1),
+    config: z
+      .object({
+        model: z.string().optional(),
+        modeId: z.string().optional(),
+        thinkingOptionId: z.string().optional(),
+        featureValues: z.record(z.string(), z.unknown()).optional(),
+      })
+      .default({}),
+  });
+  const projectOf = (
+    seat: V1State["agents"][number],
+    seen = new Set<string>(),
+  ): string | undefined => {
+    if (seat.projectId) return seat.projectId;
+    if (seen.has(seat.id))
+      throw new Error(`Cyclic legacy reporting line at ${agentQualifiedName(seat)}`);
+    seen.add(seat.id);
+    const parents = seats.filter(
+      (candidate) =>
+        agentQualifiedName(candidate) === seat.reportsTo && candidate.swarmId === seat.swarmId,
+    );
+    const parentProject = parents.length === 1 ? projectOf(parents[0], seen) : undefined;
+    return (
+      parentProject ??
+      workspaces.find((workspace) => workspace.workspaceId === seat.workspaceId)?.projectId
+    );
+  };
+  return seats.map((seat) => {
+    const projectId = projectOf(seat);
+    let agentConfig =
+      seat.agentConfig ?? (seat.occupant?.config.provider ? seat.occupant.config : undefined);
+    let occupant = seat.occupant;
+    if ((!agentConfig || !occupant) && seat.paseoAgentId) {
+      for (const directory of directories) {
+        const data = readOptionalJson(
+          join(agentsDirectory, directory.name, `${seat.paseoAgentId}.json`),
+        );
+        if (data === undefined) continue;
+        const saved = savedAgentSchema.parse(data);
+        const { model, ...settings } = saved.config;
+        const config = {
+          ...settings,
+          provider: model ? `${saved.provider}/${model}` : saved.provider,
+        };
+        agentConfig ??= config;
+        occupant ??= {
+          number: 1,
+          config,
+          generation: seat.generation ?? 0,
+          boundAt: seat.createdAt,
+        };
+        break;
+      }
+    }
+    return {
+      ...seat,
+      ...(projectId ? { projectId } : {}),
+      ...(agentConfig ? { agentConfig } : {}),
+      ...(occupant ? { occupant } : {}),
+    };
+  });
+}
+
 function plan(old: V1State): Migration {
+  old = { ...old, agents: hydrateLegacySeats(old.agents) };
   const swarms = [...old.swarms];
   const created: Migration["created"] = [];
   const swarmFor = new Map<string | null, string>();

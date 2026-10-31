@@ -6,6 +6,7 @@ import { test, type TestContext } from "node:test";
 import { getLegacyArchivePath, migrateStore } from "../server/migration";
 import { readPwaFiles } from "../server/pwa";
 import { assemblePrompt } from "../server/seats";
+import { planSeat } from "../server/seat-policy";
 import {
   getConfigPath,
   getDataDirectory,
@@ -158,6 +159,83 @@ interface Report {
   seatsWithoutAgent?: string[];
   error?: string;
 }
+
+test("pre-seat records recover their project and launch config from Paseo without splitting a team", async (t) => {
+  const home = setup(t);
+  const source = join(home, "pwa");
+  writePwa(source, "Legacy");
+  process.env.PASEO_SWARM_PWA_ROOT = source;
+  mkdirSync(join(home, "projects"));
+  writeFileSync(
+    join(home, "projects", "workspaces.json"),
+    JSON.stringify([
+      { workspaceId: "workspace", projectId: "alpha" },
+      { workspaceId: "old-worktree", projectId: "old-project" },
+    ]),
+  );
+  const lead = seat({ id: "lead", name: "lead", workspaceId: "workspace" });
+  const worker = seat({
+    id: "worker",
+    name: "worker",
+    qualifiedName: "lead.worker",
+    reportsTo: "lead",
+    roleClass: "worker",
+    role: "researcher",
+    workspaceId: "old-worktree",
+    agentConfig: { provider: "kept/model" },
+  });
+  const directory = join(home, "agents", "project");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(
+    join(directory, `${lead.paseoAgentId}.json`),
+    JSON.stringify({
+      provider: "codex",
+      config: { model: "remote/model", modeId: "auto-review", thinkingOptionId: "high" },
+    }),
+  );
+  writeV1Store({
+    agents: [lead, worker],
+    tasks: [task("build", "lead")],
+    activities: [activity("note", "build")],
+  });
+
+  await migrateStore();
+
+  const state = store.read();
+  assert.equal(state.swarms.length, 1);
+  assert.equal(state.agents[0].projectId, "alpha");
+  assert.equal(state.agents[1].projectId, "alpha");
+  assert.equal(state.agents[0].swarmId, state.agents[1].swarmId);
+  assert.deepEqual(state.agents[0].agentConfig, {
+    provider: "codex/remote/model",
+    modeId: "auto-review",
+    thinkingOptionId: "high",
+  });
+  assert.deepEqual(state.agents[1].agentConfig, { provider: "kept/model" });
+  assert.equal(planSeat(state.agents[0]).kind, "keep");
+  assert.deepEqual(state.agents[0].occupant?.config, state.agents[0].agentConfig);
+  assert.equal(state.tasks[0].swarmId, state.agents[0].swarmId);
+  assert.equal(state.activities[0].swarmId, state.agents[0].swarmId);
+  assert.deepEqual(readJson<Report>(getMigrationReportPath()).seatsWithoutAgent, []);
+});
+
+test("an unreadable legacy agent config stops migration before the store switch", async (t) => {
+  const home = setup(t);
+  const source = join(home, "pwa");
+  writePwa(source, "Legacy");
+  process.env.PASEO_SWARM_PWA_ROOT = source;
+  const lead = seat({ id: "lead", name: "lead" });
+  const directory = join(home, "agents", "project");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, `${lead.paseoAgentId}.json`), "{");
+  writeV1Store({ agents: [lead] });
+  const before = readFileSync(getSnapshotPath(), "utf8");
+
+  await assert.rejects(migrateStore());
+
+  assert.equal(readFileSync(getSnapshotPath(), "utf8"), before);
+  assert.ok(readJson<Report>(getMigrationReportPath()).error);
+});
 
 test("a version 1 store moves to one swarm per project, with a backup and an archive", async (t) => {
   const home = setup(t);
