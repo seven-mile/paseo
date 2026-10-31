@@ -176,9 +176,7 @@ test("a passed deadline records the default once and tells the Task manager", as
     agents: [unplaced(manager)],
     tasks: [unplaced(task)],
     activities: [
-      unplaced(
-        choice("expired", { defaultOptionId: "b", deadline: "2026-10-22T01:00:00.000Z" }),
-      ),
+      unplaced(choice("expired", { defaultOptionId: "b", deadline: "2026-10-22T01:00:00.000Z" })),
       unplaced(choice("later", { defaultOptionId: "a", deadline: "2026-10-23T01:00:00.000Z" })),
     ],
   });

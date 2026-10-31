@@ -662,7 +662,12 @@ describe("Tasks responsive shell state", () => {
 describe("Swarm Needs you inbox", () => {
   it("keeps rows for Tasks in scope and for agents those Tasks name", () => {
     const value = board();
-    const base = { paseoAgentId: null, title: "Row", createdAt: "2026-10-06T00:00:00Z" };
+    const base = {
+      swarmId: "swarm-1",
+      paseoAgentId: null,
+      title: "Row",
+      createdAt: "2026-10-06T00:00:00Z",
+    };
     value.inbox = [
       {
         ...base,

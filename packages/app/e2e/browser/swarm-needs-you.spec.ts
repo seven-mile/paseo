@@ -7,7 +7,7 @@ import { openAgentRoute } from "../support/helpers/mock-agent";
 import { seedWorkspace } from "../support/helpers/seed-client";
 import { ensureExplorerSidebar } from "../support/helpers/workspace-tabs";
 
-// A Swarm member running real git commands through a scripted ACP agent. The Needs you
+// A Swarm seat running real git commands through a scripted ACP agent. The Needs you
 // inbox holds the push until a human answers it in the Tasks surface.
 test.skip(process.platform === "win32", "Swarm approval shims are POSIX shell scripts.");
 test.use({
@@ -29,23 +29,22 @@ interface SwarmClient {
   connect(): Promise<void>;
   close(): Promise<void>;
   invokePluginRpc(pluginId: string, method: string, input: unknown): Promise<unknown>;
-  createAgent(options: {
-    agentId: string;
-    provider: string;
-    cwd: string;
-    workspaceId: string;
-    systemPrompt: string;
-    title: string;
-  }): Promise<{ id: string }>;
-  sendAgentMessage(agentId: string, text: string): Promise<unknown>;
   waitForFinish(agentId: string, timeoutMs: number): Promise<unknown>;
+}
+
+interface Seat {
+  swarmId: string;
+  paseoAgentId: string | null;
+  workspaceId: string | null;
 }
 
 const swarm = (client: SwarmClient, method: string, input: unknown) =>
   client.invokePluginRpc("paseo-swarm", method, input);
 
-async function seedSwarmMember() {
-  // Swarm state lives for the worker's daemon, so each test (and retry) gets its own member.
+// A planner seat in a swarm made from the bundled PR workflow. Its first mail starts its agent
+// at the project root, so its pushes land in the seeded repo's remote.
+async function seedSwarmSeat() {
+  // Swarm state lives for the worker's daemon, so each test (and retry) gets its own seat.
   const name = `lead-${Math.random().toString(36).slice(2, 8)}`;
   const taskId = `${name}-task`;
   const workspace = await seedWorkspace({ repoPrefix: "swarm-gate-", repo: { withRemote: true } });
@@ -54,25 +53,15 @@ async function seedSwarmMember() {
     projectId: workspace.projectId,
     path: path.resolve("../../plugins/paseo-swarm/pwa/pr-workflow"),
   });
-  const prepared = (await swarm(client, "swarm.agent.prepare", {
+  const { swarmId } = (await swarm(client, "swarm.seat.create", {
     projectId: workspace.projectId,
     name,
-    roleClass: "supervisor",
-    role: "supervisor",
-  })) as { agentId: string; systemPrompt: string };
-  const agent = await client.createAgent({
-    agentId: prepared.agentId,
-    provider: "shell-acp",
-    cwd: workspace.repoPath,
-    workspaceId: workspace.workspaceId,
-    systemPrompt: prepared.systemPrompt,
-    title: name,
-  });
-  await swarm(client, "swarm.agent.bind_workspace", {
-    agentId: agent.id,
-    workspaceId: workspace.workspaceId,
-  });
+    roleClass: "planner",
+    role: "planner",
+    provider: "shell-acp/shell",
+  })) as Seat;
   await swarm(client, "swarm.task.create", {
+    swarmId,
     id: taskId,
     title: "Ship it",
     brief: "Push the release commit.",
@@ -80,13 +69,30 @@ async function seedSwarmMember() {
     managerName: name,
     createdBy: name,
   });
+  // The scripted agent runs the body of each mail it gets as a shell command.
+  const run = async (command: string) => {
+    await swarm(client, "swarm.message.send", {
+      swarmId,
+      senderName: "human",
+      recipientName: name,
+      body: command,
+    });
+    const seat = (await swarm(client, "swarm.seat.list", { swarmId })) as { seats: Seat[] };
+    const placed = seat.seats.find((candidate) => candidate.paseoAgentId);
+    if (!placed?.paseoAgentId || !placed.workspaceId) throw new Error(`${name} has no agent`);
+    return { agentId: placed.paseoAgentId, workspaceId: placed.workspaceId };
+  };
+  // Start the seat's agent, so the tests can open its workspace.
+  const started = await run("true");
+  await client.waitForFinish(started.agentId, 60_000);
   return {
     ...workspace,
+    ...started,
     name,
     taskId,
-    agentId: agent.id,
-    run: (command: string) => client.sendAgentMessage(agent.id, command),
-    finish: () => client.waitForFinish(agent.id, 60_000),
+    swarmId,
+    run,
+    finish: () => client.waitForFinish(started.agentId, 60_000),
     swarm: (method: string, input: unknown) => swarm(client, method, input),
     remoteLog: () =>
       execSync("git --git-dir remote.git log --format=%s main", {
@@ -109,10 +115,10 @@ async function openNeedsYou(page: Page, workspaceId: string, agentId: string) {
   return inbox;
 }
 
-test("Needs you holds a member's push until a human approves or denies it", async ({
+test("Needs you holds a seat's push until a human approves or denies it", async ({
   page,
 }, testInfo) => {
-  const member = await seedSwarmMember();
+  const member = await seedSwarmSeat();
   try {
     await member.run('git commit --allow-empty -qm "release" && git push -q origin HEAD:main');
     const inbox = await openNeedsYou(page, member.workspaceId, member.agentId);
@@ -146,9 +152,10 @@ test("Needs you holds a member's push until a human approves or denies it", asyn
 });
 
 test("Needs you answers a choice inline and shows its default", async ({ page }, testInfo) => {
-  const member = await seedSwarmMember();
+  const member = await seedSwarmSeat();
   try {
     await member.swarm("swarm.activity.append", {
+      swarmId: member.swarmId,
       taskId: member.taskId,
       actorName: member.name,
       kind: "question",

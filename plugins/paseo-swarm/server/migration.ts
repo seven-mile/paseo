@@ -181,6 +181,27 @@ function hydrateLegacySeats(seats: V1State["agents"]): V1State["agents"] {
   });
 }
 
+// Approvals follow the seat whose command they hold.
+function placeApprovals(
+  approvals: V1State["approvals"],
+  seats: ReadonlyArray<{ id: string; swarmId: string }>,
+  archived: ArchivedRecord[],
+): SwarmState["approvals"] {
+  const placed: SwarmState["approvals"] = [];
+  for (const approval of approvals) {
+    const swarmId = approval.swarmId ?? seats.find((seat) => seat.id === approval.agentId)?.swarmId;
+    if (swarmId) placed.push({ ...approval, swarmId });
+    else {
+      archived.push({
+        collection: "approvals",
+        record: approval,
+        reason: `Its seat ${approval.agentName} has no swarm`,
+      });
+    }
+  }
+  return placed;
+}
+
 function plan(old: V1State): Migration {
   old = { ...old, agents: hydrateLegacySeats(old.agents) };
   const swarms = [...old.swarms];
@@ -284,19 +305,7 @@ function plan(old: V1State): Migration {
     });
     return false;
   });
-  const approvals: SwarmState["approvals"] = [];
-  for (const approval of old.approvals) {
-    const swarmId =
-      approval.swarmId ?? agents.find((seat) => seat.id === approval.agentId)?.swarmId;
-    if (swarmId) approvals.push({ ...approval, swarmId });
-    else {
-      archived.push({
-        collection: "approvals",
-        record: approval,
-        reason: `Its seat ${approval.agentName} has no swarm`,
-      });
-    }
-  }
+  const approvals = placeApprovals(old.approvals, agents, archived);
 
   const state = stateSchema.parse({
     ...old,

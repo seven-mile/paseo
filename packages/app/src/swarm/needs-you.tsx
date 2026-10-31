@@ -112,7 +112,7 @@ function InboxRow({
       return;
     }
     const agent = item.agentName ? findSwarmTaskAgent(board.agents, item.agentName) : undefined;
-    if (!agent) return;
+    if (!agent?.paseoAgentId) return;
     onOpenReference?.({
       kind: "agent",
       paseoAgentId: agent.paseoAgentId,
@@ -298,6 +298,7 @@ function ChoiceButton({
   const press = useCallback(
     () =>
       act("swarm.activity.append_human", {
+        swarmId: item.swarmId,
         taskId: item.taskId,
         actorName: "human",
         kind: "human-response",
@@ -306,7 +307,15 @@ function ChoiceButton({
         responseProfile: item.responseProfiles?.[0] ?? "decision",
         data: { selectedOption: option.id },
       }),
-    [act, item.taskId, item.activityId, item.responseProfiles, option.id, option.label],
+    [
+      act,
+      item.swarmId,
+      item.taskId,
+      item.activityId,
+      item.responseProfiles,
+      option.id,
+      option.label,
+    ],
   );
   return (
     <Button

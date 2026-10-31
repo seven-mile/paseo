@@ -107,6 +107,7 @@ const inboxOptionSchema = z.object({
 });
 const inboxBase = {
   id: z.string(),
+  swarmId: z.string(),
   taskId: z.string().nullable(),
   agentName: z.string().nullable(),
   paseoAgentId: z.string().nullable(),

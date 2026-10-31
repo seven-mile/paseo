@@ -1,5 +1,6 @@
-// A scripted ACP agent for E2E: each prompt is a shell command, run in the session cwd with
-// the environment Paseo launched this process with, so session-open hooks (PATH shims) apply.
+// A scripted ACP agent for E2E: each prompt, or the body of the Swarm mail in it, is a shell
+// command, run in the session cwd with the environment Paseo launched this process with, so
+// session-open hooks (PATH shims) apply.
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 
@@ -19,11 +20,15 @@ function run(command, cwd) {
   });
 }
 
+// Swarm mail arrives as a team-message envelope; its body is the command.
+const ENVELOPE = /<paseo-swarm-team-message[^>]*>\n?([\s\S]*?)\n?<\/paseo-swarm-team-message>/;
+
 async function prompt({ sessionId, prompt: blocks }) {
-  const command = blocks
+  const text = blocks
     .filter((block) => block.type === "text")
     .map((block) => block.text)
     .join("\n");
+  const command = ENVELOPE.exec(text)?.[1] ?? text;
   const { code, output } = await run(command, sessions.get(sessionId));
   send({
     method: "session/update",
@@ -47,7 +52,11 @@ readline.createInterface({ input: process.stdin }).on("line", async (line) => {
   if (request.method === "session/new") {
     const sessionId = `shell-${sessions.size + 1}`;
     sessions.set(sessionId, request.params.cwd);
-    result = { sessionId };
+    // One model, so a Swarm seat can name it as provider/model.
+    result = {
+      sessionId,
+      models: { currentModelId: "shell", availableModels: [{ modelId: "shell", name: "Shell" }] },
+    };
   }
   if (request.method === "session/prompt") result = await prompt(request.params);
   send({ id: request.id, result });
