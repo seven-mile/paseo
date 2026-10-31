@@ -96,6 +96,10 @@ export const boardReadRpc = defineRpc({
     tasks: z.array(taskSchema),
     activities: z.array(activitySchema),
     statuses: z.array(z.string()).optional(),
+    // The swarms the board covers, so a client can tell teams with the same names apart.
+    swarms: z
+      .array(z.object({ id: z.string(), name: z.string(), projectId: z.string().nullable() }))
+      .optional(),
   }),
 });
 

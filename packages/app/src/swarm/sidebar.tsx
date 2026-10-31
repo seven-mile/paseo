@@ -99,6 +99,10 @@ const rosterSchema = z.object({
       pending: z.object({ kind: z.string(), reason: z.string() }).nullable().optional(),
     }),
   ),
+  // Absent on older hosts.
+  swarms: z
+    .array(z.object({ id: z.string(), name: z.string(), projectId: z.string().nullable() }))
+    .optional(),
 });
 type Agent = z.infer<typeof rosterSchema>["agents"][number];
 type WorkspaceState = Pick<SidebarWorkspaceEntry, "statusBucket" | "workspaceKind">;
@@ -150,6 +154,7 @@ function useOrderedSwarmAgents(agents: Agent[], scope: string) {
 
 function PlannerGroup({
   planner,
+  swarmLabel,
   agents,
   serverId,
   selectedAgent,
@@ -164,6 +169,7 @@ function PlannerGroup({
 }: SwarmSidebarGestureProps &
   SwarmRowDragProps & {
     planner: Agent;
+    swarmLabel?: string;
     agents: Agent[];
     serverId: string;
     selectedAgent?: Agent;
@@ -182,6 +188,7 @@ function PlannerGroup({
             serverId,
             agentId: agent.paseoAgentId,
             workspaceId: agent.workspaceId,
+            pin: true,
           })
         : onMessage(agent),
     [onMessage, serverId],
@@ -240,6 +247,7 @@ function PlannerGroup({
     <View>
       <PlannerRow
         planner={planner}
+        swarmLabel={swarmLabel}
         selected={isSelected(planner)}
         expanded={expanded}
         onToggle={toggleExpanded}
@@ -282,6 +290,7 @@ function PlannerGroup({
 
 function PlannerRow({
   planner,
+  swarmLabel,
   selected,
   expanded,
   onToggle,
@@ -293,6 +302,7 @@ function PlannerRow({
   dragHandleProps,
 }: SwarmRowDragProps & {
   planner: Agent;
+  swarmLabel?: string;
   selected: boolean;
   expanded: boolean;
   onToggle: () => void;
@@ -384,7 +394,7 @@ function PlannerRow({
       >
         <PressHighlight
           accessibilityRole="button"
-          accessibilityLabel={planner.name}
+          accessibilityLabel={swarmLabel ? `${planner.name}, ${swarmLabel}` : planner.name}
           accessibilityState={selectionAccessibilityState}
           aria-selected={selected}
           testID={`swarm-planner-row-${planner.id}`}
@@ -414,6 +424,11 @@ function PlannerRow({
         <Text style={styles.projectTitle} numberOfLines={1}>
           {planner.name}
         </Text>
+        {swarmLabel ? (
+          <Text style={styles.swarmLabel} numberOfLines={1}>
+            {swarmLabel}
+          </Text>
+        ) : null}
       </View>
       <View style={styles.projectTrailingActions} pointerEvents="box-none">
         <Pressable
@@ -908,6 +923,19 @@ function HostRoster({
       ? agents.find((agent) => agent.workspaceId === selection.workspaceId)
       : undefined;
   const planners = useMemo(() => agents.filter((agent) => agent.roleClass === "planner"), [agents]);
+  // With teams from several swarms, each planner names its swarm by its project, or by the
+  // swarm's own name when the project is unknown here.
+  const swarmLabels = useMemo(() => {
+    const labels = new Map<string, string>();
+    const swarms = query.data?.swarms ?? [];
+    if (swarms.length < 2) return labels;
+    const workspaces = [...(sessions[0]?.workspaces.values() ?? [])];
+    for (const swarm of swarms) {
+      const project = workspaces.find((workspace) => workspace.projectId === swarm.projectId);
+      labels.set(swarm.id, project?.projectCustomName || project?.projectDisplayName || swarm.name);
+    }
+    return labels;
+  }, [query.data, sessions]);
   const { orderedAgents: orderedPlanners, onDragEnd } = useOrderedSwarmAgents(
     planners,
     `swarm:planners:${plugin.serverId}`,
@@ -916,6 +944,7 @@ function HostRoster({
     ({ item: planner, drag, isActive, dragHandleProps }: DraggableRenderItemInfo<Agent>) => (
       <PlannerGroup
         planner={planner}
+        swarmLabel={planner.swarmId ? swarmLabels.get(planner.swarmId) : undefined}
         agents={agents.filter((agent) => agent.swarmId === planner.swarmId)}
         serverId={plugin.serverId}
         selectedAgent={selectedAgent}
@@ -931,6 +960,7 @@ function HostRoster({
     ),
     [
       agents,
+      swarmLabels,
       plugin.serverId,
       selectedAgent,
       workspaceStates,
@@ -942,13 +972,22 @@ function HostRoster({
   const plannerExtraData = useMemo(
     () => ({
       agents,
+      swarmLabels,
       selectedAgent,
       workspaceStates,
       openTasks,
       parentGestureRef,
       dragGestureHostActive,
     }),
-    [agents, selectedAgent, workspaceStates, openTasks, parentGestureRef, dragGestureHostActive],
+    [
+      agents,
+      swarmLabels,
+      selectedAgent,
+      workspaceStates,
+      openTasks,
+      parentGestureRef,
+      dragGestureHostActive,
+    ],
   );
   if (query.isPending) return <Text style={styles.hint}>{t("swarm.sidebar.loadingAgents")}</Text>;
   if (query.isError)
@@ -1122,6 +1161,12 @@ const styles = StyleSheet.create((theme, runtime) => ({
     fontWeight: "400",
     minWidth: 0,
     flexShrink: 1,
+  },
+  swarmLabel: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    minWidth: 0,
+    flexShrink: 2,
   },
   projectTrailingActions: {
     flexDirection: "row",

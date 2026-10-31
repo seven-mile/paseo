@@ -370,6 +370,11 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         .map(seatView),
       tasks: scoped(saved.tasks),
       activities: scoped(saved.activities),
+      swarms: swarms.map((swarm) => ({
+        id: swarm.id,
+        name: swarm.name,
+        projectId: swarm.projectId,
+      })),
     };
     if (!projectId && !swarmId) return board;
     if (swarms.length !== 1) return { ...board, statuses: [] };

@@ -53,15 +53,11 @@ function readDisk(): string {
     .join("\0");
 }
 
-function boardOf({
-  messages: _messages,
-  swarms: _swarms,
-  intents: _intents,
-  ...board
-}: Readonly<SwarmState>) {
+function boardOf({ messages: _messages, intents: _intents, ...board }: Readonly<SwarmState>) {
   return {
     ...board,
     agents: board.agents.filter((agent) => agent.paseoAgentId !== null).map(seatView),
+    swarms: board.swarms.map(({ id, name, projectId }) => ({ id, name, projectId })),
   };
 }
 
@@ -923,9 +919,13 @@ test("board reads keep seats whose occupants are archived or unavailable without
     const before = readDisk();
     const [seated, unoccupied] = store.read().agents;
     assert.ok(seated.swarmId);
-    assert.deepEqual(boardReadRpc.output.parse(await invoke(boardReadRpc, {})).agents, [
-      seatView(seated),
-    ]);
+    const board = boardReadRpc.output.parse(await invoke(boardReadRpc, {}));
+    assert.deepEqual(board.agents, [seatView(seated)]);
+    // The board names the swarms it covers, so teams with the same names can be told apart.
+    assert.deepEqual(
+      board.swarms?.map((swarm) => swarm.id),
+      [seated.swarmId],
+    );
     assert.deepEqual(
       boardReadRpc.output.parse(await invoke(boardReadRpc, { includeReserved: true })).agents,
       [seatView(seated), seatView(unoccupied)],
