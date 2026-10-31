@@ -129,6 +129,7 @@ async function setup(t: TestContext) {
       role: "developer",
       reportsTo,
       provider: "codex/gpt-6",
+      modeId: "auto-review",
     });
   const file = join(swarm.directory, "swarm.yaml");
   const status = () => call(statusReadRpc, {});
@@ -158,7 +159,7 @@ test("a hire is in swarm.yaml and accepted when the tool returns, and comments s
       qualifiedName: "planner.lead.dev",
       reportsTo: "planner.lead",
       role: "developer",
-      agentConfig: { provider: "codex/gpt-6" },
+      agentConfig: { provider: "codex/gpt-6", modeId: "auto-review" },
     },
   );
   // Nothing for up to undo.
@@ -180,6 +181,7 @@ test("a hire is in swarm.yaml and accepted when the tool returns, and comments s
         role: "developer",
         reportsTo: "planner.lead.dev",
         provider: "codex/gpt-6",
+        modeId: "auto-review",
       }),
     /worker and has no team/,
   );
@@ -197,7 +199,7 @@ test("edits elsewhere in swarm.yaml do not block a seat change; the same section
   t.after(() => noteTurnEnded(planner.paseoAgentId!));
   const { seats } = await call(seatUpdateRpc, {
     seats: ["planner"],
-    agentConfig: { provider: "claude/sonnet" },
+    agentConfig: { provider: "claude/sonnet", modeId: "auto" },
   });
   assert.equal(seats[0].agentConfig?.provider, "claude/sonnet");
   assert.equal(seats[0].paseoAgentId, planner.paseoAgentId);
@@ -216,7 +218,7 @@ test("edits elsewhere in swarm.yaml do not block a seat change; the same section
   );
   writeFileSync(
     file,
-    `${read(file)}          qa: { role: developer, agent: { provider: codex/gpt-6 } }\n`,
+    `${read(file)}          qa: { role: developer, agent: { provider: codex/gpt-6, modeId: auto-review } }\n`,
   );
   const withQa = read(file);
   assert.equal(parseSwarmFile(withQa).filter((desired) => desired.name === "qa").length, 1);

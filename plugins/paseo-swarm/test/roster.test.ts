@@ -120,7 +120,7 @@ test("swarm.yaml is a tree whose key paths are qualified names", () => {
       "seats:",
       "  planner:",
       "    role: planner",
-      "    agent: { provider: claude/opus }",
+      "    agent: { provider: claude/opus, modeId: auto }",
       "    team:",
       "      lead:",
       "        role: supervisor",
@@ -131,7 +131,7 @@ test("swarm.yaml is a tree whose key paths are qualified names", () => {
   assert.deepEqual(
     seats.map((seat) => [seat.qualifiedName, seat.reportsTo, seat.role, seat.agentConfig]),
     [
-      ["planner", null, "planner", { provider: "claude/opus" }],
+      ["planner", null, "planner", { provider: "claude/opus", modeId: "auto" }],
       ["planner.lead", "planner", "supervisor", {}],
       ["planner.lead.dev", "planner.lead", "developer", { provider: "codex", modeId: "auto" }],
     ],
@@ -185,9 +185,9 @@ test("up accepts the directory in one commit and never touches an agent", async 
       "    team:",
       "      lead:",
       "        role: supervisor",
-      "        agent: { provider: claude/opus }",
+      "        agent: { provider: claude/opus, modeId: auto }",
       "        team:",
-      "          dev: { role: developer, agent: { provider: codex/gpt-6 } }",
+      "          dev: { role: developer, agent: { provider: codex/gpt-6, modeId: auto-review } }",
     ].join("\n"),
   );
   writeRole(swarm.directory, "planner", "planner", "Plan with care.");
@@ -218,7 +218,7 @@ test("up accepts the directory in one commit and never touches an agent", async 
   assert.equal(dev.paseoAgentId, null);
   assert.equal(dev.reportsTo, "planner.lead");
   assert.equal(dev.workspaceId, null);
-  assert.deepEqual(dev.agentConfig, { provider: "codex/gpt-6" });
+  assert.deepEqual(dev.agentConfig, { provider: "codex/gpt-6", modeId: "auto-review" });
   const planner = seat("planner")!;
   assert.equal(planner.paseoAgentId, before.paseoAgentId);
   assert.deepEqual(planner.prompt, before.prompt);
@@ -243,12 +243,12 @@ test("a seat the file drops retires; one it names again comes back with its hist
       "seats:",
       "  planner:",
       "    role: planner",
-      "    agent: { provider: claude/opus }",
+      "    agent: { provider: claude/opus, modeId: auto }",
       "    team:",
       "      lead:",
       "        role: supervisor",
-      "        agent: { provider: claude/opus }",
-      `        team: { ${dev}: { role: developer, agent: { provider: codex/gpt-6 } } }`,
+      "        agent: { provider: claude/opus, modeId: auto }",
+      `        team: { ${dev}: { role: developer, agent: { provider: codex/gpt-6, modeId: auto-review } } }`,
     ].join("\n");
   writeFile(team("dev"));
   await up();
@@ -318,7 +318,7 @@ test("up refuses a role-class change and a directory that cannot run, and change
   const accepted = store.read();
 
   writeFile(
-    "version: 1\nseats:\n  planner: { role: supervisor, agent: { provider: claude/opus } }",
+    "version: 1\nseats:\n  planner: { role: supervisor, agent: { provider: claude/opus, modeId: auto } }",
   );
   const diff = await up(true);
   assert.match(
@@ -333,7 +333,7 @@ test("up refuses a role-class change and a directory that cannot run, and change
       "seats:",
       "  planner:",
       "    role: planner",
-      "    team: { dev: { role: developer, agent: { provider: codex/gpt-6 } } }",
+      "    team: { dev: { role: developer, agent: { provider: codex/gpt-6, modeId: auto-review } } }",
     ].join("\n"),
   );
   await assert.rejects(up(), /a planner's team holds supervisors/);

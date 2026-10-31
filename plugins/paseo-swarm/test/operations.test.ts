@@ -325,6 +325,7 @@ test("seats are placed when their first agent starts: supervisors in worktrees o
         actorName: "planner",
         reportsTo: "planner",
         provider: "codex/gpt-6.1-sol",
+        modeId: "auto-review",
       }),
     )) as AgentRecord;
     const unplacedWorker = (await invoke(
@@ -336,6 +337,7 @@ test("seats are placed when their first agent starts: supervisors in worktrees o
         actorName: "planner.lead",
         reportsTo: "planner.lead",
         provider: "codex/gpt-6.1-sol",
+        modeId: "auto-review",
       }),
     )) as AgentRecord;
     assert.equal(unplaced.workspaceId, null);
@@ -373,6 +375,7 @@ test("seats are placed when their first agent starts: supervisors in worktrees o
         actorName: "planner",
         reportsTo: "planner",
         provider: "codex/gpt-6.1-sol",
+        modeId: "auto-review",
       }),
     )) as AgentRecord;
     worktreeFailure = "not a git repository";

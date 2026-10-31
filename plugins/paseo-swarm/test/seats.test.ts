@@ -852,6 +852,7 @@ test("a started seat keeps its stored mode whatever the PWA prefers", async (t) 
   // The PWA prefers codex: auto-review; the seat's own "auto" is a literal mode id.
   const reserved: AgentRecord = {
     ...worker,
+    swarmId: seat(supervisor.id).swarmId,
     paseoAgentId: null,
     occupant: undefined,
     agentConfig: { provider: "codex/gpt-6.1-sol", modeId: "auto" },
