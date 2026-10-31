@@ -9,7 +9,11 @@ import type {
 import { relative } from "node:path";
 import { isAbsolute } from "node:path";
 import { CreationService } from "./creation/index.js";
-import type { CreationSnapshot, AgentCreateRequest } from "@getpaseo/protocol/messages";
+import type {
+  CreationSnapshot,
+  AgentCreateRequest,
+  AgentPermissionRaiseRequest,
+} from "@getpaseo/protocol/messages";
 import type { MessageReceipts } from "./message-receipts/index.js";
 import equal from "fast-deep-equal";
 import { SessionDelivery, type OwnedSubscription } from "./session/owned-subscriptions/index.js";
@@ -2915,6 +2919,8 @@ export class Session {
         return this.handleWorkspaceTitleSetRequest(msg.workspaceId, msg.title, msg.requestId);
       case "workspace.pin.set.request":
         return this.handleWorkspacePinSetRequest(msg.workspaceId, msg.pinned, msg.requestId);
+      case "agent.permission.raise.request":
+        return this.handleAgentPermissionRaiseRequest(msg);
       default:
         return undefined;
     }
@@ -5010,6 +5016,28 @@ export class Session {
   /**
    * Handle agent permission response from user
    */
+  private async handleAgentPermissionRaiseRequest(msg: AgentPermissionRaiseRequest): Promise<void> {
+    const { agentId, requestId } = msg;
+    try {
+      const request = await this.agentManager.raisePermission(agentId, msg.permission);
+      this.emit({
+        type: "agent.permission.raise.response",
+        payload: { requestId, agentId, permissionId: request.id, error: null },
+      });
+    } catch (error) {
+      this.sessionLogger.error({ err: error, agentId, requestId }, "Failed to raise permission");
+      this.emit({
+        type: "agent.permission.raise.response",
+        payload: {
+          requestId,
+          agentId,
+          permissionId: null,
+          error: getErrorMessageOr(error, "Failed to raise permission"),
+        },
+      });
+    }
+  }
+
   private async handleAgentPermissionResponse(
     agentId: string,
     requestId: string,

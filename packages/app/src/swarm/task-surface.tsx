@@ -43,6 +43,7 @@ import {
   useWorkspaceFields,
   useWorkspaceStructure,
 } from "@/stores/session-store-hooks";
+import { NeedsYouInbox } from "./needs-you";
 import { useSwarmRpc } from "./rpc";
 import {
   activityChoice,
@@ -53,10 +54,12 @@ import {
   openSwarmTaskSurfaceState,
   responseProfiles,
   resolveSwarmTaskReference,
+  scopedSwarmInbox,
   scopedSwarmTasks,
   swarmTaskBoardSchema,
   swarmHumanActivityReceiptSchema,
   swarmTaskScopeOptions,
+  swarmInboxCounts,
   swarmTaskColumns,
   unansweredChoices,
   type SwarmActivity,
@@ -229,7 +232,10 @@ function TaskSurface({
       queryKey: ["swarm", "task-board", serverId, projectId],
       queryFn: async () =>
         swarmTaskBoardSchema.parse(
-          await invoke("swarm.board.read", { projectId: projectId ?? undefined }),
+          await invoke("swarm.board.read", {
+            projectId: projectId ?? undefined,
+            includeReserved: true,
+          }),
         ),
       enabled: Boolean(plugin) && Boolean(projectId) && hydrated && online && active,
       dataShape: "value",
@@ -564,6 +570,8 @@ function LoadedTasks({
     () => filterSwarmTasks(tasks, statuses, search),
     [tasks, statuses, search],
   );
+  const inbox = useMemo(() => scopedSwarmInbox(board, tasks), [board, tasks]);
+  const inboxCounts = useMemo(() => swarmInboxCounts(inbox), [inbox]);
   const toggleStatus = useCallback((value: string) => {
     setStatuses((current) => {
       if (!value) return [];
@@ -609,6 +617,15 @@ function LoadedTasks({
           style={navigatorStyle}
           testID="swarm-task-navigator"
         >
+          <NeedsYouInbox
+            items={inbox}
+            board={board}
+            online={online}
+            invoke={invoke}
+            onRefresh={onRefresh}
+            onOpenTask={openTask}
+            onOpenReference={onOpenReference}
+          />
           <View style={filterStyle}>
             <TaskSelect
               label={t("swarm.tasks.scope")}
@@ -629,12 +646,18 @@ function LoadedTasks({
             <TaskStatusFilter statuses={statuses} options={statusOptions} onToggle={toggleStatus} />
           </View>
           <RetainedPanel active={showKanban}>
-            <TaskKanban tasks={filtered} board={board} statuses={statuses} onOpen={openTask} />
+            <TaskKanban
+              tasks={filtered}
+              board={board}
+              statuses={statuses}
+              inboxCounts={inboxCounts}
+              onOpen={openTask}
+            />
           </RetainedPanel>
           <RetainedPanel active={!showKanban}>
             <TaskRows
               tasks={filtered}
-              board={board}
+              inboxCounts={inboxCounts}
               selectedTaskId={selectedTaskId}
               emptyMessage={
                 tasks.length === 0 ? t("swarm.tasks.emptyScope") : t("swarm.tasks.noMatches")
@@ -700,11 +723,13 @@ function TaskKanban({
   tasks,
   board,
   statuses,
+  inboxCounts,
   onOpen,
 }: {
   tasks: readonly SwarmTask[];
   board: SwarmTaskBoard;
   statuses: readonly string[];
+  inboxCounts: ReadonlyMap<string, number>;
   onOpen: (id: string) => void;
 }) {
   const { t } = useTranslation();
@@ -734,11 +759,7 @@ function TaskKanban({
                   <TaskRow
                     task={task}
                     selected={false}
-                    attention={
-                      unansweredChoices(
-                        board.activities.filter((activity) => activity.taskId === task.id),
-                      ).length
-                    }
+                    attention={inboxCounts.get(task.id) ?? 0}
                     onOpen={onOpen}
                   />
                 </SurfaceCard>
@@ -753,13 +774,13 @@ function TaskKanban({
 
 function TaskRows({
   tasks,
-  board,
+  inboxCounts,
   selectedTaskId,
   emptyMessage,
   onOpen,
 }: {
   tasks: readonly SwarmTask[];
-  board: SwarmTaskBoard;
+  inboxCounts: ReadonlyMap<string, number>;
   selectedTaskId: string | null;
   emptyMessage: string;
   onOpen: (id: string) => void;
@@ -774,10 +795,7 @@ function TaskRows({
             key={task.id}
             task={task}
             selected={selectedTaskId === task.id}
-            attention={
-              unansweredChoices(board.activities.filter((activity) => activity.taskId === task.id))
-                .length
-            }
+            attention={inboxCounts.get(task.id) ?? 0}
             onOpen={onOpen}
           />
         ))
@@ -827,10 +845,7 @@ function TaskRow({
         </Text>
       </View>
       {attention > 0 ? (
-        <StatusBadge
-          variant="warning"
-          label={t("swarm.tasks.awaitingReply", { count: attention })}
-        />
+        <StatusBadge variant="warning" label={t("swarm.tasks.needsYou", { count: attention })} />
       ) : null}
     </Pressable>
   );
@@ -998,7 +1013,7 @@ function TaskDetail({
   const openAgent = useCallback(
     (name: string) => {
       const agent = findSwarmTaskAgent(board.agents, name);
-      if (!agent) {
+      if (!agent?.paseoAgentId) {
         setActor(name);
         return;
       }
@@ -1035,7 +1050,8 @@ function TaskDetail({
     let savedReceiptId: string | null = null;
     const sent = await model.submit(async (input) => {
       const receipt = swarmHumanActivityReceiptSchema.parse(
-        await invoke("swarm.activity.append_human", input),
+        // Task ids are unique only within a swarm.
+        await invoke("swarm.activity.append_human", { ...input, swarmId: task.swarmId }),
       );
       savedReceiptId = receipt.id;
       return receipt;
@@ -1055,7 +1071,7 @@ function TaskDetail({
       }
       onRefresh();
     }
-  }, [invoke, model, onRefresh, online]);
+  }, [invoke, model, onRefresh, online, task.swarmId]);
   const handleActivityKeyPress = useCallback<
     NonNullable<ComponentProps<typeof FormTextInput>["onKeyPress"]>
   >(

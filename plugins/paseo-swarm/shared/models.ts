@@ -52,6 +52,7 @@ export type PastOccupant = z.infer<typeof pastOccupantSchema>;
 // A reserved seat has no occupant yet; its first mail starts one.
 export const agentRecordSchema = z.object({
   id: z.string(),
+  swarmId: z.string(),
   paseoAgentId: z.string().nullable(),
   name: slugNameSchema,
   qualifiedName: z.string().optional(),
@@ -90,8 +91,10 @@ export function providerFamily(provider: string): string {
   return provider.split("/")[0];
 }
 
+// A Task id is unique within its swarm.
 export const taskSchema = z.object({
   id: slugNameSchema,
+  swarmId: z.string(),
   title: z.string(),
   brief: z.string(),
   status: z.string(),
@@ -106,6 +109,7 @@ export type Task = z.infer<typeof taskSchema>;
 
 export const activitySchema = z.object({
   id: z.string(),
+  swarmId: z.string(),
   taskId: slugNameSchema,
   actorName: z.string(),
   actorKind: z.preprocess((value) => value ?? "agent", z.enum(["agent", "human"])),
@@ -156,17 +160,117 @@ export function mailboxMessageStatus(
   return "queued";
 }
 
+// The PWA files a swarm last accepted, keyed by path within its directory: PWA.md and
+// roles/<role>.md. Prompts are assembled from these, never from the directory, so an edit there
+// reaches no agent until the swarm accepts it.
+export const swarmSourceSchema = z.object({
+  revision: z.string(),
+  files: z.record(z.string(), z.string()),
+});
+export type SwarmSource = z.infer<typeof swarmSourceSchema>;
+
+// A swarm instance: a directory that describes it, attached to one Paseo project. The id is
+// minted here and is the swarm's identity; the directory is where it is found and can move.
+export const swarmRecordSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  directory: z.string(),
+  // Null for a swarm of seats made with no project, before swarms.
+  projectId: z.string().nullable(),
+  source: swarmSourceSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type SwarmRecord = z.infer<typeof swarmRecordSchema>;
+
+// A seat change written to swarm.yaml and the accepted seats together. An add carries the new
+// seat; an agent change carries the seat with its new agentConfig; a retirement carries the seat
+// and the reason its queued mail fails with.
+export const seatChangeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("add"), seat: agentRecordSchema }),
+  z.object({ kind: z.literal("agent"), seat: agentRecordSchema }),
+  z.object({ kind: z.literal("retire"), seat: agentRecordSchema, reason: z.string() }),
+]);
+export type SeatChange = z.infer<typeof seatChangeSchema>;
+
+// A seat change in flight: committed before swarm.yaml is written and cleared with the accepted
+// changes, so a crash between the two is recovered from the file's hash. `conflict` is set when
+// the file matches neither side; the swarm then takes no seat change until the user resolves it.
+export const specIntentSchema = z.object({
+  id: z.string(),
+  swarmId: z.string(),
+  oldHash: z.string(),
+  newHash: z.string(),
+  changes: z.array(seatChangeSchema),
+  conflict: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type SpecIntent = z.infer<typeof specIntentSchema>;
+
+// Remote effects a Swarm member must get human approval for. The gate classifies shell commands
+// into these; a PWA can narrow the set with its `approvals` frontmatter list.
+export const approvalActionSchema = z.enum([
+  "push",
+  "pr_create",
+  "pr_ready",
+  "pr_merge",
+  "mr_create",
+  "mr_merge",
+]);
+export type ApprovalAction = z.infer<typeof approvalActionSchema>;
+
+// pending: waiting on a human. approved: allowed after the command gave up waiting; the next
+// identical command consumes it. consumed: a command ran on it. denied: refused, with feedback.
+export const approvalStatusSchema = z.enum(["pending", "approved", "consumed", "denied"]);
+export type ApprovalStatus = z.infer<typeof approvalStatusSchema>;
+
+export const approvalSchema = z.object({
+  id: z.string(),
+  swarmId: z.string(),
+  // Roster id and Paseo agent of the member whose command is held.
+  agentId: z.string(),
+  paseoAgentId: z.string(),
+  agentName: z.string(),
+  taskId: z.string().nullable(),
+  action: approvalActionSchema,
+  command: z.array(z.string()),
+  cwd: z.string(),
+  // Same agent, action, directory and arguments: a rerun matches the approval it waited on.
+  fingerprint: z.string(),
+  status: approvalStatusSchema,
+  // The permission raised on the agent, so answering either surface clears the other.
+  permissionId: z.string().nullable(),
+  feedback: z.string().nullable(),
+  createdAt: z.string(),
+  resolvedAt: z.string().nullable(),
+});
+export type Approval = z.infer<typeof approvalSchema>;
+
+// version is the board's wire format, which clients read; the store's own format is the version
+// of its snapshot (server/state.ts).
 export const stateSchema = z.object({
   version: z.literal(1),
+  swarms: z.array(swarmRecordSchema).default([]),
   agents: z.array(agentRecordSchema),
   tasks: z.array(taskSchema),
   activities: z.array(activitySchema),
   messages: z.array(mailboxMessageSchema).default([]),
+  intents: z.array(specIntentSchema).default([]),
+  approvals: z.array(approvalSchema).default([]),
 });
 export type SwarmState = z.infer<typeof stateSchema>;
-// What the board shows; the mailbox is read through its own RPC.
-export type SwarmBoard = Omit<SwarmState, "messages">;
+// What the board shows; the mailbox and approvals reach the app through their own views.
+export type SwarmBoard = Pick<SwarmState, "version" | "agents" | "tasks" | "activities">;
 
 export function emptyState(): SwarmState {
-  return { version: 1, agents: [], tasks: [], activities: [], messages: [] };
+  return {
+    version: 1,
+    swarms: [],
+    agents: [],
+    tasks: [],
+    activities: [],
+    messages: [],
+    intents: [],
+    approvals: [],
+  };
 }

@@ -62,7 +62,9 @@ const referenceSchema = z.discriminatedUnion("kind", [
 export type SwarmTaskReference = z.infer<typeof referenceSchema>;
 
 const agentSchema = z.object({
-  paseoAgentId: z.string(),
+  id: z.string(),
+  // Null until the seat's first message starts its agent.
+  paseoAgentId: z.string().nullable(),
   name: z.string(),
   qualifiedName: z.string().optional(),
   aliases: z.array(z.string()).default([]),
@@ -73,6 +75,7 @@ const agentSchema = z.object({
 });
 const taskSchema = z.object({
   id: z.string(),
+  swarmId: z.string().optional(),
   title: z.string(),
   brief: z.string(),
   status: z.string(),
@@ -97,13 +100,57 @@ const activitySchema = z.object({
 export const swarmHumanActivityReceiptSchema = activitySchema.extend({
   notificationWarning: z.string().optional(),
 });
+const inboxOptionSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  description: z.string().optional(),
+});
+const inboxBase = {
+  id: z.string(),
+  swarmId: z.string(),
+  taskId: z.string().nullable(),
+  agentName: z.string().nullable(),
+  paseoAgentId: z.string().nullable(),
+  title: z.string(),
+  createdAt: z.string(),
+};
+// Mirrors the plugin's inbox rows: what waits on a human, most blocking first.
+const inboxItemSchema = z.discriminatedUnion("kind", [
+  z.object({
+    ...inboxBase,
+    kind: z.literal("approval"),
+    approvalId: z.string(),
+    action: z.string(),
+    command: z.string(),
+    cwd: z.string(),
+  }),
+  z.object({
+    ...inboxBase,
+    kind: z.literal("permission"),
+    permissionId: z.string(),
+    detail: z.string().nullable(),
+  }),
+  z.object({
+    ...inboxBase,
+    kind: z.literal("choice"),
+    activityId: z.string(),
+    prompt: z.string(),
+    options: z.array(inboxOptionSchema),
+    responseProfiles: z.array(responseProfileSchema).optional(),
+    defaultOptionId: z.string().nullable(),
+    deadline: z.string().nullable(),
+  }),
+  z.object({ ...inboxBase, kind: z.literal("error"), detail: z.string().nullable() }),
+]);
 export const swarmTaskBoardSchema = z.object({
   version: z.literal(1),
   statuses: z.array(z.string()).optional(),
   agents: z.array(agentSchema),
   tasks: z.array(taskSchema),
   activities: z.array(activitySchema),
+  inbox: z.array(inboxItemSchema).optional(),
 });
+export type SwarmInboxItem = z.infer<typeof inboxItemSchema>;
 export type SwarmTaskBoard = z.infer<typeof swarmTaskBoardSchema>;
 export type SwarmTask = SwarmTaskBoard["tasks"][number];
 export type SwarmActivity = SwarmTaskBoard["activities"][number];
@@ -115,10 +162,12 @@ export function defaultSwarmTaskScope(
   activeAgentId?: string,
 ) {
   const visited = new Set<string>();
-  let active = board.agents.find((agent) => agent.paseoAgentId === activeAgentId);
+  let active = activeAgentId
+    ? board.agents.find((agent) => agent.paseoAgentId === activeAgentId)
+    : undefined;
   if (active?.workspaceId && active.workspaceId !== workspaceId) active = undefined;
-  while (active && !visited.has(active.paseoAgentId)) {
-    visited.add(active.paseoAgentId);
+  while (active && !visited.has(active.id)) {
+    visited.add(active.id);
     if (!active.retired && active.roleClass !== "worker")
       return active.qualifiedName ?? active.name;
     active = active.reportsTo ? findSwarmTaskAgent(board.agents, active.reportsTo) : undefined;
@@ -170,7 +219,8 @@ export function resolveSwarmTaskReference(
   const kind = match[1].toLowerCase();
   if (kind === "agent" && segments.length === 1) {
     const agent = findSwarmTaskAgent(board.agents, segments[0]);
-    if (!agent) return null;
+    // A seat whose first message has not started its agent has nothing to open yet.
+    if (!agent?.paseoAgentId) return null;
     return {
       kind: "agent",
       paseoAgentId: agent.paseoAgentId,
@@ -211,6 +261,8 @@ const choiceSchema = z.object({
     .array(z.object({ id: z.string(), label: z.string(), description: z.string().optional() }))
     .min(1),
   responseProfiles: z.array(responseProfileSchema).min(1).optional(),
+  defaultOptionId: z.string().optional(),
+  deadline: z.string().optional(),
 });
 export function activityChoice(activity: SwarmActivity) {
   const result = choiceSchema.safeParse(activity.data.action);
@@ -237,8 +289,8 @@ function agentScope(
   const agentIds = new Set<string>();
   let workspaceId: string | null = null;
   let agent = findSwarmTaskAgent(agents, reference);
-  while (agent && !agentIds.has(agent.paseoAgentId)) {
-    agentIds.add(agent.paseoAgentId);
+  while (agent && !agentIds.has(agent.id)) {
+    agentIds.add(agent.id);
     if (!workspaceId && agent.workspaceId && knownWorkspaces.has(agent.workspaceId))
       workspaceId = agent.workspaceId;
     agent = agent.reportsTo ? findSwarmTaskAgent(agents, agent.reportsTo) : undefined;
@@ -296,11 +348,10 @@ export function scopedSwarmTasks(
         rootAgents.every(
           (root) =>
             root &&
-            (ownership.agentIds.has(root.paseoAgentId) ||
+            (ownership.agentIds.has(root.id) ||
               (root.roleClass === "worker" &&
                 task.workerNames.some(
-                  (name) =>
-                    findSwarmTaskAgent(board.agents, name)?.paseoAgentId === root.paseoAgentId,
+                  (name) => findSwarmTaskAgent(board.agents, name)?.id === root.id,
                 ))),
         )
       );
@@ -311,10 +362,32 @@ export function scopedSwarmTasks(
     );
 }
 
+// Inbox rows for the Tasks in scope, plus Task-less rows from agents those Tasks name.
+export function scopedSwarmInbox(board: SwarmTaskBoard, tasks: readonly SwarmTask[]) {
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const names = new Set(tasks.flatMap((task) => [task.managerName, ...task.workerNames]));
+  return (board.inbox ?? []).filter((item) =>
+    item.taskId ? taskIds.has(item.taskId) : item.agentName !== null && names.has(item.agentName),
+  );
+}
+
+export function swarmInboxCounts(inbox: readonly SwarmInboxItem[]) {
+  const counts = new Map<string, number>();
+  for (const item of inbox) {
+    if (item.taskId) counts.set(item.taskId, (counts.get(item.taskId) ?? 0) + 1);
+  }
+  return counts;
+}
+
 export function unansweredChoices(activities: readonly SwarmActivity[]) {
+  // A human reply answers a choice; so does the default Swarm records at its deadline.
   const answered = new Set(
     activities
-      .filter((activity) => activity.actorKind === "human" && activity.replyTo)
+      .filter(
+        (activity) =>
+          activity.replyTo &&
+          (activity.actorKind === "human" || activity.kind === "default-decision"),
+      )
       .map((activity) => activity.replyTo),
   );
   return activities.filter((activity) => activityChoice(activity) && !answered.has(activity.id));

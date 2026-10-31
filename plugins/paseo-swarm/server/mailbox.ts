@@ -229,7 +229,8 @@ function queuedFor(recipientAgentId: string): MailboxMessage[] {
 // Mail is what wakes a seat, so this is where a seat's agent is brought in line with the seat:
 // started, changed in place, swapped for an earlier or a new agent, never woken while it does not
 // fit, and given the current standing prompt if its own is older. A running agent finishes its
-// turn before it is changed. Returns the queue to deliver, or null to hold it. Replacement puts
+// turn before it is changed; a prompt refresh is steered into it. Returns the queue to deliver, or
+// null to hold it. Replacement puts
 // the rows the old agent never finished back in the queue, ahead of the rest.
 async function syncSeat(
   queue: MailboxMessage[],
@@ -238,10 +239,6 @@ async function syncSeat(
   const [head] = queue;
   const seat = store.read().agents.find((agent) => agent.id === head.recipientAgentId);
   if (!seat || seat.retired) return queue;
-  if (planSeat(seat).kind === "keep") {
-    await refreshStalePrompt(seat, context);
-    return queue;
-  }
   // The mail stays queued without spending send attempts, so a provider that is down for a
   // while does not fail the message; every later flush tries again.
   const hold = async (problem: string, error: unknown) => {
@@ -251,19 +248,26 @@ async function syncSeat(
     }));
     return null;
   };
-  try {
-    // Paseo's own status, not runningAgents: a turn end Swarm missed must not hold the seat forever.
-    if (await occupantRunning(seat, context)) return null;
-  } catch (error) {
-    return hold("Could not check the agent in", error);
-  }
-  try {
-    await reconcileSeat(seat, context);
-  } catch (error) {
-    return hold("Could not update the agent in", error);
+  if (planSeat(seat).kind !== "keep") {
+    try {
+      // Paseo's own status, not runningAgents: a turn end Swarm missed must not hold the seat
+      // forever.
+      if (await occupantRunning(seat, context)) return null;
+    } catch (error) {
+      return hold("Could not check the agent in", error);
+    }
+    try {
+      await reconcileSeat(seat, context);
+    } catch (error) {
+      return hold("Could not update the agent in", error);
+    }
   }
   const synced = store.read().agents.find((agent) => agent.id === seat.id);
-  if (synced) await refreshStalePrompt(synced, context);
+  try {
+    if (synced) await refreshStalePrompt(synced, context);
+  } catch (error) {
+    return hold("Could not refresh the standing prompt of", error);
+  }
   return queuedFor(seat.id);
 }
 

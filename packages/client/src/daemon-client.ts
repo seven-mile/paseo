@@ -8,7 +8,7 @@ import {
   type TimelineSubscription,
 } from "./connection/index.js";
 import { CreationClient } from "./creation/index.js";
-import type { CreationSnapshot } from "@getpaseo/protocol/messages";
+import type { AgentPermissionRaiseRequest, CreationSnapshot } from "@getpaseo/protocol/messages";
 import type { z } from "zod";
 import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
 import type { ClientCapability } from "@getpaseo/protocol/client-capabilities";
@@ -5400,6 +5400,22 @@ export class DaemonClient {
       requestId,
       response,
     });
+  }
+
+  async raiseAgentPermission(
+    agentId: string,
+    permission: AgentPermissionRaiseRequest["permission"],
+    requestId?: string,
+  ): Promise<{ permissionId: string }> {
+    const payload = await this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "agent.permission.raise.request", agentId, permission },
+      responseType: "agent.permission.raise.response",
+    });
+    if (!payload.permissionId) {
+      throw new Error(payload.error ?? "raiseAgentPermission rejected");
+    }
+    return { permissionId: payload.permissionId };
   }
 
   async getPluginCatalog() {
