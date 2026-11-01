@@ -52,6 +52,38 @@ function seatLabels(seat: AgentRecord): Record<string, string> {
   };
 }
 
+// Gives TAB_CLOSE_LABEL to the agents Swarm started before it declared it: every current and past
+// occupant it records, retired seats included. One listing finds the ones without it; the update
+// leaves an archived agent archived. Agents Swarm does not record are left alone.
+export async function declareTabClose(context: SeatContext): Promise<number> {
+  const occupants = new Set<string>();
+  for (const seat of store.read().agents) {
+    if (seat.paseoAgentId) occupants.add(seat.paseoAgentId);
+    for (const past of seat.pastOccupants ?? []) occupants.add(past.paseoAgentId);
+  }
+  if (occupants.size === 0) return 0;
+  const undeclared: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await context.paseo.agents.list({
+      filter: { includeArchived: true },
+      page: { limit: 200, ...(cursor ? { cursor } : {}) },
+    });
+    for (const { agent } of page.entries) {
+      if (occupants.has(agent.id) && agent.labels?.[TAB_CLOSE_LABEL] !== "layout-only") {
+        undeclared.push(agent.id);
+      }
+    }
+    cursor = page.pageInfo.nextCursor ?? undefined;
+  } while (cursor);
+  for (const agentId of undeclared) {
+    await context.paseo.agents
+      .ref(agentId)
+      .update({ labels: { [TAB_CLOSE_LABEL]: "layout-only" } });
+  }
+  return undeclared.length;
+}
+
 const now = () => new Date().toISOString();
 
 function assertRoleClass(

@@ -97,6 +97,7 @@ Creation options include `config`, `cwd`, `parent`, `title`, `prompt`, `env`, `o
 | `waitForFinish(timeoutMs?)`    | `PaseoAgentRunResult`             | Waits for the active turn, including an initial prompt. Default timeout: 10 minutes.                    |
 | `commands(options?)`           | `PaseoAgentCommandsResult`        | Asks the live session for its slash commands and skills, including built-in ones. Options: `requestId`. |
 | `subscribe(handler)`           | Unsubscribe function              | Filters agent-directory updates to this ID and refreshes the handle properties.                         |
+| `update(updates)`              | `Promise<void>`                   | Sets `title` and merges `labels` into the agent's labels. An archived agent stays archived.             |
 | `archive()`                    | `{ archivedAt }`                  | Soft-deletes the agent and closes its runtime.                                                          |
 | `detach()`                     | `Promise<void>`                   | Removes the parent relationship without stopping the agent.                                             |
 
