@@ -380,9 +380,19 @@ export interface PaseoAgentHandle {
    * fields are left alone. Gated on `server_info.features.agentConfigApply`.
    */
   applyConfig(config: AgentConfigApply): Promise<void>;
+  /**
+   * Renames the agent and/or merges labels into its labels. Works on archived agents and leaves
+   * them archived.
+   */
+  update(updates: PaseoAgentUpdateOptions): Promise<void>;
   archive(): Promise<{ archivedAt: string }>;
   detach(): Promise<void>;
   subscribe(handler: (update: PaseoAgentUpdate) => void): () => void;
+}
+
+export interface PaseoAgentUpdateOptions {
+  title?: string;
+  labels?: Record<string, string>;
 }
 
 export interface PaseoAgentActions {
@@ -974,6 +984,12 @@ function createAgentHandleFactory(
       commands: (options) => daemonClient.listCommands({ agentId: id, ...options }),
       applyConfig: async (config) => {
         await daemonClient.applyAgentConfig(id, config);
+      },
+      update: async ({ title, labels }) => {
+        await daemonClient.updateAgent(id, {
+          ...(title !== undefined ? { name: title } : {}),
+          ...(labels ? { labels } : {}),
+        });
       },
       archive: async () => {
         const result = await daemonClient.archiveAgent(id);

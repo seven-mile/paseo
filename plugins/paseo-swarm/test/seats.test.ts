@@ -11,8 +11,9 @@ import type {
 import contribute from "../index.server";
 import { flushMailbox, forgetRunningTurns, MAX_DELIVERY_ATTEMPTS } from "../server/mailbox";
 import { registerOperations } from "../server/operations";
-import { assemblePrompt, seatOfAgent } from "../server/seats";
+import { declareTabClose, seatOfAgent } from "../server/seats";
 import { store } from "../server/state";
+import { seed as seedRecords, type Seeded } from "./fixtures";
 import { mailboxMessageStatus, type AgentRecord } from "../shared/models";
 import { bootConfig, planSeat, settingsLostOnProviderChange } from "../server/seat-policy";
 import {
@@ -68,13 +69,19 @@ interface Runtime {
   cwd: string;
   parent?: string;
   archived?: boolean;
+  labels?: Record<string, string>;
 }
 
 function fakePaseo() {
   const runtime = new Map<string, Runtime>();
   const calls: string[] = [];
+  const updates: string[] = [];
   const sends: Array<{ agentId: string; text: string }> = [];
-  const creations: Array<{ workspaceId: string; config: Record<string, unknown> }> = [];
+  const creations: Array<{
+    workspaceId: string;
+    config: Record<string, unknown>;
+    labels?: Record<string, string>;
+  }> = [];
   const timeline: Array<{ seq: number; item: Record<string, unknown> }> = [];
   const applied: Array<{ agentId: string; config: Record<string, unknown> }> = [];
   const failSend = new Set<string>();
@@ -90,15 +97,20 @@ function fakePaseo() {
     paseo: {
       agents: {
         // One agent per page, so every caller has to follow the cursor.
-        async list(input: { page?: { cursor?: string } }) {
-          const live = [...runtime].filter(([, agent]) => !agent.archived);
+        async list(input: { filter?: { includeArchived?: boolean }; page?: { cursor?: string } }) {
+          const live = [...runtime].filter(
+            ([, agent]) => input.filter?.includeArchived === true || !agent.archived,
+          );
           const index = Number(input.page?.cursor ?? 0);
           return {
             entries: live.slice(index, index + 1).map(([id, agent]) => ({
               agent: {
                 id,
                 workspaceId: "workspace",
-                labels: agent.parent ? { "paseo.parent-agent-id": agent.parent } : {},
+                labels: {
+                  ...agent.labels,
+                  ...(agent.parent ? { "paseo.parent-agent-id": agent.parent } : {}),
+                },
               },
             })),
             pageInfo: { nextCursor: index + 1 < live.length ? String(index + 1) : null },
@@ -123,6 +135,11 @@ function fakePaseo() {
               const agent = runtime.get(agentId)!;
               if (typeof config.modeId === "string") agent.currentModeId = config.modeId;
               if (typeof config.modelId === "string") agent.model = config.modelId;
+            },
+            async update({ labels }: { labels?: Record<string, string> }) {
+              updates.push(agentId);
+              const agent = runtime.get(agentId)!;
+              agent.labels = { ...agent.labels, ...labels };
             },
             async detach() {
               calls.push(`detach ${agentId}`);
@@ -150,13 +167,18 @@ function fakePaseo() {
         ref(workspaceId: string) {
           return {
             agents: {
-              async create(creation: { agentId: string; config: Record<string, unknown> }) {
+              async create(creation: {
+                agentId: string;
+                config: Record<string, unknown>;
+                labels?: Record<string, string>;
+              }) {
                 if (failCreate) throw new Error(failCreate);
                 const id = creation.agentId;
                 createdIds.push(id);
                 openedIn.push([id, seatOfAgent(id)?.name]);
-                creations.push({ workspaceId, config: creation.config });
+                creations.push({ workspaceId, config: creation.config, labels: creation.labels });
                 runtime.set(id, {
+                  labels: creation.labels,
                   status: "idle",
                   provider: "fast",
                   model: null,
@@ -176,6 +198,7 @@ function fakePaseo() {
     context,
     runtime,
     calls,
+    updates,
     sends,
     creations,
     timeline,
@@ -246,15 +269,8 @@ function setup(t: { after(fn: () => void): void }) {
   return { call, turn };
 }
 
-// Seeded seats carry the current standing prompt, so delivery has no refresh to send them.
-async function seed(fake: ReturnType<typeof fakePaseo>, agents: AgentRecord[]) {
-  await store.commit(() =>
-    agents.map((record) => ({
-      op: "put",
-      collection: "agents",
-      record: { ...record, prompt: assemblePrompt(record, record.projectId).received },
-    })),
-  );
+async function seed(fake: ReturnType<typeof fakePaseo>, agents: Seeded["agents"] & {}) {
+  await seedRecords({ agents });
   for (const agent of agents) {
     fake.runtime.set(agent.paseoAgentId!, {
       status: "idle",
@@ -453,6 +469,8 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   const replaced = seat(supervisor.id);
   assert.equal(replaced.paseoAgentId, fake.created(1));
   assert.equal(planSeat(replaced).kind, "keep");
+  // Swarm declares its agents' tab close layout-only, so closing a tab never archives them.
+  assert.equal(fake.creations.at(-1)?.labels?.["paseo.tab-close"], "layout-only");
   // Nothing of the old provider carries over, including the thinking option the old agent ran.
   assert.deepEqual(replaced.occupant?.config, { provider: "fast/small", modeId: "build" });
   assert.equal(replaced.occupant?.number, 2);
@@ -478,6 +496,39 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   // The worker's turn ends reach the seat's new agent.
   await turn("agent.turn_ended", worker.paseoAgentId, fake.context);
   assert.equal(fake.sends.at(-1)?.agentId, fake.created(1));
+});
+
+test("agents from before the tab-close declaration get it once, and stay archived", async (t) => {
+  setup(t);
+  const fake = fakePaseo();
+  const past = {
+    number: 1,
+    config: { provider: "slow/large" },
+    generation: 0,
+    boundAt: timestamp,
+    paseoAgentId: "first-lead",
+    retiredAt: timestamp,
+    reason: "reset",
+  };
+  await seed(fake, [
+    { ...supervisor, occupant: { ...supervisor.occupant!, number: 2 }, pastOccupants: [past] },
+    { ...worker, retired: true },
+  ]);
+  fake.runtime.set("first-lead", {
+    ...fake.runtime.get(supervisor.paseoAgentId!)!,
+    archived: true,
+  });
+  fake.runtime.set("someone-else", { ...fake.runtime.get(supervisor.paseoAgentId!)! });
+  fake.runtime.get(worker.paseoAgentId!)!.labels = { "paseo.tab-close": "layout-only" };
+
+  assert.equal(await declareTabClose(fake.context), 2);
+  assert.deepEqual(fake.updates.sort(), ["first-lead", supervisor.paseoAgentId].sort());
+  for (const agentId of ["first-lead", supervisor.paseoAgentId!, worker.paseoAgentId!]) {
+    assert.equal(fake.runtime.get(agentId)?.labels?.["paseo.tab-close"], "layout-only", agentId);
+  }
+  assert.equal(fake.runtime.get("first-lead")?.archived, true, "a past occupant stays archived");
+  assert.equal(fake.runtime.get("someone-else")?.labels, undefined, "not Swarm's agent");
+  assert.equal(await declareTabClose(fake.context), 0, "nothing left to declare");
 });
 
 test("an in-place change keeps the agent and its context", async (t) => {
@@ -809,6 +860,7 @@ test("a reserved seat starts its agent on its first message, held while the star
   await seed(fake, [supervisor]);
   const reserved: AgentRecord = {
     ...worker,
+    swarmId: seat(supervisor.id).swarmId,
     paseoAgentId: null,
     occupant: undefined,
     agentConfig: { provider: "fast/small", modeId: "build" },
@@ -855,6 +907,7 @@ test("a seat with no agent yet takes the edits it could still start from", async
   await seed(fake, [supervisor]);
   const reserved: AgentRecord = {
     ...worker,
+    swarmId: seat(supervisor.id).swarmId,
     paseoAgentId: null,
     occupant: undefined,
     agentConfig: { provider: "fast/small" },

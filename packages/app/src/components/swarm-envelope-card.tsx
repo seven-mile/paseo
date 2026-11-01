@@ -34,7 +34,14 @@ export const swarmEnvelopeTitleKeys = {
   settings: "message.envelope.titles.settings",
   team: "message.envelope.titles.team",
   runtime: "message.envelope.titles.runtime",
+  refresh: "message.envelope.titles.refresh",
+  return: "message.envelope.titles.return",
 } as const;
+
+// A prompt refresh is addressed to the agent and long; its title says what happened.
+export function swarmEnvelopeStartsExpanded(kind: SwarmEnvelope["kind"]): boolean {
+  return kind !== "refresh";
+}
 
 export function SwarmEnvelopeBody({ envelope }: Pick<SwarmEnvelopeCardProps, "envelope">) {
   const canonicalLinkPress = useSwarmCanonicalLinkPress();

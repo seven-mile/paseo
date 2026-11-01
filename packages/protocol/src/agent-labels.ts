@@ -1,4 +1,8 @@
 export const PARENT_AGENT_ID_LABEL = "paseo.parent-agent-id";
+// Declared by whatever manages an agent's lifecycle, such as a plugin, so clients close its tab
+// without archiving it. Clients read only the label; Stop and Archive stay explicit actions.
+export const TAB_CLOSE_LABEL = "paseo.tab-close";
+export const TAB_CLOSE_LAYOUT_ONLY = "layout-only";
 const OPEN_AGENT_TAB_LABEL_PREFIX = "paseo.open-agent-tab.";
 
 export function getOpenAgentTabLabel(clientId: string): string {
@@ -18,6 +22,10 @@ export function getParentAgentIdFromLabels(labels: Record<string, unknown> | nul
   return typeof parentAgentId === "string" && parentAgentId.trim().length > 0
     ? parentAgentId.trim()
     : null;
+}
+
+export function closesTabLayoutOnly(labels: Record<string, unknown> | null | undefined): boolean {
+  return labels?.[TAB_CLOSE_LABEL] === TAB_CLOSE_LAYOUT_ONLY;
 }
 
 export function isDelegatedAgent(agent: AgentLabelSource): boolean {

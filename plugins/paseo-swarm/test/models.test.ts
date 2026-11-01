@@ -9,6 +9,7 @@ test("state parsing drops legacy executions, preserves old Activities, and start
     tasks: [
       {
         id: "survey-auth",
+        swarmId: "swarm",
         title: "Survey",
         brief: "Collect evidence",
         status: "survey",
@@ -36,6 +37,7 @@ test("state parsing drops legacy executions, preserves old Activities, and start
     activities: [
       {
         id: "activity-1",
+        swarmId: "swarm",
         taskId: "survey-auth",
         executionId: "legacy-run",
         actorName: "lead",

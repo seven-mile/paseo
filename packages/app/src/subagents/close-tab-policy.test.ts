@@ -14,6 +14,18 @@ describe("resolveCloseAgentTabPolicy", () => {
     });
   });
 
+  it("keeps tab close layout-only for a root agent whose manager declares it", () => {
+    expect(
+      resolveCloseAgentTabPolicy({
+        parentAgentId: null,
+        labels: { "paseo.tab-close": "layout-only" },
+      }),
+    ).toEqual({ kind: "layout-only" });
+    expect(
+      resolveCloseAgentTabPolicy({ parentAgentId: null, labels: { "paseo.tab-close": "archive" } }),
+    ).toEqual({ kind: "archive-on-close" });
+  });
+
   it("preserves the existing archive fallback when the agent is missing", () => {
     expect(resolveCloseAgentTabPolicy(null)).toEqual({ kind: "archive-on-close" });
     expect(resolveCloseAgentTabPolicy(undefined)).toEqual({ kind: "archive-on-close" });

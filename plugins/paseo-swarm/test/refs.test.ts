@@ -6,9 +6,11 @@ import { type SwarmState } from "../shared/models";
 
 const state: SwarmState = {
   version: 1,
+  swarms: [],
   agents: [
     {
       id: "agent-1",
+      swarmId: "swarm-a",
       paseoAgentId: "paseo-supervisor",
       name: "supervisor",
       qualifiedName: "supervisor",
@@ -23,6 +25,7 @@ const state: SwarmState = {
     },
     {
       id: "agent-2",
+      swarmId: "swarm-a",
       paseoAgentId: "paseo-worker",
       name: "verifier",
       qualifiedName: "supervisor.verifier",
@@ -39,6 +42,7 @@ const state: SwarmState = {
   tasks: [
     {
       id: "review-api",
+      swarmId: "swarm-a",
       title: "Review API",
       brief: "Review the API.",
       status: "review",
@@ -51,6 +55,7 @@ const state: SwarmState = {
     },
   ],
   activities: [],
+  messages: [],
 };
 
 test("custom Markdown links split into text and ref parts", () => {
@@ -79,6 +84,7 @@ test("activity refs resolve names to navigable Paseo identities", () => {
   const refs = resolveActivityRefs(
     "See [verifier](paseo-swarm://agent/supervisor.verifier), [Task](paseo-swarm://task/review-api), and [findings](paseo-swarm://file/workspace-2/reports/findings.md).",
     state,
+    "swarm-a",
   );
   assert.deepEqual(refs, [
     {
@@ -107,11 +113,22 @@ test("activity refs resolve names to navigable Paseo identities", () => {
 
 test("unknown refs are rejected instead of becoming dead links", () => {
   assert.throws(
-    () => resolveActivityRefs("[nobody](paseo-swarm://agent/missing)", state),
+    () => resolveActivityRefs("[nobody](paseo-swarm://agent/missing)", state, "swarm-a"),
     /Unknown agent reference: missing/,
   );
   assert.throws(
-    () => resolveActivityRefs("[escape](paseo-swarm://file/workspace-2/..%2Fsecret)", state),
+    () =>
+      resolveActivityRefs("[escape](paseo-swarm://file/workspace-2/..%2Fsecret)", state, "swarm-a"),
     /Invalid paseo-swarm reference/,
   );
+});
+
+test("activity refs resolve only within the Activity's swarm", () => {
+  for (const body of [
+    "[verifier](paseo-swarm://agent/supervisor.verifier)",
+    "[Task](paseo-swarm://task/review-api)",
+    "[findings](paseo-swarm://file/workspace-2/reports/findings.md)",
+  ]) {
+    assert.throws(() => resolveActivityRefs(body, state, "swarm-b"), /Unknown/);
+  }
 });

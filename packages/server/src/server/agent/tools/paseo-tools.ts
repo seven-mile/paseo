@@ -645,7 +645,9 @@ export async function createPaseoToolCatalog(
   };
   const invokePlugin = options.invokePlugin;
   if (invokePlugin) {
-    const readSeats = async (filter: { paseoAgentId?: string } = {}) =>
+    const readSeats = async (
+      filter: { paseoAgentId?: string; swarmId?: string; includeRetired?: boolean } = {},
+    ) =>
       ((await invokePlugin("paseo-swarm", "swarm.seat.list", filter)) as { seats: SwarmSeat[] })
         .seats;
     // The plugin decides which seat an agent sits in, including an agent it is still starting or
@@ -654,6 +656,10 @@ export async function createPaseoToolCatalog(
       callerAgentId ? (await readSeats({ paseoAgentId: callerAgentId })).at(0) : undefined;
     seatAccess = await resolveSeatAccess({
       seatOfCaller,
+      formerSeatOfCaller: async () =>
+        callerAgentId
+          ? (await readSeats({ paseoAgentId: callerAgentId, includeRetired: true })).at(0)
+          : undefined,
       callerLabels: async () =>
         callerAgentId ? (await agentStorage.get(callerAgentId))?.labels : undefined,
       onLookupError: (error, access) =>
@@ -667,17 +673,22 @@ export async function createPaseoToolCatalog(
       // An agent outside any seat must not receive Swarm tools, even if it can
       // reach the native catalog.
     } else {
-      // The caller's seat, every seat, and the seat's name, read fresh for each call.
+      // The caller's seat, every seat of its swarm, and the seat's name, read fresh for each call.
+      // scope names the swarm in every request, since seat names are unique only within one.
       const readSwarm = async () => {
-        const [seats, actor] = await Promise.all([readSeats(), seatOfCaller()]);
+        const actor = await seatOfCaller();
         if (!actor) throw new Error(`This agent no longer occupies a Swarm seat: ${callerAgentId}`);
-        return { seats, actor, name: seatName(actor) };
+        const scope = actor.swarmId ? { swarmId: actor.swarmId } : {};
+        return { seats: await readSeats(scope), actor, name: seatName(actor), scope };
       };
-      const readBoard = async () =>
-        (await invokePlugin("paseo-swarm", "swarm.board.read", {})) as SwarmBoard;
+      const readBoard = async () => {
+        const { name, scope } = await readSwarm();
+        const board = (await invokePlugin("paseo-swarm", "swarm.board.read", scope)) as SwarmBoard;
+        return { name, board };
+      };
       const invokeSwarm = async (method: string, input: Record<string, unknown>) => {
-        const { name } = await readSwarm();
-        return invokePlugin("paseo-swarm", method, { ...input, actorName: name });
+        const { name, scope } = await readSwarm();
+        return invokePlugin("paseo-swarm", method, { ...input, ...scope, actorName: name });
       };
       const swarmResult = (value: unknown): PaseoToolResult => ({
         content: [{ type: "text", text: JSON.stringify(value) }],
@@ -744,7 +755,7 @@ export async function createPaseoToolCatalog(
           inputSchema: { ...pageInput, status: z.string().optional() },
         },
         async (input) => {
-          const [{ name }, board] = await Promise.all([readSwarm(), readBoard()]);
+          const { name, board } = await readBoard();
           return swarmResult(
             pageSwarmItems(
               visibleTasks(board, name, input.status),
@@ -763,7 +774,7 @@ export async function createPaseoToolCatalog(
           inputSchema: { taskId: z.string() },
         },
         async (input) => {
-          const board = await readBoard();
+          const { board } = await readBoard();
           const task = board.tasks?.find((candidate) => candidate.id === input.taskId);
           if (!task) throw new Error(`Unknown Task: ${input.taskId}`);
           const activityCount = (board.activities ?? []).filter(
@@ -780,7 +791,7 @@ export async function createPaseoToolCatalog(
           inputSchema: { ...pageInput, taskId: z.string() },
         },
         async (input) => {
-          const board = await readBoard();
+          const { board } = await readBoard();
           if (!board.tasks?.some((task) => task.id === input.taskId)) {
             throw new Error(`Unknown Task: ${input.taskId}`);
           }
@@ -802,7 +813,7 @@ export async function createPaseoToolCatalog(
           inputSchema: { activityId: z.string() },
         },
         async (input) => {
-          const board = await readBoard();
+          const { board } = await readBoard();
           const activity = board.activities?.find((candidate) => candidate.id === input.activityId);
           if (!activity) throw new Error(`Unknown Activity: ${input.activityId}`);
           return swarmResult(activity);
@@ -820,9 +831,10 @@ export async function createPaseoToolCatalog(
           },
         },
         async (input) => {
-          const { seats, actor, name } = await readSwarm();
+          const { seats, actor, name, scope } = await readSwarm();
           const seat = input.seat ? seatName(resolveSeat(seats, input.seat, actor)) : name;
           const history = (await invokePlugin("paseo-swarm", "swarm.seat.history.read", {
+            ...scope,
             seat,
             actorName: name,
             limit: input.limit,
@@ -855,9 +867,10 @@ export async function createPaseoToolCatalog(
           },
         },
         async (input) => {
-          const { seats, actor, name } = await readSwarm();
+          const { seats, actor, name, scope } = await readSwarm();
           return swarmResult(
             await invokePlugin("paseo-swarm", "swarm.message.send", {
+              ...scope,
               recipientName: seatName(resolveSeat(seats, input.to, actor)),
               senderName: name,
               actorName: name,
@@ -902,13 +915,14 @@ export async function createPaseoToolCatalog(
             inputSchema: pageInput,
           },
           async (input) => {
-            const { actor } = await readSwarm();
+            const { actor, scope } = await readSwarm();
             const projectId =
               actor.projectId ??
               (actor.workspaceId
                 ? (await options.workspaceRegistry?.get(actor.workspaceId))?.projectId
                 : undefined);
             const roles = (await invokePlugin("paseo-swarm", "swarm.pwa_roles.read", {
+              ...scope,
               roleClass: childRoleClass,
               ...(projectId ? { projectId } : {}),
             })) as Array<{ role: string }>;
@@ -920,7 +934,7 @@ export async function createPaseoToolCatalog(
         registerTool(
           "swarm_seat_create",
           {
-            description: `Create a ${childRoleClass} seat that reports to you, with a role from swarm_role_list. The seat has no agent until its first message, which starts one with the provider and settings given here. provider is provider/model. A planner gives each supervisor a workspace of its own: prepare one and pass its workspaceId. A supervisor's workers share its workspace unless given another, and every agent in that workspace must be the supervisor or one of its reports.`,
+            description: `Create a ${childRoleClass} seat that reports to you, with a role from swarm_role_list. The seat has no agent until its first message, which starts one with the provider and settings given here. provider is provider/model. Swarm places the seat when its first agent starts: a supervisor gets a worktree of its own, and a worker shares its supervisor's workspace. Pass workspaceId only to place the seat in a workspace you made; every agent in it must be you or one of your reports.`,
             inputSchema: {
               name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
               role: z.string().min(1),
@@ -930,9 +944,10 @@ export async function createPaseoToolCatalog(
             },
           },
           async (input) => {
-            const { name } = await readSwarm();
+            const { name, scope } = await readSwarm();
             return swarmResult(
               await invokePlugin("paseo-swarm", "swarm.seat.create", {
+                ...scope,
                 name: input.name,
                 role: input.role,
                 provider: input.provider,
@@ -961,9 +976,10 @@ export async function createPaseoToolCatalog(
             },
           },
           async (input) => {
-            const { name } = await readSwarm();
+            const { name, scope } = await readSwarm();
             return swarmResult(
               await invokePlugin("paseo-swarm", "swarm.task.create", {
+                ...scope,
                 ...input,
                 managerName: name,
                 createdBy: name,

@@ -27,7 +27,7 @@ const runtimeFields = [
 
 export function createSwarmEnvelopeMarkdownParser(kind: SwarmEnvelope["kind"]) {
   const parser = createMarkdownParser({ linkify: false });
-  if (kind === "settings") return parser;
+  if (kind !== "team" && kind !== "runtime") return parser;
   const fields = kind === "team" ? teamFields : runtimeFields;
   parser.core.ruler.after("inline", "swarm_envelope_fields", (state) => {
     let quoteDepth = 0;

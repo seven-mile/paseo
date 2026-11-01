@@ -835,6 +835,7 @@ function createPaseoWorktreeForMcpTest(options: {
 describe("Swarm MCP coordination", () => {
   const seat = (qualifiedName: string, roleClass: string, paseoAgentId: string | null) => ({
     id: `${qualifiedName}-record`,
+    swarmId: "swarm",
     paseoAgentId,
     name: qualifiedName.split(".").at(-1),
     qualifiedName,
@@ -849,14 +850,24 @@ describe("Swarm MCP coordination", () => {
   });
   // The plugin's seat list, which narrows to the caller's seat when asked by Paseo agent id. Null
   // seats stand for a plugin that cannot answer.
-  const seatList = (seats: Array<{ paseoAgentId: string | null }> | null, input: unknown) => {
+  const seatList = (
+    seats: Array<{ paseoAgentId: string | null; retired?: boolean }> | null,
+    input: unknown,
+  ) => {
     if (!seats) throw new Error("Plugin is not available: paseo-swarm");
-    const { paseoAgentId } = input as { paseoAgentId?: string };
-    return { seats: paseoAgentId ? seats.filter((s) => s.paseoAgentId === paseoAgentId) : seats };
+    const { paseoAgentId, includeRetired } = input as {
+      paseoAgentId?: string;
+      includeRetired?: boolean;
+    };
+    return {
+      seats: paseoAgentId
+        ? seats.filter((s) => s.paseoAgentId === paseoAgentId && (includeRetired || !s.retired))
+        : seats,
+    };
   };
   const swarmServer = async (
     callerAgentId: string,
-    seats: Array<{ paseoAgentId: string | null }> | null,
+    seats: Array<{ paseoAgentId: string | null; retired?: boolean }> | null,
     answer: (method: string, input: unknown) => unknown = () => ({}),
     stored: Record<string, { labels: Record<string, string> }> = {},
   ) => {
@@ -1002,6 +1013,7 @@ describe("Swarm MCP coordination", () => {
           nextCursor: null,
         });
         expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.pwa_roles.read", {
+          swarmId: "swarm",
           roleClass: roleClass === "planner" ? "supervisor" : "worker",
           projectId: "parent-project",
         });
@@ -1017,6 +1029,7 @@ describe("Swarm MCP coordination", () => {
           workspaceId: "isolated-worktree",
         });
         expect(invokePlugin).toHaveBeenLastCalledWith("paseo-swarm", "swarm.seat.create", {
+          swarmId: "swarm",
           name: "child",
           role: "researcher",
           provider: "codex/gpt-6.1-sol",
@@ -1053,6 +1066,7 @@ describe("Swarm MCP coordination", () => {
           actorName: "someone-else",
         });
         expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.task.update", {
+          swarmId: "swarm",
           taskId: "review-api",
           workerNames: ["reviewer"],
           actorName: "planner.supervisor",
@@ -1119,6 +1133,20 @@ describe("Swarm MCP coordination", () => {
     }
   });
 
+  it("keeps native agent tools from the agent of a retired seat", async () => {
+    const retired = await swarmServer("retired-agent", [
+      { ...seat("lead", "supervisor", "retired-agent"), retired: true },
+    ]);
+    try {
+      expect(lookupTool(retired.server, "create_agent")).toBeUndefined();
+      expect(lookupTool(retired.server, "create_workspace")).toBeUndefined();
+      expect(lookupTool(retired.server, "create_terminal")).toBeDefined();
+      expect(lookupTool(retired.server, "swarm_seat_read")).toBeUndefined();
+    } finally {
+      await retired.server.close();
+    }
+  });
+
   it("refreshes the caller's own standing prompt as model-visible text", async () => {
     const refreshed = {
       revision: "next",
@@ -1164,6 +1192,7 @@ describe("Swarm MCP coordination", () => {
         { limit: 10, cursor: "newer" },
       );
       expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.seat.history.read", {
+        swarmId: "swarm",
         seat: "planner.supervisor.scout",
         actorName: "planner.supervisor.scout",
         limit: 10,
@@ -1176,6 +1205,32 @@ describe("Swarm MCP coordination", () => {
         total: null,
         nextCursor: "older",
       });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("checks the caller's seat at each call, so a retired seat's agent loses its Swarm tools", async () => {
+    const seats = [seat("lead", "supervisor", "caller")];
+    const { server, invokePlugin } = await swarmServer("caller", seats);
+    try {
+      // The plugin lists no seat for an agent whose seat was retired after its session opened.
+      seats.length = 0;
+      await expect(
+        invokeToolWithParsedInput(registeredTool(server, "swarm_seat_read"), {}),
+      ).rejects.toThrow(/no longer occupies a Swarm seat/);
+      await expect(
+        invokeToolWithParsedInput(registeredTool(server, "swarm_seat_create"), {
+          name: "dev",
+          role: "developer",
+          provider: "codex/gpt-6",
+        }),
+      ).rejects.toThrow(/no longer occupies a Swarm seat/);
+      expect(invokePlugin).not.toHaveBeenCalledWith(
+        "paseo-swarm",
+        "swarm.seat.create",
+        expect.anything(),
+      );
     } finally {
       await server.close();
     }
@@ -1210,7 +1265,12 @@ describe("Swarm MCP coordination", () => {
       ).name;
     try {
       await send("review");
+      // Names resolve among the caller's swarm only.
+      expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.seat.list", {
+        swarmId: "swarm",
+      });
       expect(invokePlugin).toHaveBeenLastCalledWith("paseo-swarm", "swarm.message.send", {
+        swarmId: "swarm",
         recipientName: "alpha.team.review",
         senderName: "alpha.team.scout",
         actorName: "alpha.team.scout",

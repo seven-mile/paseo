@@ -946,6 +946,28 @@ test("agent handles change a live agent's config in one request", async () => {
   await client.close();
 });
 
+test("agent handles rename and merge labels through the existing update RPC", async () => {
+  const { client, ws } = await connectClient();
+  const agent = client.agents.ref("agent_sdk");
+
+  const updatePromise = agent.update({ title: "Reviewer", labels: { team: "docs" } });
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request).toMatchObject({
+    type: "update_agent_request",
+    agentId: "agent_sdk",
+    name: "Reviewer",
+    labels: { team: "docs" },
+  });
+  ws.message(
+    sessionMessage({
+      type: "update_agent_response",
+      payload: { requestId: request.requestId, agentId: "agent_sdk", accepted: true, error: null },
+    }),
+  );
+  await expect(updatePromise).resolves.toBeUndefined();
+  await client.close();
+});
+
 test("agent handles list the session's own commands through the existing daemon RPC", async () => {
   const { client, ws } = await connectClient();
   const agent = client.agents.ref("agent_sdk");

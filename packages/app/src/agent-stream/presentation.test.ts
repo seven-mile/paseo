@@ -13,9 +13,13 @@ import {
 import { transformTimelineItem, type TimelineItemTransform } from "@/plugins/timeline/model";
 import { createStreamPresentation } from "./presentation";
 import { parseSwarmEnvelope } from "@/swarm/system-envelope";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   initialPrompt,
   messagePrompt,
+  refreshedPrompt,
+  returnBrief,
   turnDigest,
   turnDigestRow,
 } from "../../../../plugins/paseo-swarm/server/prompts";
@@ -604,6 +608,8 @@ describe("display-only Swarm message presentation", () => {
     { kind: "settings", tag: "paseo-swarm-system-settings" },
     { kind: "team", tag: "paseo-swarm-team-message" },
     { kind: "runtime", tag: "paseo-swarm-runtime-notification" },
+    { kind: "refresh", tag: "paseo-swarm-prompt-refresh" },
+    { kind: "return", tag: "paseo-swarm-seat-return" },
   ] as const;
 
   it("recognizes an existing literal without deriving identity or metadata", () => {
@@ -835,6 +841,56 @@ describe("display-only Swarm message presentation", () => {
         raw,
       ].join("\n"),
     });
+  });
+
+  it("presents a prompt refresh as what happened, keeping the standing prompt in the original", () => {
+    const refresh = refreshedPrompt({
+      pwa: {
+        project: "Example",
+        role: "developer",
+        roleClass: "worker",
+        projectBody: "Project body",
+        roleBody: "Role body",
+        statuses: [],
+        revision: "r2",
+      },
+      agent: { name: "worker", roleClass: "worker", role: "developer", reportsTo: null },
+      changed: true,
+    });
+    const parsed = parseSwarmEnvelope(refresh);
+    expect(parsed?.kind).toBe("refresh");
+    expect(parsed?.body).toContain("re-assembled your standing Swarm context");
+    expect(parsed?.body).not.toContain("<paseo-swarm-system-settings>");
+    expect(parsed?.body).not.toContain("Role body");
+  });
+
+  it("presents a seat return as written", () => {
+    const brief = returnBrief({ seat: "planner.dev", occupant: 1, covering: 2, reason: "reset" });
+    expect(parseSwarmEnvelope(brief)).toEqual({
+      kind: "return",
+      body: brief.split("\n").slice(1, -1).join("\n"),
+    });
+  });
+
+  // Every envelope tag Swarm writes needs a card here; a new tag fails this until the app parses it.
+  it("parses every envelope tag the Swarm server writes", () => {
+    const server = join(__dirname, "../../../../plugins/paseo-swarm/server");
+    const emitted = new Set<string>();
+    for (const file of readdirSync(server)) {
+      if (!file.endsWith(".ts")) continue;
+      for (const match of readFileSync(join(server, file), "utf8").matchAll(
+        /<(paseo-swarm-[a-z-]+)/g,
+      )) {
+        emitted.add(match[1]);
+      }
+    }
+    expect(emitted.size).toBeGreaterThan(0);
+    for (const tag of emitted) {
+      expect({ tag, parsed: parseSwarmEnvelope(`<${tag}>\nbody\n</${tag}>`) }).toMatchObject({
+        tag,
+        parsed: { body: "body" },
+      });
+    }
   });
 
   it("decodes attribute entities and keeps the sender's words verbatim", () => {

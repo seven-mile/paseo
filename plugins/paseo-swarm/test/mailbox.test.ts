@@ -19,7 +19,10 @@ import {
   SETTLED_MESSAGE_LIMIT,
 } from "../server/mailbox";
 import { registerOperations } from "../server/operations";
+import { pwaFilesRevision } from "../server/pwa";
 import { StateStore, store } from "../server/state";
+import { swarmOf } from "../server/swarms";
+import { seed as seedRecords, type Seeded } from "./fixtures";
 import { mailboxMessageStatus, type AgentRecord } from "../shared/models";
 import { mailboxReadRpc, sendMessageRpc } from "../shared/swarm";
 
@@ -160,8 +163,8 @@ function setup(t: { after(fn: () => void): void }) {
   return { turnStarted, turnEnded, send, sendTo, readMailbox };
 }
 
-async function seed(agents: AgentRecord[]) {
-  await store.commit(() => agents.map((record) => ({ op: "put", collection: "agents", record })));
+async function seed(agents: Seeded["agents"]) {
+  await seedRecords({ agents });
 }
 
 test("an undeliverable message stays queued, survives a restart, and is retried in order", async (t) => {
@@ -236,6 +239,52 @@ test("a completed turn marks delivered mail consumed; a failed turn does not", a
   assert.equal(afterCompletion.messages[0].status, "consumed");
   const runtime = await readMailbox(context, { recipientName: "manager" });
   assert.ok(runtime.messages.every((message) => message.kind === "runtime"));
+});
+
+test("mail waits behind a standing prompt that could not be delivered", async (t) => {
+  const { send } = setup(t);
+  const { sends, failures, context } = fakePaseo();
+  await seed([manager, worker]);
+  const received = () =>
+    store.read().agents.find((agent) => agent.id === worker.id)!.prompt!.revision;
+  const before = received();
+  // An accepted role change gives the worker a new standing prompt.
+  const swarm = swarmOf(store.read().agents.find((agent) => agent.id === worker.id)!);
+  const files = {
+    ...swarm.source.files,
+    "roles/researcher.md": swarm.source.files["roles/researcher.md"] + "\nCite every source.\n",
+  };
+  await store.commit(() => [
+    {
+      op: "put",
+      collection: "swarms",
+      record: { ...swarm, source: { revision: pwaFilesRevision(files), files } },
+    },
+  ]);
+  failures.set(worker.paseoAgentId!, "Agent is offline");
+
+  const held = await send(context, "Survey the API");
+  assert.equal(held.status, "queued");
+  assert.match(held.receipt, /Could not refresh the standing prompt of seat manager\.worker/);
+  assert.deepEqual(
+    sends.map((entry) => entry.messageId.startsWith("prompt-refresh-")),
+    [true],
+  );
+  const stored = store.read().messages.find((message) => message.id === held.messageId)!;
+  assert.equal(stored.attempts, 0);
+  assert.equal(received(), before);
+
+  // The next flush sends the prompt, then the mail, and only then moves the receipt.
+  failures.delete(worker.paseoAgentId!);
+  await flushMailbox(context);
+  assert.deepEqual(
+    sends.map((entry) => entry.messageId === held.messageId),
+    [false, false, true],
+  );
+  assert.match(sends[1].text, /Cite every source/);
+  assert.notEqual(received(), before);
+  const delivered = store.read().messages.find((message) => message.id === held.messageId)!;
+  assert.equal(mailboxMessageStatus(delivered), "delivered");
 });
 
 test("mail follows the roster member when its Paseo agent is replaced", async (t) => {

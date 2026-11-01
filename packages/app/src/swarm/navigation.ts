@@ -282,9 +282,11 @@ export function openSwarmReference(input: {
   if (input.isCompact) usePanelStore.getState().showMobileAgent();
   switch (reference.kind) {
     case "agent":
+      // A seat's occupant stays its agent after Paseo archives it, so its tab must survive pruning.
       navigateToAgent({
         serverId,
         agentId: reference.paseoAgentId,
+        pin: true,
       });
       break;
     case "workspace":

@@ -1,7 +1,6 @@
 import { useTranslation } from "react-i18next";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { ChevronDown, ChevronRight, ListTodo, Plus, Users } from "lucide-react-native";
-import { router } from "expo-router";
+import { ChevronDown, ChevronRight, ListTodo, MessageSquare, Users } from "lucide-react-native";
 import {
   useCallback,
   useMemo,
@@ -28,7 +27,6 @@ import { z } from "zod";
 import { AGENT_LIFECYCLE_STATUSES } from "@getpaseo/protocol/agent-lifecycle";
 import { AgentStatusDot } from "@/components/agent-status-dot";
 import { StatusRing } from "@/components/status-ring";
-import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import { Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { usePluginInstallations } from "@/plugins/registry";
@@ -41,6 +39,9 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { isNative, isWeb } from "@/constants/platform";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { openSwarmTasks } from "./navigation";
+import { SwarmMessageSeatSheet } from "./message-seat-sheet";
+import { plannerRowIdentities, type PlannerRowIdentity } from "./swarm-labels";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useMenuContext } from "@/components/ui/menu/menu-context";
 import {
   DropdownMenu,
@@ -52,8 +53,6 @@ import {
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { getSidebarRowBackdrop } from "@/components/sidebar/sidebar-row-backdrop";
 import { ProjectLeadingVisual } from "@/components/sidebar/project-leading-visual";
-import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
-import { builtinSidebarNavShortcutAction } from "@/sidebar-nav/model";
 import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
 import { useSessionStore, type Agent as SessionAgent } from "@/stores/session-store";
 import { deriveSidebarStateBucket, type SidebarStateBucket } from "@/utils/sidebar-agent-state";
@@ -88,7 +87,10 @@ export const useSwarmSidebar = create<{ mode: Mode; setMode: (mode: Mode) => voi
 const rosterSchema = z.object({
   agents: z.array(
     z.object({
-      paseoAgentId: z.string(),
+      id: z.string(),
+      swarmId: z.string().optional(),
+      // Null until the seat's first message starts its agent.
+      paseoAgentId: z.string().nullable(),
       name: z.string(),
       qualifiedName: z.string().optional(),
       roleClass: z.enum(["planner", "supervisor", "worker"]),
@@ -99,6 +101,10 @@ const rosterSchema = z.object({
       pending: z.object({ kind: z.string(), reason: z.string() }).nullable().optional(),
     }),
   ),
+  // Absent on older hosts.
+  swarms: z
+    .array(z.object({ id: z.string(), name: z.string(), projectId: z.string().nullable() }))
+    .optional(),
 });
 type Agent = z.infer<typeof rosterSchema>["agents"][number];
 type WorkspaceState = Pick<SidebarWorkspaceEntry, "statusBucket" | "workspaceKind">;
@@ -113,14 +119,14 @@ interface SwarmRowDragProps {
 }
 const EMPTY_ORDER: string[] = [];
 const EMPTY_AGENTS: Agent[] = [];
-const agentKeyExtractor = (agent: Agent) => agent.paseoAgentId;
+const agentKeyExtractor = (agent: Agent) => agent.id;
 const modes: Array<{ value: Mode; label: string; testID: string }> = [
   { value: "classical", label: "swarm.sidebar.classical", testID: "swarm-sidebar-classical" },
   { value: "swarm", label: "swarm.sidebar.swarm", testID: "swarm-sidebar-swarm" },
 ];
 const ThemedUsers = withUnistyles(Users);
 const ThemedListTodo = withUnistyles(ListTodo);
-const ThemedPlus = withUnistyles(Plus);
+const ThemedMessageSquare = withUnistyles(MessageSquare);
 const ThemedChevronDown = withUnistyles(ChevronDown);
 const ThemedChevronRight = withUnistyles(ChevronRight);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
@@ -148,46 +154,9 @@ function useOrderedSwarmAgents(agents: Agent[], scope: string) {
   return { orderedAgents, onDragEnd };
 }
 
-export function SwarmCreatePlannerNavRow({ onBeforeNavigate }: { onBeforeNavigate?: () => void }) {
-  const { t } = useTranslation();
-  const installation = usePluginInstallations("paseo-swarm")[0];
-  const selection = useActiveWorkspaceSelection();
-  const shortcutKeys = useShortcutKeys(builtinSidebarNavShortcutAction("new-workspace"));
-  const open = useCallback(() => {
-    const serverId = selection?.serverId ?? installation?.serverId;
-    if (!serverId) return;
-    onBeforeNavigate?.();
-    router.push({ pathname: "/new", params: { serverId, swarmRoleClass: "supervisor" } });
-  }, [installation?.serverId, onBeforeNavigate, selection?.serverId]);
-  return (
-    <SidebarHeaderRow
-      icon={Plus}
-      label={t("swarm.sidebar.addSupervisor")}
-      variant="compact"
-      shortcutKeys={shortcutKeys}
-      onPress={open}
-    />
-  );
-}
-
-export function useOpenSwarmPlanner() {
-  const selection = useActiveWorkspaceSelection();
-  const installations = usePluginInstallations("paseo-swarm");
-  const installation =
-    installations.find((candidate) => candidate.serverId === selection?.serverId) ??
-    installations[0];
-  return useCallback(() => {
-    const serverId = selection?.serverId ?? installation?.serverId;
-    if (!serverId) return;
-    router.push({
-      pathname: "/new",
-      params: { serverId, swarmRoleClass: "planner" },
-    });
-  }, [installation?.serverId, selection?.serverId]);
-}
-
 function PlannerGroup({
   planner,
+  identity,
   agents,
   serverId,
   selectedAgent,
@@ -198,28 +167,33 @@ function PlannerGroup({
   parentGestureRef,
   dragGestureHostActive,
   onOpenTasks,
-  onOpenSurface,
+  onMessage,
 }: SwarmSidebarGestureProps &
   SwarmRowDragProps & {
     planner: Agent;
+    identity?: PlannerRowIdentity;
     agents: Agent[];
     serverId: string;
     selectedAgent?: Agent;
     workspaceStates: ReadonlyMap<string, WorkspaceState>;
     onOpenTasks: (agent: Agent, planner: Agent) => void;
-    onOpenSurface: (surfaceId: string, params?: Record<string, string>) => void;
+    onMessage: (agent: Agent) => void;
   }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(true);
   const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
+  // A seat with no agent yet has no chat to open; a message starts its agent.
   const openAgent = useCallback(
     (agent: Agent) =>
-      navigateToAgent({
-        serverId,
-        agentId: agent.paseoAgentId,
-        workspaceId: agent.workspaceId,
-      }),
-    [serverId],
+      agent.paseoAgentId
+        ? navigateToAgent({
+            serverId,
+            agentId: agent.paseoAgentId,
+            workspaceId: agent.workspaceId,
+            pin: true,
+          })
+        : onMessage(agent),
+    [onMessage, serverId],
   );
   const supervisors = useMemo(
     () =>
@@ -232,28 +206,16 @@ function PlannerGroup({
   );
   const { orderedAgents: orderedSupervisors, onDragEnd } = useOrderedSwarmAgents(
     supervisors,
-    `swarm:supervisors:${serverId}:${planner.paseoAgentId}`,
+    `swarm:supervisors:${serverId}:${planner.id}`,
   );
-  const isSelected = useCallback(
-    (agent: Agent) => selectedAgent?.paseoAgentId === agent.paseoAgentId,
-    [selectedAgent],
-  );
+  const isSelected = useCallback((agent: Agent) => selectedAgent?.id === agent.id, [selectedAgent]);
   const openPlanner = useCallback(() => openAgent(planner), [openAgent, planner]);
   const openPlannerTasks = useCallback(() => onOpenTasks(planner, planner), [onOpenTasks, planner]);
   const openAgentTasks = useCallback(
     (agent: Agent) => onOpenTasks(agent, planner),
     [onOpenTasks, planner],
   );
-  const openCreateSupervisor = useCallback(
-    () =>
-      onOpenSurface("native-create-supervisor", { parent: planner.qualifiedName ?? planner.name }),
-    [onOpenSurface, planner],
-  );
-  const openCreateWorker = useCallback(
-    (agent: Agent) =>
-      onOpenSurface("native-create-worker", { parent: agent.qualifiedName ?? agent.name }),
-    [onOpenSurface],
-  );
+  const messagePlanner = useCallback(() => onMessage(planner), [onMessage, planner]);
   const renderSupervisor = useCallback(
     ({
       item: agent,
@@ -265,34 +227,35 @@ function PlannerGroup({
         serverId={serverId}
         agent={agent}
         selected={isSelected(agent)}
-        workspaceState={workspaceStates.get(agent.paseoAgentId)}
+        workspaceState={workspaceStates.get(agent.id)}
         members={agents.filter(
           (member) => member.reportsTo === (agent.qualifiedName ?? agent.name),
         )}
         onOpen={openAgent}
         onOpenTasks={openAgentTasks}
-        onAddWorker={openCreateWorker}
+        onMessage={onMessage}
         drag={supervisorDrag}
         isDragging={isActive}
         dragHandleProps={supervisorDragHandleProps}
       />
     ),
-    [serverId, agents, isSelected, openAgent, openAgentTasks, openCreateWorker, workspaceStates],
+    [serverId, agents, isSelected, openAgent, openAgentTasks, onMessage, workspaceStates],
   );
   const supervisorExtraData = useMemo(
-    () => ({ selectedAgent, workspaceStates, agents, openAgent, openAgentTasks, openCreateWorker }),
-    [selectedAgent, workspaceStates, agents, openAgent, openAgentTasks, openCreateWorker],
+    () => ({ selectedAgent, workspaceStates, agents, openAgent, openAgentTasks, onMessage }),
+    [selectedAgent, workspaceStates, agents, openAgent, openAgentTasks, onMessage],
   );
   return (
     <View>
       <PlannerRow
         planner={planner}
+        identity={identity}
         selected={isSelected(planner)}
         expanded={expanded}
         onToggle={toggleExpanded}
         onOpen={openPlanner}
         onOpenTasks={openPlannerTasks}
-        onAddSupervisor={openCreateSupervisor}
+        onMessage={messagePlanner}
         drag={drag}
         isDragging={isDragging}
         dragHandleProps={dragHandleProps}
@@ -300,7 +263,7 @@ function PlannerGroup({
       {expanded ? (
         <View style={styles.members}>
           <DraggableList
-            testID={`swarm-supervisor-list-${serverId}-${planner.paseoAgentId}`}
+            testID={`swarm-supervisor-list-${serverId}-${planner.id}`}
             data={orderedSupervisors}
             keyExtractor={agentKeyExtractor}
             renderItem={renderSupervisor}
@@ -329,23 +292,25 @@ function PlannerGroup({
 
 function PlannerRow({
   planner,
+  identity,
   selected,
   expanded,
   onToggle,
   onOpen,
   onOpenTasks,
-  onAddSupervisor,
+  onMessage,
   drag,
   isDragging,
   dragHandleProps,
 }: SwarmRowDragProps & {
   planner: Agent;
+  identity?: PlannerRowIdentity;
   selected: boolean;
   expanded: boolean;
   onToggle: () => void;
   onOpen: () => void;
   onOpenTasks: () => void;
-  onAddSupervisor: () => void;
+  onMessage: () => void;
 }) {
   const { t } = useTranslation();
   const selectionAccessibilityState = useMemo(() => ({ selected }), [selected]);
@@ -392,12 +357,12 @@ function PlannerRow({
   const handleControlPressStart = useCallback((event: { stopPropagation(): void }) => {
     event.stopPropagation();
   }, []);
-  const handleAddSupervisor = useCallback(
+  const handleMessage = useCallback(
     (event: GestureResponderEvent) => {
       event.stopPropagation();
-      onAddSupervisor();
+      onMessage();
     },
-    [onAddSupervisor],
+    [onMessage],
   );
   const handleOpenTasks = useCallback(
     (event: GestureResponderEvent) => {
@@ -429,28 +394,34 @@ function PlannerRow({
         ref={dragHandleProps?.setActivatorNodeRef as unknown as Ref<View>}
         style={styles.rowSelectionTarget}
       >
-        <PressHighlight
-          accessibilityRole="button"
-          accessibilityLabel={planner.name}
-          accessibilityState={selectionAccessibilityState}
-          aria-selected={selected}
-          testID={`swarm-planner-row-${planner.paseoAgentId}`}
-          style={selectionStyle}
-          highlightStyle={styles.projectRowPressed}
-          onPressIn={handlePressIn}
-          onTouchMove={interaction.handleTouchMove}
-          onPressOut={handlePressOut}
-          onFocus={handleFocus}
-          onBlur={handleBlur}
-          onPress={handlePress}
-        />
+        {/* The row's full swarm identity shows on hover; the label carries only what tells
+            displayed rows apart. */}
+        <Tooltip delayDuration={500} enabledOnDesktop={Boolean(identity)}>
+          <TooltipTrigger asChild onFocus={handleFocus} onBlur={handleBlur} onPress={handlePress}>
+            <PressHighlight
+              accessibilityRole="button"
+              accessibilityLabel={identity ? `${planner.name}, ${identity.identity}` : planner.name}
+              accessibilityState={selectionAccessibilityState}
+              aria-selected={selected}
+              testID={`swarm-planner-row-${planner.id}`}
+              style={selectionStyle}
+              highlightStyle={styles.projectRowPressed}
+              onPressIn={handlePressIn}
+              onTouchMove={interaction.handleTouchMove}
+              onPressOut={handlePressOut}
+            />
+          </TooltipTrigger>
+          <TooltipContent side="right" align="center" offset={8}>
+            <Text style={styles.tooltipText}>{identity?.identity}</Text>
+          </TooltipContent>
+        </Tooltip>
       </View>
       <View style={styles.projectRowLeft} pointerEvents="none">
         <ProjectLeadingVisual
           displayName={planner.name}
           iconDataUri={null}
           statusBucket={null}
-          projectViewKey={`swarm:${planner.paseoAgentId}`}
+          projectViewKey={`swarm:${planner.id}`}
           backdrop={getSidebarRowBackdrop({
             isHovered: hovered || focused,
             isPressed: pressed,
@@ -461,6 +432,11 @@ function PlannerRow({
         <Text style={styles.projectTitle} numberOfLines={1}>
           {planner.name}
         </Text>
+        {identity?.label ? (
+          <Text style={styles.swarmLabel} numberOfLines={1}>
+            {identity.label}
+          </Text>
+        ) : null}
       </View>
       <View style={styles.projectTrailingActions} pointerEvents="box-none">
         <Pressable
@@ -470,7 +446,7 @@ function PlannerRow({
           })}
           accessibilityState={expansionAccessibilityState}
           aria-expanded={expanded}
-          testID={`swarm-planner-toggle-${planner.paseoAgentId}`}
+          testID={`swarm-planner-toggle-${planner.id}`}
           onTouchStart={handleControlPressStart}
           onPointerDown={handleControlPressStart}
           onPress={handleTogglePress}
@@ -484,18 +460,19 @@ function PlannerRow({
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={t("swarm.sidebar.addSupervisorUnder", { name: planner.name })}
+          accessibilityLabel={t("swarm.message.title", { name: planner.name })}
+          testID={`swarm-planner-message-${planner.id}`}
           onTouchStart={handleControlPressStart}
           onPointerDown={handleControlPressStart}
-          onPress={handleAddSupervisor}
+          onPress={handleMessage}
           style={styles.projectIconActionButton}
         >
-          <ThemedPlus size={14} uniProps={mutedColorMapping} />
+          <ThemedMessageSquare size={14} uniProps={mutedColorMapping} />
         </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={t("swarm.sidebar.openTasks", { name: planner.name })}
-          testID={`swarm-planner-tasks-${planner.paseoAgentId}`}
+          testID={`swarm-planner-tasks-${planner.id}`}
           onTouchStart={handleControlPressStart}
           onPointerDown={handleControlPressStart}
           onPress={handleOpenTasks}
@@ -516,7 +493,7 @@ function AgentRow({
   workspaceState,
   onOpen,
   onOpenTasks,
-  onAddWorker,
+  onMessage,
   drag,
   isDragging,
   dragHandleProps,
@@ -528,7 +505,7 @@ function AgentRow({
   workspaceState?: WorkspaceState;
   onOpen: (agent: Agent) => void;
   onOpenTasks: (agent: Agent) => void;
-  onAddWorker: (agent: Agent) => void;
+  onMessage: (agent: Agent) => void;
 }) {
   const { t } = useTranslation();
   const selectionAccessibilityState = useMemo(() => ({ selected }), [selected]);
@@ -559,7 +536,7 @@ function AgentRow({
     },
     [agent, onOpenTasks],
   );
-  const handleAddWorker = useCallback(() => onAddWorker(agent), [agent, onAddWorker]);
+  const handleMessage = useCallback(() => onMessage(agent), [agent, onMessage]);
   const selectionStyle = useCallback(
     ({ pressed }: PressableStateCallbackType) => [
       styles.rowSelectionTarget,
@@ -588,7 +565,7 @@ function AgentRow({
           accessibilityLabel={agent.name}
           accessibilityState={selectionAccessibilityState}
           aria-selected={selected}
-          testID={`swarm-agent-row-${agent.paseoAgentId}`}
+          testID={`swarm-agent-row-${agent.id}`}
           style={selectionStyle}
           highlightStyle={styles.workspaceRowPressed}
           onPressIn={interaction.handlePressIn}
@@ -613,7 +590,7 @@ function AgentRow({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={t("swarm.sidebar.openTasks", { name: agent.name })}
-          testID={`swarm-agent-tasks-${agent.paseoAgentId}`}
+          testID={`swarm-agent-tasks-${agent.id}`}
           onPress={handleTasks}
           style={styles.projectIconActionButton}
         >
@@ -625,7 +602,7 @@ function AgentRow({
           members={members}
           onOpen={onOpen}
           onOpenTasks={onOpenTasks}
-          onAddWorker={handleAddWorker}
+          onMessage={handleMessage}
         />
       </View>
     </View>
@@ -638,14 +615,14 @@ function RosterHoverCard({
   members,
   onOpen,
   onOpenTasks,
-  onAddWorker,
+  onMessage,
 }: {
   serverId: string;
   agent: Agent;
   members: Agent[];
   onOpen: (agent: Agent) => void;
   onOpenTasks: (agent: Agent) => void;
-  onAddWorker: () => void;
+  onMessage: () => void;
 }) {
   const { t } = useTranslation();
   const isCompact = useIsCompactFormFactor();
@@ -661,7 +638,7 @@ function RosterHoverCard({
         <DropdownMenuContent sheetTitle={t("swarm.sidebar.agentTeam")}>
           {[agent, ...members].map((member) => (
             <RosterMenuEntry
-              key={member.paseoAgentId}
+              key={member.id}
               serverId={serverId}
               agent={member}
               onOpen={onOpen}
@@ -671,7 +648,9 @@ function RosterHoverCard({
           {members.length === 0 ? (
             <DropdownMenuHint>{t("swarm.sidebar.noWorkers")}</DropdownMenuHint>
           ) : null}
-          <DropdownMenuItem onSelect={onAddWorker}>{t("swarm.sidebar.addWorker")}</DropdownMenuItem>
+          <DropdownMenuItem onSelect={onMessage}>
+            {t("swarm.message.title", { name: agent.name })}
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     );
@@ -696,7 +675,7 @@ function RosterHoverCard({
           />
           {members.map((member) => (
             <RosterEntry
-              key={member.paseoAgentId}
+              key={member.id}
               serverId={serverId}
               agent={member}
               onOpen={onOpen}
@@ -708,12 +687,14 @@ function RosterHoverCard({
           ) : null}
           <Pressable
             accessibilityRole="menuitem"
-            accessibilityLabel={t("swarm.sidebar.addWorkerUnder", { name: agent.name })}
-            onPress={onAddWorker}
+            accessibilityLabel={t("swarm.message.title", { name: agent.name })}
+            onPress={onMessage}
             style={styles.rosterAction}
           >
-            <ThemedPlus size={14} uniProps={mutedColorMapping} />
-            <Text style={styles.rosterActionText}>{t("swarm.sidebar.addWorker")}</Text>
+            <ThemedMessageSquare size={14} uniProps={mutedColorMapping} />
+            <Text style={styles.rosterActionText}>
+              {t("swarm.message.title", { name: agent.name })}
+            </Text>
           </Pressable>
         </ScrollView>
       </HoverCardContent>
@@ -721,9 +702,10 @@ function RosterHoverCard({
   );
 }
 
-function useRosterStatus(serverId: string, agentId: string) {
+function useRosterStatus(serverId: string, agentId: string | null) {
   const { t } = useTranslation();
   const runtimeAgent = useSessionStore((state) => {
+    if (!agentId) return null;
     const session = state.sessions[serverId];
     return session?.agents.get(agentId) ?? session?.agentDetails.get(agentId) ?? null;
   });
@@ -806,7 +788,7 @@ function RosterEntry({
   const { runtimeAgent, statusLabel, bucket } = useRosterStatus(serverId, agent.paseoAgentId);
   const metadata = [
     t(`swarm.roles.${agent.roleClass}`),
-    statusLabel,
+    agent.paseoAgentId ? statusLabel : t("swarm.sidebar.notStarted"),
     agent.pending ? t("swarm.sidebar.pendingSeat", { reason: agent.pending.reason }) : null,
   ]
     .filter(Boolean)
@@ -820,7 +802,7 @@ function RosterEntry({
         onPress={handlePress}
         accessibilityRole="menuitem"
         accessibilityLabel={`${agent.name}, ${metadata}`}
-        testID={`swarm-roster-agent-${agent.paseoAgentId}`}
+        testID={`swarm-roster-agent-${agent.id}`}
         dataSet={rosterMenuItemData}
       >
         <RosterStatusMarker agent={runtimeAgent} bucket={bucket} />
@@ -838,7 +820,7 @@ function RosterEntry({
         onPress={handleTasks}
         accessibilityRole="menuitem"
         accessibilityLabel={t("swarm.sidebar.openTasks", { name: agent.name })}
-        testID={`swarm-roster-tasks-${agent.paseoAgentId}`}
+        testID={`swarm-roster-tasks-${agent.id}`}
         dataSet={rosterMenuItemData}
       >
         {t("swarm.tasks.title")}
@@ -889,7 +871,8 @@ function HostRoster({
   const query = useFetchQuery(
     {
       queryKey: ["swarm", "roster", plugin.serverId],
-      queryFn: async () => rosterSchema.parse(await plugin.invoke("swarm.board.read", {})),
+      queryFn: async () =>
+        rosterSchema.parse(await plugin.invoke("swarm.board.read", { includeReserved: true })),
       refetchInterval: 3000,
       dataShape: "value",
       staleTimeMs: 2500,
@@ -908,7 +891,7 @@ function HostRoster({
       });
       const workspace = key ? session.workspaces.get(key) : undefined;
       if (!workspace) continue;
-      states.set(agent.paseoAgentId, {
+      states.set(agent.id, {
         statusBucket: deriveEffectiveWorkspaceStatus({
           serverId: plugin.serverId,
           workspace,
@@ -922,22 +905,8 @@ function HostRoster({
   }, [pendingCreateAttempts, plugin.serverId, query.data, sessions]);
   const { refetch } = query;
   const retry = useCallback(() => void refetch(), [refetch]);
-  const openSurface = useCallback(
-    (surfaceId: string, params: Record<string, string> = {}) => {
-      if (surfaceId === "native-create-supervisor" || surfaceId === "native-create-worker") {
-        router.push({
-          pathname: "/new",
-          params: {
-            serverId: plugin.serverId,
-            swarmRoleClass: surfaceId === "native-create-supervisor" ? "supervisor" : "worker",
-            ...(params.parent ? { swarmParent: params.parent } : {}),
-          },
-        });
-        return;
-      }
-    },
-    [plugin.serverId],
-  );
+  const [messageTarget, setMessageTarget] = useState<Agent | null>(null);
+  const closeMessage = useCallback(() => setMessageTarget(null), []);
   const openTasks = useCallback(
     (agent: Agent, planner: Agent) => {
       const workspaceId = agent.workspaceId ?? planner.workspaceId;
@@ -962,6 +931,14 @@ function HostRoster({
       ? agents.find((agent) => agent.workspaceId === selection.workspaceId)
       : undefined;
   const planners = useMemo(() => agents.filter((agent) => agent.roleClass === "planner"), [agents]);
+  // Planner names are unique only within a swarm; the rows on show decide what tells them apart.
+  const identities = useMemo(() => {
+    const workspaces = [...(sessions[0]?.workspaces.values() ?? [])];
+    return plannerRowIdentities(planners, query.data?.swarms ?? [], (projectId) => {
+      const project = workspaces.find((workspace) => workspace.projectId === projectId);
+      return project?.projectCustomName || project?.projectDisplayName || undefined;
+    });
+  }, [planners, query.data, sessions]);
   const { orderedAgents: orderedPlanners, onDragEnd } = useOrderedSwarmAgents(
     planners,
     `swarm:planners:${plugin.serverId}`,
@@ -970,12 +947,13 @@ function HostRoster({
     ({ item: planner, drag, isActive, dragHandleProps }: DraggableRenderItemInfo<Agent>) => (
       <PlannerGroup
         planner={planner}
-        agents={agents}
+        identity={identities.get(planner.id)}
+        agents={agents.filter((agent) => agent.swarmId === planner.swarmId)}
         serverId={plugin.serverId}
         selectedAgent={selectedAgent}
         workspaceStates={workspaceStates}
         onOpenTasks={openTasks}
-        onOpenSurface={openSurface}
+        onMessage={setMessageTarget}
         drag={drag}
         isDragging={isActive}
         dragHandleProps={dragHandleProps}
@@ -985,11 +963,11 @@ function HostRoster({
     ),
     [
       agents,
+      identities,
       plugin.serverId,
       selectedAgent,
       workspaceStates,
       openTasks,
-      openSurface,
       parentGestureRef,
       dragGestureHostActive,
     ],
@@ -997,19 +975,19 @@ function HostRoster({
   const plannerExtraData = useMemo(
     () => ({
       agents,
+      identities,
       selectedAgent,
       workspaceStates,
       openTasks,
-      openSurface,
       parentGestureRef,
       dragGestureHostActive,
     }),
     [
       agents,
+      identities,
       selectedAgent,
       workspaceStates,
       openTasks,
-      openSurface,
       parentGestureRef,
       dragGestureHostActive,
     ],
@@ -1042,8 +1020,17 @@ function HostRoster({
         containerStyle={styles.members}
       />
       {planners.length === 0 ? (
-        <Text style={styles.hint}>{t("swarm.sidebar.noPlanners")}</Text>
+        <>
+          <Text style={styles.hint}>{t("swarm.sidebar.noPlanners")}</Text>
+          <Text style={styles.hint}>{t("swarm.sidebar.declarePlanners")}</Text>
+        </>
       ) : null}
+      <SwarmMessageSeatSheet
+        serverId={plugin.serverId}
+        seat={messageTarget}
+        onClose={closeMessage}
+        onSent={retry}
+      />
     </View>
   );
 }
@@ -1177,6 +1164,16 @@ const styles = StyleSheet.create((theme, runtime) => ({
     fontWeight: "400",
     minWidth: 0,
     flexShrink: 1,
+  },
+  tooltipText: {
+    fontSize: theme.fontSize.base,
+    color: theme.colors.popoverForeground,
+  },
+  swarmLabel: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    minWidth: 0,
+    flexShrink: 2,
   },
   projectTrailingActions: {
     flexDirection: "row",
