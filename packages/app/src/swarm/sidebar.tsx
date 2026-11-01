@@ -40,7 +40,8 @@ import { isNative, isWeb } from "@/constants/platform";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { openSwarmTasks } from "./navigation";
 import { SwarmMessageSeatSheet } from "./message-seat-sheet";
-import { swarmLabels } from "./swarm-labels";
+import { plannerRowIdentities, type PlannerRowIdentity } from "./swarm-labels";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useMenuContext } from "@/components/ui/menu/menu-context";
 import {
   DropdownMenu,
@@ -155,7 +156,7 @@ function useOrderedSwarmAgents(agents: Agent[], scope: string) {
 
 function PlannerGroup({
   planner,
-  swarmLabel,
+  identity,
   agents,
   serverId,
   selectedAgent,
@@ -170,7 +171,7 @@ function PlannerGroup({
 }: SwarmSidebarGestureProps &
   SwarmRowDragProps & {
     planner: Agent;
-    swarmLabel?: string;
+    identity?: PlannerRowIdentity;
     agents: Agent[];
     serverId: string;
     selectedAgent?: Agent;
@@ -248,7 +249,7 @@ function PlannerGroup({
     <View>
       <PlannerRow
         planner={planner}
-        swarmLabel={swarmLabel}
+        identity={identity}
         selected={isSelected(planner)}
         expanded={expanded}
         onToggle={toggleExpanded}
@@ -291,7 +292,7 @@ function PlannerGroup({
 
 function PlannerRow({
   planner,
-  swarmLabel,
+  identity,
   selected,
   expanded,
   onToggle,
@@ -303,7 +304,7 @@ function PlannerRow({
   dragHandleProps,
 }: SwarmRowDragProps & {
   planner: Agent;
-  swarmLabel?: string;
+  identity?: PlannerRowIdentity;
   selected: boolean;
   expanded: boolean;
   onToggle: () => void;
@@ -393,21 +394,27 @@ function PlannerRow({
         ref={dragHandleProps?.setActivatorNodeRef as unknown as Ref<View>}
         style={styles.rowSelectionTarget}
       >
-        <PressHighlight
-          accessibilityRole="button"
-          accessibilityLabel={swarmLabel ? `${planner.name}, ${swarmLabel}` : planner.name}
-          accessibilityState={selectionAccessibilityState}
-          aria-selected={selected}
-          testID={`swarm-planner-row-${planner.id}`}
-          style={selectionStyle}
-          highlightStyle={styles.projectRowPressed}
-          onPressIn={handlePressIn}
-          onTouchMove={interaction.handleTouchMove}
-          onPressOut={handlePressOut}
-          onFocus={handleFocus}
-          onBlur={handleBlur}
-          onPress={handlePress}
-        />
+        {/* The row's full swarm identity shows on hover; the label carries only what tells
+            displayed rows apart. */}
+        <Tooltip delayDuration={500} enabledOnDesktop={Boolean(identity)}>
+          <TooltipTrigger asChild onFocus={handleFocus} onBlur={handleBlur} onPress={handlePress}>
+            <PressHighlight
+              accessibilityRole="button"
+              accessibilityLabel={identity ? `${planner.name}, ${identity.identity}` : planner.name}
+              accessibilityState={selectionAccessibilityState}
+              aria-selected={selected}
+              testID={`swarm-planner-row-${planner.id}`}
+              style={selectionStyle}
+              highlightStyle={styles.projectRowPressed}
+              onPressIn={handlePressIn}
+              onTouchMove={interaction.handleTouchMove}
+              onPressOut={handlePressOut}
+            />
+          </TooltipTrigger>
+          <TooltipContent side="right" align="center" offset={8}>
+            <Text style={styles.tooltipText}>{identity?.identity}</Text>
+          </TooltipContent>
+        </Tooltip>
       </View>
       <View style={styles.projectRowLeft} pointerEvents="none">
         <ProjectLeadingVisual
@@ -425,9 +432,9 @@ function PlannerRow({
         <Text style={styles.projectTitle} numberOfLines={1}>
           {planner.name}
         </Text>
-        {swarmLabel ? (
+        {identity?.label ? (
           <Text style={styles.swarmLabel} numberOfLines={1}>
-            {swarmLabel}
+            {identity.label}
           </Text>
         ) : null}
       </View>
@@ -924,7 +931,14 @@ function HostRoster({
       ? agents.find((agent) => agent.workspaceId === selection.workspaceId)
       : undefined;
   const planners = useMemo(() => agents.filter((agent) => agent.roleClass === "planner"), [agents]);
-  const labels = useMemo(() => swarmLabels(query.data?.swarms ?? []), [query.data]);
+  // Planner names are unique only within a swarm; the rows on show decide what tells them apart.
+  const identities = useMemo(() => {
+    const workspaces = [...(sessions[0]?.workspaces.values() ?? [])];
+    return plannerRowIdentities(planners, query.data?.swarms ?? [], (projectId) => {
+      const project = workspaces.find((workspace) => workspace.projectId === projectId);
+      return project?.projectCustomName || project?.projectDisplayName || undefined;
+    });
+  }, [planners, query.data, sessions]);
   const { orderedAgents: orderedPlanners, onDragEnd } = useOrderedSwarmAgents(
     planners,
     `swarm:planners:${plugin.serverId}`,
@@ -933,7 +947,7 @@ function HostRoster({
     ({ item: planner, drag, isActive, dragHandleProps }: DraggableRenderItemInfo<Agent>) => (
       <PlannerGroup
         planner={planner}
-        swarmLabel={planner.swarmId ? labels.get(planner.swarmId) : undefined}
+        identity={identities.get(planner.id)}
         agents={agents.filter((agent) => agent.swarmId === planner.swarmId)}
         serverId={plugin.serverId}
         selectedAgent={selectedAgent}
@@ -949,7 +963,7 @@ function HostRoster({
     ),
     [
       agents,
-      labels,
+      identities,
       plugin.serverId,
       selectedAgent,
       workspaceStates,
@@ -961,7 +975,7 @@ function HostRoster({
   const plannerExtraData = useMemo(
     () => ({
       agents,
-      labels,
+      identities,
       selectedAgent,
       workspaceStates,
       openTasks,
@@ -970,7 +984,7 @@ function HostRoster({
     }),
     [
       agents,
-      labels,
+      identities,
       selectedAgent,
       workspaceStates,
       openTasks,
@@ -1150,6 +1164,10 @@ const styles = StyleSheet.create((theme, runtime) => ({
     fontWeight: "400",
     minWidth: 0,
     flexShrink: 1,
+  },
+  tooltipText: {
+    fontSize: theme.fontSize.base,
+    color: theme.colors.popoverForeground,
   },
   swarmLabel: {
     color: theme.colors.foregroundMuted,

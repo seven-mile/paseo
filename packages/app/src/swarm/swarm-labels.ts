@@ -1,16 +1,54 @@
-// How a list that holds teams from several swarms names each swarm: by its own name, with the
-// start of its id when two swarms share a name, so no two labels read the same. A list with one
-// swarm needs no labels. Projects play no part: a project can hold several swarms.
-export function swarmLabels(
-  swarms: ReadonlyArray<{ id: string; name: string }>,
-): Map<string, string> {
-  const labels = new Map<string, string>();
-  if (swarms.length < 2) return labels;
-  const named = new Map<string, number>();
-  for (const swarm of swarms) named.set(swarm.name, (named.get(swarm.name) ?? 0) + 1);
-  for (const swarm of swarms) {
-    const short = swarm.id.replace(/^swarm-/, "").slice(0, 4);
-    labels.set(swarm.id, named.get(swarm.name)! > 1 ? `${swarm.name} ${short}` : swarm.name);
+export interface PlannerRowIdentity {
+  // What the row adds after the planner's name; absent when the row needs nothing.
+  label?: string;
+  // Everything that identifies the row's swarm, for hover and screen readers.
+  identity: string;
+}
+
+interface SwarmInfo {
+  id: string;
+  name: string;
+  projectId: string | null;
+}
+
+// How the planner rows a list displays tell each other apart. Seat names are unique only within a
+// swarm, so when the rows come from several swarms, each names its project, then its swarm, then
+// the start of the swarm's id, adding each only while rows with the same planner name still read
+// the same. Ambiguity counts displayed rows only, so a swarm with no planner on show adds nothing.
+export function plannerRowIdentities(
+  rows: ReadonlyArray<{ id: string; name: string; swarmId?: string }>,
+  swarms: readonly SwarmInfo[],
+  projectName: (projectId: string) => string | undefined,
+): Map<string, PlannerRowIdentity> {
+  const byId = new Map(swarms.map((swarm) => [swarm.id, swarm]));
+  const placed = rows.flatMap((row) => {
+    const swarm = row.swarmId ? byId.get(row.swarmId) : undefined;
+    if (!swarm) return [];
+    const project = swarm.projectId ? projectName(swarm.projectId) : undefined;
+    const parts = [project, swarm.name, swarm.id.replace(/^swarm-/, "").slice(0, 4)];
+    return [{ row, swarm, project, parts }];
+  });
+  const identities = new Map<string, PlannerRowIdentity>();
+  const several = new Set(placed.map(({ swarm }) => swarm.id)).size > 1;
+  const key = (entry: (typeof placed)[number], depth: number) =>
+    [entry.row.name, ...entry.parts.slice(0, depth)].join("\u0000");
+  for (const entry of placed) {
+    const { row, swarm, project, parts } = entry;
+    const identity = [project, swarm.name, swarm.id].filter(Boolean).join(" · ");
+    if (!several) {
+      identities.set(row.id, { identity });
+      continue;
+    }
+    // The project is context every row keeps; the swarm name and id come in only as needed.
+    let depth = 1;
+    const clashes = (at: number) =>
+      placed.some((other) => other !== entry && key(other, at) === key(entry, at));
+    while (depth < parts.length && clashes(depth)) depth += 1;
+    const label = parts
+      .slice(0, depth)
+      .filter((part): part is string => Boolean(part))
+      .join(" · ");
+    identities.set(row.id, { identity, ...(label ? { label } : {}) });
   }
-  return labels;
+  return identities;
 }
