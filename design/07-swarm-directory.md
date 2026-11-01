@@ -11,6 +11,8 @@ Editing the directory changes nothing by itself. A swarm runs what it last **acc
 
 `paseo-swarm swarm status` shows both: changes in the directory that are not accepted yet, and the work each seat's next mail carries out. A daemon restart never accepts the directory.
 
+`up`, `diff`, `status`, and `recover` find the swarm from the directory they run in when neither `--swarm` nor `--project` names it: the swarm directory itself, or a checkout or workspace of the swarm's project. Only on a local instance (`--home` or the default home): a remote daemon's path can name an unrelated checkout, so `--host` needs a flag. A project with several swarms reports them and asks for `--swarm`.
+
 The accepted PWA files live in the swarm record (`source`), since prompts cannot be rebuilt from seat records. Only `up` advances it, and only the latest accepted copy is kept. Prompts, role lists, and board statuses read that copy, so a half-written role file never reaches an agent.
 
 ## swarm.yaml

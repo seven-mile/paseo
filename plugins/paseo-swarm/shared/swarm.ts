@@ -54,18 +54,25 @@ const swarmScopeSchema = {
   projectId: z.string().min(1).optional(),
 };
 
+// The directory commands also take the CLI's working directory, on a local daemon only, to find
+// the swarm when neither swarmId nor projectId names it.
+const directoryScopeSchema = {
+  ...swarmScopeSchema,
+  cwd: z.string().min(1).optional(),
+};
+
 // Accepts the swarm directory, or with dryRun shows what accepting it would do (`swarm diff`). A
 // plan with refusals is not applied, and up fails with them.
 export const directoryUpRpc = defineRpc({
   name: "swarm.directory.up",
-  input: z.object({ ...swarmScopeSchema, dryRun: z.boolean().default(false) }),
+  input: z.object({ ...directoryScopeSchema, dryRun: z.boolean().default(false) }),
   output: z.object({ swarm: swarmSummarySchema, plan: rosterPlanSchema }),
 });
 
 // Unapplied directory changes, and the occupant work each seat's next mail carries out.
 export const statusReadRpc = defineRpc({
   name: "swarm.status.read",
-  input: z.object(swarmScopeSchema),
+  input: z.object(directoryScopeSchema),
   output: z.object({
     swarm: swarmSummarySchema,
     unapplied: rosterPlanSchema.nullable(),
@@ -79,7 +86,7 @@ export const statusReadRpc = defineRpc({
 
 export const directoryRecoverRpc = defineRpc({
   name: "swarm.directory.recover",
-  input: z.object({ ...swarmScopeSchema, keep: z.enum(["file", "intent"]) }),
+  input: z.object({ ...directoryScopeSchema, keep: z.enum(["file", "intent"]) }),
   output: z.object({ swarm: swarmSummarySchema, seats: z.array(z.string()) }),
 });
 

@@ -100,7 +100,8 @@ export function resolveSwarm(input: { swarmId?: string; projectId?: string }): S
   if (candidates.length === 0) {
     throw new Error(`No swarm in ${where}. Choose a PWA directory in Project Settings → Swarm.`);
   }
-  throw new Error(`Several swarms in ${where}. Name the swarm.`);
+  const names = candidates.map((swarm) => `${swarm.name} (${swarm.id})`).join(", ");
+  throw new Error(`Several swarms in ${where}: ${names}. Name the swarm.`);
 }
 
 // The swarm whose seats include one with this name, for a request that names its actor but not

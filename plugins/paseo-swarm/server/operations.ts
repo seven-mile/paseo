@@ -1,7 +1,8 @@
 import type { RpcInput } from "@getpaseo/plugin";
 import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import { listPwaRoles, readPwa, readPwaFiles } from "./pwa";
 import { messagePrompt, messageReceipt, refreshedPrompt, turnDigestRow } from "./prompts";
 import {
@@ -97,6 +98,63 @@ async function projectRoot(projectId: string, context: PluginHandlerContext): Pr
   const project = projects.find((candidate) => candidate.projectId === projectId);
   if (!project) throw new Error(`Unknown project: ${projectId}`);
   return project.projectRootPath;
+}
+
+function realDirectory(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+function contains(directory: string, path: string): boolean {
+  const root = realDirectory(directory);
+  return path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
+}
+
+// The project whose checkout or workspace holds the directory, the closest one if several do.
+async function projectOfDirectory(
+  cwd: string,
+  context: PluginHandlerContext,
+): Promise<string | null> {
+  const roots: Array<{ projectId: string; path: string }> = [];
+  const { projects } = await context.paseo.projects.list({});
+  for (const project of projects) {
+    roots.push({ projectId: project.projectId, path: project.projectRootPath });
+  }
+  let cursor: string | undefined;
+  do {
+    const page = await context.paseo.workspaces.list({
+      page: { limit: 200, ...(cursor ? { cursor } : {}) },
+    });
+    for (const workspace of page.entries) {
+      if (workspace.workspaceDirectory) {
+        roots.push({ projectId: workspace.projectId, path: workspace.workspaceDirectory });
+      }
+    }
+    cursor = page.pageInfo.nextCursor ?? undefined;
+  } while (cursor);
+  const closest = roots
+    .filter((root) => contains(root.path, cwd))
+    .sort((a, b) => realDirectory(b.path).length - realDirectory(a.path).length)[0];
+  return closest?.projectId ?? null;
+}
+
+// The swarm a directory command means. An explicit swarm or project wins. Otherwise the CLI's
+// working directory names it: the swarm directory it is in, or the swarms of the project whose
+// checkout or workspace holds it. A directory in neither falls back to the only swarm.
+async function directorySwarm(
+  input: { swarmId?: string; projectId?: string; cwd?: string },
+  context: PluginHandlerContext,
+): Promise<SwarmRecord> {
+  const { cwd, ...scope } = input;
+  if (scope.swarmId || scope.projectId || !cwd) return resolveSwarm(scope);
+  const real = realDirectory(cwd);
+  const inSwarm = store.read().swarms.find((swarm) => contains(swarm.directory, real));
+  if (inSwarm) return inSwarm;
+  const projectId = await projectOfDirectory(real, context);
+  return resolveSwarm(projectId ? { projectId } : {});
 }
 
 interface ProjectScopeInput {
@@ -488,8 +546,8 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
 
   // Roster reconciliation: accepts the swarm directory, its seats and PWA together, in one commit.
   // No agent is touched; each seat's next mail brings its agent in line.
-  server.handle(directoryUpRpc, async ({ swarmId, projectId, dryRun }) => {
-    const swarm = resolveSwarm({ swarmId, projectId });
+  server.handle(directoryUpRpc, async ({ dryRun, ...scope }, context) => {
+    const swarm = await directorySwarm(scope, context);
     // Under the lock seat tools take, so up never reads a file a seat change is writing.
     const plan = await withSwarmLock(swarm.id, async () => {
       await recoverIntents(swarm.id);
@@ -509,16 +567,16 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     });
     return { swarm: swarmSummary(findSwarm(swarm.id)), plan };
   });
-  server.handle(directoryRecoverRpc, async ({ swarmId, projectId, keep }) => {
-    const swarm = resolveSwarm({ swarmId, projectId });
+  server.handle(directoryRecoverRpc, async ({ keep, ...scope }, context) => {
+    const swarm = await directorySwarm(scope, context);
     const intent = await resolveConflict(swarm.id, keep);
     return {
       swarm: swarmSummary(findSwarm(swarm.id)),
       seats: intent.changes.map((change) => agentQualifiedName(change.seat)),
     };
   });
-  server.handle(statusReadRpc, async ({ swarmId, projectId }) => {
-    const swarm = resolveSwarm({ swarmId, projectId });
+  server.handle(statusReadRpc, async (scope, context) => {
+    const swarm = await directorySwarm(scope, context);
     let unapplied: RosterPlan | null = null;
     let invalid: string | null = null;
     try {

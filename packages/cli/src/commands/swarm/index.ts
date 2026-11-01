@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { Command } from "commander";
 import type { CommandOptions, ListResult, OutputSchema, SingleResult } from "../../output/index.js";
 import { renderTable, withOutput } from "../../output/index.js";
@@ -100,7 +101,7 @@ const historySchema: OutputSchema<HistoryEntryRow> = {
 };
 
 // Seat names are unique only within a swarm; --swarm names the swarm when several use one name.
-interface SwarmOptions extends CommandOptions {
+export interface SwarmOptions extends CommandOptions {
   swarm?: string;
 }
 
@@ -324,18 +325,25 @@ function upSchema(applied: boolean): OutputSchema<DirectoryUp> {
   };
 }
 
-interface ScopeOptions extends SwarmOptions {
+export interface ScopeOptions extends SwarmOptions {
   project?: string;
 }
 
-const scope = (options: ScopeOptions) => (options.project ? { projectId: options.project } : {});
+// With no --swarm or --project, the directory the command runs in names the swarm: the swarm
+// directory it is in, or a checkout or workspace of the swarm's project. Only on a local instance:
+// a remote daemon's path can name an unrelated checkout there.
+export function directoryScope(options: ScopeOptions): { projectId?: string; cwd?: string } {
+  if (options.project) return { projectId: options.project };
+  if (options.swarm || options.daemonTarget.kind !== "instance") return {};
+  return { cwd: realpathSync(process.cwd()) };
+}
 
 async function runDirectoryUp(
   dryRun: boolean,
   options: ScopeOptions,
 ): Promise<SingleResult<DirectoryUp>> {
   const data = (await invokeSwarm(options, "swarm.directory.up", {
-    ...scope(options),
+    ...directoryScope(options),
     dryRun,
   })) as DirectoryUp;
   return { type: "single", data, schema: upSchema(!dryRun) };
@@ -380,7 +388,11 @@ async function runStatus(
   options: ScopeOptions,
   _command: Command,
 ): Promise<SingleResult<SwarmStatus>> {
-  const data = (await invokeSwarm(options, "swarm.status.read", scope(options))) as SwarmStatus;
+  const data = (await invokeSwarm(
+    options,
+    "swarm.status.read",
+    directoryScope(options),
+  )) as SwarmStatus;
   return { type: "single", data, schema: statusSchema };
 }
 
@@ -403,7 +415,7 @@ async function runRecover(
   }
   const keep = options.keepFile ? "file" : "intent";
   const data = (await invokeSwarm(options, "swarm.directory.recover", {
-    ...scope(options),
+    ...directoryScope(options),
     keep,
   })) as Recovered;
   const schema: OutputSchema<Recovered> = {

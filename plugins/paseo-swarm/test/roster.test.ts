@@ -377,3 +377,66 @@ test("up refuses a role-class change and a directory that cannot run, and change
   assert.deepEqual(findSwarm(swarm.id).source, swarm.source);
   assert.equal(seat("planner")?.role, "planner");
 });
+
+test("directory commands find the swarm from the CLI's working directory", async (t) => {
+  const { swarm } = await setup(t);
+  const home = process.env.PASEO_HOME!;
+  const checkout = join(home, "checkout");
+  const worktree = join(home, "worktrees", "w1");
+  mkdirSync(join(worktree, "src"), { recursive: true });
+  mkdirSync(join(home, "elsewhere"), { recursive: true });
+  const template = join(home, "template");
+  const project = await createSwarm({ sourceDirectory: template, projectId: "proj-1" });
+  const paseo = {
+    projects: {
+      async list() {
+        return { projects: [{ projectId: "proj-1", projectRootPath: checkout }] };
+      },
+    },
+    workspaces: {
+      async list() {
+        return {
+          entries: [{ projectId: "proj-1", workspaceDirectory: worktree }],
+          pageInfo: { nextCursor: null },
+        };
+      },
+    },
+  };
+  const handlers = new Map<string, (input: never, context: PluginHandlerContext) => unknown>();
+  registerOperations({
+    handle(contract, handler) {
+      handlers.set(contract.name, handler);
+    },
+  });
+  const statusIn = async (input: Record<string, string>) =>
+    statusReadRpc.output.parse(
+      await handlers.get(statusReadRpc.name)!(
+        statusReadRpc.input.parse(input) as never,
+        { paseo } as unknown as PluginHandlerContext,
+      ),
+    ).swarm.id;
+
+  assert.equal(await statusIn({ cwd: join(swarm.directory, "roles") }), swarm.id);
+  assert.equal(await statusIn({ cwd: join(worktree, "src") }), project.id);
+  assert.equal(await statusIn({ cwd: checkout }), project.id);
+  assert.equal(await statusIn({ swarmId: swarm.id, cwd: checkout }), swarm.id, "a flag wins");
+  await assert.rejects(
+    statusIn({ cwd: join(home, "elsewhere") }),
+    new RegExp(`Several swarms in this daemon: .*\\(${swarm.id}\\)`),
+  );
+
+  // A second swarm in the project, once a project can hold several.
+  const second = {
+    ...project,
+    id: "swarm-second",
+    name: "Second",
+    directory: join(home, "second"),
+  };
+  await store.commit(() => [{ op: "put", collection: "swarms", record: second }]);
+  await assert.rejects(
+    statusIn({ cwd: checkout }),
+    new RegExp(
+      `Several swarms in project proj-1: .*\\(${project.id}\\), Second \\(${second.id}\\)`,
+    ),
+  );
+});

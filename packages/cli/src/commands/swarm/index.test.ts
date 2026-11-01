@@ -1,6 +1,13 @@
+import { realpathSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createOutputOptions, render } from "../../output/index.js";
-import { planLines, seatHistorySchema, type RosterPlan, type SeatHistory } from "./index.js";
+import {
+  directoryScope,
+  planLines,
+  seatHistorySchema,
+  type RosterPlan,
+  type SeatHistory,
+} from "./index.js";
 
 const history: SeatHistory = {
   seat: "lead.dev",
@@ -48,5 +55,24 @@ describe("swarm diff output", () => {
       "PWA: roles/tester.md",
       "  new standing prompt at next mail for lead",
     ]);
+  });
+});
+
+describe("swarm directory scope", () => {
+  const local = { kind: "instance", home: "/home/me/.paseo" } as const;
+  const remote = { kind: "endpoint", host: "ws://build-box:6767" } as const;
+
+  it("sends the working directory to a local instance when nothing names the swarm", () => {
+    expect(directoryScope({ daemonTarget: local })).toEqual({ cwd: realpathSync(process.cwd()) });
+  });
+
+  it("lets --project and --swarm name the swarm instead", () => {
+    expect(directoryScope({ daemonTarget: local, project: "p" })).toEqual({ projectId: "p" });
+    expect(directoryScope({ daemonTarget: local, swarm: "swarm-1" })).toEqual({});
+  });
+
+  // The same path on another machine can be an unrelated checkout.
+  it("never sends the working directory to a remote daemon", () => {
+    expect(directoryScope({ daemonTarget: remote })).toEqual({});
   });
 });
