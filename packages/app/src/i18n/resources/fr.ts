@@ -427,6 +427,8 @@ export const fr: TranslationResources = {
         settings: "Paramètres",
         team: "Message d’équipe",
         runtime: "Notification d’exécution",
+        refresh: "Contexte Swarm actualisé",
+        return: "Retour au poste",
       },
       originalMessage: "Message d’origine",
     },

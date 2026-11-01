@@ -1,5 +1,5 @@
 export interface SwarmEnvelope {
-  kind: "settings" | "team" | "runtime";
+  kind: "settings" | "team" | "runtime" | "refresh" | "return";
   body: string;
 }
 
@@ -9,7 +9,11 @@ const tags = [
   { kind: "runtime", tag: "paseo-swarm-turn-digest" },
   // Runtime notices from Swarm before turn digests; still in older transcripts.
   { kind: "runtime", tag: "paseo-swarm-runtime-notification" },
+  { kind: "refresh", tag: "paseo-swarm-prompt-refresh" },
+  { kind: "return", tag: "paseo-swarm-seat-return" },
 ] as const;
+
+const settingsOpening = "<paseo-swarm-system-settings>";
 
 // Data-only envelopes carry their fields as name="value" attributes on the opening tag.
 const attributePattern = /\s+([a-z][a-z0-9-]*)="([^"\r\n]*)"/gy;
@@ -120,6 +124,14 @@ function digestBody(body: string): string {
     .join("\n\n---\n\n");
 }
 
+// A refresh is a few lines on what happened, then the re-assembled standing prompt, which starts
+// with its own settings block. The card shows the lines; the prompt stays in the original.
+function refreshBody(body: string): string {
+  const lines = body.split(/\r?\n/);
+  const prompt = lines.indexOf(settingsOpening);
+  return prompt === -1 ? body : lines.slice(0, prompt).join("\n");
+}
+
 export function parseSwarmEnvelope(text: string): SwarmEnvelope | null {
   for (const { kind, tag } of tags) {
     const opening = readOpening(text, tag);
@@ -151,6 +163,7 @@ export function parseSwarmEnvelope(text: string): SwarmEnvelope | null {
     const bodyEnd = text.length - delimiter.length;
     if (bodyEnd < opening.length) return null;
     const body = text.slice(bodyStart, Math.max(bodyStart, bodyEnd));
+    if (kind === "refresh") return { kind, body: refreshBody(body) };
     if (opening.attributes.size === 0) return { kind, body };
     if (tag === "paseo-swarm-team-message") {
       return { kind, body: teamBody(opening.attributes, body) };

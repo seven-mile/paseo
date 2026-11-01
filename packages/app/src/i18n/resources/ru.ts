@@ -424,6 +424,8 @@ export const ru: TranslationResources = {
         settings: "Настройки",
         team: "Сообщение команды",
         runtime: "Уведомление о выполнении",
+        refresh: "Контекст Swarm обновлён",
+        return: "Возврат на место",
       },
       originalMessage: "Исходное сообщение",
     },

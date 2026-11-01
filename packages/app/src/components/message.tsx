@@ -83,6 +83,7 @@ import { PlanCard } from "./plan-card";
 import {
   SwarmEnvelopeBody,
   SwarmEnvelopeOriginal,
+  swarmEnvelopeStartsExpanded,
   swarmEnvelopeTitleKeys,
   type SwarmEnvelopeCardProps,
 } from "./swarm-envelope-card";
@@ -448,7 +449,7 @@ const MESSAGE_TEXT_DATASET = { messageText: "true" };
 
 function SwarmEnvelopeMessage({ envelope, original }: SwarmEnvelopeCardProps) {
   const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(() => swarmEnvelopeStartsExpanded(envelope.kind));
   const [originalExpanded, setOriginalExpanded] = useState(false);
   const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
   const toggleOriginal = useCallback(() => setOriginalExpanded((value) => !value), []);

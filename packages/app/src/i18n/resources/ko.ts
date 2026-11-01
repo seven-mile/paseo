@@ -420,6 +420,8 @@ export const ko: TranslationResources = {
         settings: "설정",
         team: "팀 메시지",
         runtime: "런타임 알림",
+        refresh: "Swarm 컨텍스트 새로 고침",
+        return: "좌석 복귀",
       },
       originalMessage: "원본 메시지",
     },

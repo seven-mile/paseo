@@ -418,6 +418,8 @@ export const ar: TranslationResources = {
         settings: "الإعدادات",
         team: "رسالة الفريق",
         runtime: "إشعار وقت التشغيل",
+        refresh: "تحديث سياق Swarm",
+        return: "عودة إلى المقعد",
       },
       originalMessage: "الرسالة الأصلية",
     },

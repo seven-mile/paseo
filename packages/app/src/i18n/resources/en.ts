@@ -416,6 +416,8 @@ export const en = {
         settings: "Settings",
         team: "Team message",
         runtime: "Runtime notification",
+        refresh: "Swarm context refreshed",
+        return: "Returned to seat",
       },
       originalMessage: "Original message",
     },

@@ -424,6 +424,8 @@ export const ja: TranslationResources = {
         settings: "設定",
         team: "チームメッセージ",
         runtime: "実行時通知",
+        refresh: "Swarm コンテキストを更新",
+        return: "席に復帰",
       },
       originalMessage: "元のメッセージ",
     },

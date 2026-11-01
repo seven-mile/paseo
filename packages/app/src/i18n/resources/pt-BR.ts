@@ -424,6 +424,8 @@ export const ptBR: TranslationResources = {
         settings: "Configurações",
         team: "Mensagem da equipe",
         runtime: "Notificação de execução",
+        refresh: "Contexto do Swarm atualizado",
+        return: "Retorno ao posto",
       },
       originalMessage: "Mensagem original",
     },

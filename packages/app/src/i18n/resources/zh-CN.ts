@@ -418,6 +418,8 @@ export const zhCN: TranslationResources = {
         settings: "设置",
         team: "团队消息",
         runtime: "运行时通知",
+        refresh: "Swarm 上下文已刷新",
+        return: "回到席位",
       },
       originalMessage: "原始消息",
     },
