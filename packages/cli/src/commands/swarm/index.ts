@@ -265,6 +265,7 @@ export interface RosterPlan {
   restore: Array<{ seat: string; changes: string[] }>;
   update: Array<{ seat: string; changes: string[] }>;
   retire: Array<{ seat: string; tasks: string[]; queuedMessages: number }>;
+  name?: { from: string; to: string } | null;
   source: { files: string[]; prompts: string[] } | null;
   refusals: string[];
 }
@@ -280,6 +281,7 @@ interface SwarmSummary {
 export function planLines(plan: RosterPlan): string[] {
   const changes = (list: string[]) => (list.length > 0 ? `: ${list.join(", ")}` : "");
   const lines = [
+    ...(plan.name ? [`name: ${plan.name.from} → ${plan.name.to}`] : []),
     ...plan.reserve.map((entry) => `+ ${entry.seat} (${entry.role}), starts on first mail`),
     ...plan.restore.map((entry) => `↺ ${entry.seat} comes back${changes(entry.changes)}`),
     ...plan.update.map((entry) => `~ ${entry.seat}${changes(entry.changes)}`),

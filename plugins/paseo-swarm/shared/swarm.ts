@@ -33,6 +33,8 @@ export const rosterPlanSchema = z.object({
   retire: z.array(
     z.object({ seat: z.string(), tasks: z.array(z.string()), queuedMessages: z.number() }),
   ),
+  // The swarm's name, when swarm.yaml gives it a new one. Absent from older hosts.
+  name: z.object({ from: z.string(), to: z.string() }).nullable().optional(),
   // PWA files that changed, and the occupants whose standing prompt changes with them.
   source: z.object({ files: z.array(z.string()), prompts: z.array(z.string()) }).nullable(),
   refusals: z.array(z.string()),

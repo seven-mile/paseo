@@ -40,6 +40,7 @@ import { isNative, isWeb } from "@/constants/platform";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { openSwarmTasks } from "./navigation";
 import { SwarmMessageSeatSheet } from "./message-seat-sheet";
+import { swarmLabels } from "./swarm-labels";
 import { useMenuContext } from "@/components/ui/menu/menu-context";
 import {
   DropdownMenu,
@@ -923,19 +924,7 @@ function HostRoster({
       ? agents.find((agent) => agent.workspaceId === selection.workspaceId)
       : undefined;
   const planners = useMemo(() => agents.filter((agent) => agent.roleClass === "planner"), [agents]);
-  // With teams from several swarms, each planner names its swarm by its project, or by the
-  // swarm's own name when the project is unknown here.
-  const swarmLabels = useMemo(() => {
-    const labels = new Map<string, string>();
-    const swarms = query.data?.swarms ?? [];
-    if (swarms.length < 2) return labels;
-    const workspaces = [...(sessions[0]?.workspaces.values() ?? [])];
-    for (const swarm of swarms) {
-      const project = workspaces.find((workspace) => workspace.projectId === swarm.projectId);
-      labels.set(swarm.id, project?.projectCustomName || project?.projectDisplayName || swarm.name);
-    }
-    return labels;
-  }, [query.data, sessions]);
+  const labels = useMemo(() => swarmLabels(query.data?.swarms ?? []), [query.data]);
   const { orderedAgents: orderedPlanners, onDragEnd } = useOrderedSwarmAgents(
     planners,
     `swarm:planners:${plugin.serverId}`,
@@ -944,7 +933,7 @@ function HostRoster({
     ({ item: planner, drag, isActive, dragHandleProps }: DraggableRenderItemInfo<Agent>) => (
       <PlannerGroup
         planner={planner}
-        swarmLabel={planner.swarmId ? swarmLabels.get(planner.swarmId) : undefined}
+        swarmLabel={planner.swarmId ? labels.get(planner.swarmId) : undefined}
         agents={agents.filter((agent) => agent.swarmId === planner.swarmId)}
         serverId={plugin.serverId}
         selectedAgent={selectedAgent}
@@ -960,7 +949,7 @@ function HostRoster({
     ),
     [
       agents,
-      swarmLabels,
+      labels,
       plugin.serverId,
       selectedAgent,
       workspaceStates,
@@ -972,7 +961,7 @@ function HostRoster({
   const plannerExtraData = useMemo(
     () => ({
       agents,
-      swarmLabels,
+      labels,
       selectedAgent,
       workspaceStates,
       openTasks,
@@ -981,7 +970,7 @@ function HostRoster({
     }),
     [
       agents,
-      swarmLabels,
+      labels,
       selectedAgent,
       workspaceStates,
       openTasks,

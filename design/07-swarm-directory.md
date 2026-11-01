@@ -17,6 +17,7 @@ The accepted PWA files live in the swarm record (`source`), since prompts cannot
 
 ```yaml
 version: 1
+name: Review PRs
 seats:
   planner:
     role: planner
@@ -29,6 +30,7 @@ seats:
           dev: { role: developer, agent: { provider: codex/gpt-6 } } # lead.dev
 ```
 
+- `name` is the swarm's display name, the label that tells its teams apart from other swarms' in lists. Seat names are unique only within a swarm, so two swarms can both have a `planner`. A file without `name` keeps the swarm's current name, which starts as the PWA directory's folder name. Renaming never moves the directory or changes the swarm id.
 - Nesting under `team` is the reporting line, so a seat's key path is its qualified name.
 - `role` names a file in `roles/`; the role class comes from that file.
 - `agent` is the seat's agent config. A field left out is not compared.
@@ -40,7 +42,7 @@ A directory without `swarm.yaml` gets one written from the accepted seats on the
 
 ## What up does
 
-Seats match by qualified name only. The plan (`planRoster` in `plugins/paseo-swarm/server/roster.ts`) has five parts:
+Seats match by qualified name only. The plan (`planRoster` in `plugins/paseo-swarm/server/roster.ts`) has six parts:
 
 | Part    | When                                      | What happens                                                                                      |
 | ------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -48,6 +50,7 @@ Seats match by qualified name only. The plan (`planRoster` in `plugins/paseo-swa
 | update  | A seat's role or agent differs            | The seat changes; its agent follows at its next mail                                              |
 | restore | The file names a retired seat again       | That seat comes back with its Tasks, mailbox, and occupants                                       |
 | retire  | An active seat is missing from the file   | The seat retires; its queued mail fails with the reason and stays readable                        |
+| name    | `name` differs from the swarm's name      | The swarm takes the new name                                                                      |
 | source  | A file in `PWA.md` or `roles/` changed    | The new files are accepted; occupants whose standing prompt changes get it before their next mail |
 
 A rename or a move is a retirement plus a new seat. The plan lists the Tasks that name a retiring seat but does not judge them: Swarm gives Task statuses no meaning.

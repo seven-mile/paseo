@@ -36,10 +36,12 @@ describe("swarm diff output", () => {
       restore: [],
       update: [{ seat: "lead", changes: ["provider claude/opus → codex/gpt-6"] }],
       retire: [{ seat: "lead.dev", tasks: ["build"], queuedMessages: 2 }],
+      name: { from: "pr-workflow", to: "review" },
       source: { files: ["roles/tester.md"], prompts: ["lead"] },
       refusals: [],
     };
     expect(planLines(plan)).toEqual([
+      "name: pr-workflow → review",
       "+ lead.qa (tester), starts on first mail",
       "~ lead: provider claude/opus → codex/gpt-6",
       "- lead.dev retires (named by Tasks build; 2 queued messages fail)",

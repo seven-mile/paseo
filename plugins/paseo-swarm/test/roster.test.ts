@@ -109,6 +109,7 @@ const emptyPlan = {
   restore: [],
   update: [],
   retire: [],
+  name: null,
   source: null,
   refusals: [],
 };
@@ -233,6 +234,33 @@ test("up accepts the directory in one commit and never touches an agent", async 
 
   // Accepting the same directory again changes nothing.
   assert.deepEqual((await up()).plan, emptyPlan);
+});
+
+test("swarm.yaml names the swarm, and up accepts a new name like any other change", async (t) => {
+  const { swarm, up, status, file, writeFile } = await setup(t);
+
+  // The file written for a swarm carries the name it has.
+  await up(true);
+  assert.match(readFileSync(file, "utf8"), /^name: template$/m);
+
+  // A file with no name leaves the swarm's name as it is.
+  writeFile("version: 1\nseats:\n  planner: { role: planner, agent: { provider: claude/opus } }\n");
+  assert.equal((await status()).unapplied, null);
+
+  writeFile(
+    "version: 1\nname: Review PRs\nseats:\n  planner: { role: planner, agent: { provider: claude/opus } }\n",
+  );
+  assert.deepEqual((await up(true)).plan, {
+    ...emptyPlan,
+    name: { from: "template", to: "Review PRs" },
+  });
+  assert.equal(findSwarm(swarm.id).name, "template");
+  assert.equal((await up()).swarm.name, "Review PRs");
+  assert.equal(findSwarm(swarm.id).name, "Review PRs");
+  assert.equal((await status()).unapplied, null);
+
+  writeFile("version: 1\nname: ' padded'\nseats: {}\n");
+  await assert.rejects(up(true), /name/);
 });
 
 test("a seat the file drops retires; one it names again comes back with its history", async (t) => {

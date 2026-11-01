@@ -50,8 +50,16 @@ const seatNodeSchema = z.strictObject({
 });
 type SeatNode = z.infer<typeof seatNodeSchema>;
 
+// The swarm's display name: what tells it apart from other swarms in lists. Optional, since a
+// file from before names has none; the swarm then keeps the name it has.
+const swarmNameSchema = z
+  .string()
+  .max(64)
+  .regex(/^\S(?:[^\n\r]*\S)?$/, "a name is one line with no space at either end");
+
 const swarmFileSchema = z.strictObject({
   version: z.literal(1),
+  name: swarmNameSchema.optional(),
   seats: z.record(slugNameSchema, seatNodeSchema).default({}),
 });
 
@@ -66,6 +74,7 @@ export interface DesiredSeat {
 
 export interface DesiredSwarm {
   files: PwaFiles;
+  name?: string;
   seats: DesiredSeat[];
 }
 
@@ -76,6 +85,10 @@ function issues(error: z.ZodError): string {
 }
 
 export function parseSwarmFile(text: string): DesiredSeat[] {
+  return readSwarmFile(text).seats;
+}
+
+export function readSwarmFile(text: string): { name?: string; seats: DesiredSeat[] } {
   let data: unknown;
   try {
     data = parse(text);
@@ -102,12 +115,12 @@ export function parseSwarmFile(text: string): DesiredSeat[] {
     }
   };
   walk(parsed.data.seats, null);
-  return seats;
+  return { ...(parsed.data.name ? { name: parsed.data.name } : {}), seats };
 }
 
 // The file describing these seats, in roster order. A seat whose manager is not among them has
 // no place in the tree, so it is refused rather than moved, which would change its name.
-export function renderSwarmFile(seats: readonly AgentRecord[]): string {
+export function renderSwarmFile(seats: readonly AgentRecord[], name?: string): string {
   const names = new Set(seats.map(agentQualifiedName));
   const orphans = seats.filter((seat) => seat.reportsTo && !names.has(seat.reportsTo));
   if (orphans.length > 0) {
@@ -136,7 +149,7 @@ export function renderSwarmFile(seats: readonly AgentRecord[]): string {
       }),
     );
   };
-  return stringify({ version: 1, seats: tree(null) ?? {} });
+  return stringify({ version: 1, ...(name ? { name } : {}), seats: tree(null) ?? {} });
 }
 
 export function definedConfig(config: AgentConfig): AgentConfig {
@@ -147,7 +160,7 @@ export function definedConfig(config: AgentConfig): AgentConfig {
 // truth while no file exists. Seat tools otherwise edit the file in place (server/spec.ts).
 export function ensureSwarmFile(swarm: SwarmRecord, accepted: readonly AgentRecord[]): string {
   const path = join(swarm.directory, SWARM_FILE);
-  if (!existsSync(path)) replaceFile(path, renderSwarmFile(accepted));
+  if (!existsSync(path)) replaceFile(path, renderSwarmFile(accepted, swarm.name));
   return path;
 }
 
@@ -189,7 +202,7 @@ export function readDesired(swarm: SwarmRecord, accepted: readonly AgentRecord[]
   const path = ensureSwarmFile(swarm, accepted);
   const files = readPwaFiles(swarm.directory);
   assertRunnablePwa(files, swarm.directory);
-  return { files, seats: parseSwarmFile(readFileSync(path, "utf8")) };
+  return { files, ...readSwarmFile(readFileSync(path, "utf8")) };
 }
 
 // Who may report to whom. A file can only nest seats, so this is the creation rule for agents
@@ -403,9 +416,9 @@ function planRetirements(
   return changes;
 }
 
-// The PWA files that changed, with the occupants whose standing prompt changes with them; each
-// gets the new prompt before its next mail.
-function planSource(
+// The swarm's own record: a new name, and the PWA files that changed with the occupants whose
+// standing prompt changes with them; each gets the new prompt before its next mail.
+function planSwarm(
   swarm: SwarmRecord,
   desired: DesiredSwarm,
   staying: readonly AgentRecord[],
@@ -413,8 +426,19 @@ function planSource(
   plan: RosterPlan,
   now: string,
 ): SwarmChange[] {
+  const renamed = desired.name !== undefined && desired.name !== swarm.name;
+  if (renamed) plan.name = { from: swarm.name, to: desired.name! };
   const revision = pwaFilesRevision(desired.files);
-  if (revision === swarm.source.revision) return [];
+  if (revision === swarm.source.revision) {
+    if (!renamed) return [];
+    return [
+      {
+        op: "put",
+        collection: "swarms",
+        record: { ...swarm, name: desired.name!, updatedAt: now },
+      },
+    ];
+  }
   const accepted = swarm.source.files;
   const paths = new Set([...Object.keys(accepted), ...Object.keys(desired.files)]);
   plan.source = {
@@ -432,7 +456,12 @@ function planSource(
     {
       op: "put",
       collection: "swarms",
-      record: { ...swarm, source: { revision, files: { ...desired.files } }, updatedAt: now },
+      record: {
+        ...swarm,
+        ...(renamed ? { name: desired.name! } : {}),
+        source: { revision, files: { ...desired.files } },
+        updatedAt: now,
+      },
     },
   ];
 }
@@ -453,6 +482,7 @@ export function planRoster(
     restore: [],
     update: [],
     retire: [],
+    name: null,
     source: null,
     refusals: [],
   };
@@ -462,7 +492,7 @@ export function planRoster(
   const edited = new Map(named.map((record) => [record.id, record]));
   const wanted = new Set(desired.seats.map((seat) => seat.qualifiedName));
   const staying = seats.filter((seat) => !seat.retired && wanted.has(agentQualifiedName(seat)));
-  const source = planSource(swarm, desired, staying, edited, plan, now);
+  const source = planSwarm(swarm, desired, staying, edited, plan, now);
   return {
     plan,
     changes: [

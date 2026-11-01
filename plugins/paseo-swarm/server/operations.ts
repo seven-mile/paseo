@@ -525,6 +525,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       const plan = planRoster(swarm, readDesired(swarm, swarmSeats(swarm.id)), store.read()).plan;
       const empty =
         plan.source === null &&
+        !plan.name &&
         [plan.reserve, plan.restore, plan.update, plan.retire, plan.refusals].every(
           (entries) => entries.length === 0,
         );
