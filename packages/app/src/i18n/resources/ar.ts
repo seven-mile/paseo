@@ -2195,6 +2195,11 @@ export const ar: TranslationResources = {
         label: "عرض التفكير دائماً",
         description: "إظهار تفكير الوكيل وخطوات الاستدلال بشكل كامل بشكل افتراضي",
       },
+      autoExpandSwarmCards: {
+        label: "توسيع بطاقات Swarm",
+        description:
+          "اعرض إعدادات Swarm ورسائل الفريق وإشعارات التشغيل موسّعة افتراضيًا. تبدأ تحديثات السياق مطويّة دائمًا",
+      },
       toolCallDetail: {
         label: "عرض استدعاءات الأدوات",
         description: "كيفية ظهور استدعاءات الأدوات في المخطط الزمني",

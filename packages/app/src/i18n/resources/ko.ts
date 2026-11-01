@@ -2207,6 +2207,11 @@ export const ko: TranslationResources = {
         label: "추론 항상 펼치기",
         description: "에이전트의 사고 및 추론 블록을 기본적으로 모두 펼쳐 표시합니다.",
       },
+      autoExpandSwarmCards: {
+        label: "Swarm 카드 펼치기",
+        description:
+          "Swarm 설정, 팀 메시지, 런타임 알림을 기본으로 펼쳐서 표시합니다. 컨텍스트 새로 고침은 항상 접힌 상태로 시작합니다",
+      },
       toolCallDetail: {
         label: "도구 호출 표시",
         description: "타임라인에 도구 호출이 표시되는 방식",

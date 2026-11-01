@@ -37,6 +37,10 @@ export function ChatSection() {
     (autoExpandReasoning: boolean) => void updateSettings({ autoExpandReasoning }),
     [updateSettings],
   );
+  const changeAutoExpandSwarmCards = useCallback(
+    (autoExpandSwarmCards: boolean) => void updateSettings({ autoExpandSwarmCards }),
+    [updateSettings],
+  );
   const changeChatOutline = useCallback(
     (chatOutlineEnabled: boolean) => void updateSettings({ chatOutlineEnabled }),
     [updateSettings],
@@ -51,6 +55,12 @@ export function ChatSection() {
             hint={t("settings.general.autoExpandReasoning.description")}
             value={settings.autoExpandReasoning}
             onValueChange={changeAutoExpandReasoning}
+          />
+          <SettingsSwitch
+            label={t("settings.general.autoExpandSwarmCards.label")}
+            hint={t("settings.general.autoExpandSwarmCards.description")}
+            value={settings.autoExpandSwarmCards}
+            onValueChange={changeAutoExpandSwarmCards}
           />
           <SettingsSelect
             label={t("settings.general.toolCallDetail.label")}

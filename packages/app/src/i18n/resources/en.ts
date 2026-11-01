@@ -2320,6 +2320,11 @@ export const en = {
         label: "Always expand reasoning",
         description: "Show agent thinking and chain-of-thought blocks fully expanded by default",
       },
+      autoExpandSwarmCards: {
+        label: "Expand Swarm cards",
+        description:
+          "Show Swarm settings, team messages, and runtime notices expanded by default. Context refreshes always start collapsed",
+      },
       toolCallDetail: {
         label: "Tool call display",
         description: "How tool calls appear in the timeline",

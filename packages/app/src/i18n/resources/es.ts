@@ -2249,6 +2249,11 @@ export const es: TranslationResources = {
         description:
           "Mostrar los bloques de pensamiento y razonamiento del agente totalmente expandidos de forma predeterminada",
       },
+      autoExpandSwarmCards: {
+        label: "Expandir tarjetas de Swarm",
+        description:
+          "Muestra expandidos por defecto los ajustes de Swarm, los mensajes del equipo y los avisos de ejecución. Las actualizaciones de contexto siempre empiezan contraídas",
+      },
       toolCallDetail: {
         label: "Visualización de llamadas a herramientas",
         description: "Cómo aparecen las llamadas a herramientas en la cronología",

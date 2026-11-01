@@ -2170,6 +2170,10 @@ export const zhCN: TranslationResources = {
         label: "始终展开推理过程",
         description: "默认情况下完全展开 AI 的思考和推理过程",
       },
+      autoExpandSwarmCards: {
+        label: "展开 Swarm 卡片",
+        description: "默认展开显示 Swarm 设置、团队消息和运行时通知。上下文刷新始终以折叠状态开始",
+      },
       toolCallDetail: {
         label: "工具调用显示",
         description: "工具调用在时间线中的显示方式",

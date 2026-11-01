@@ -2215,6 +2215,11 @@ export const ja: TranslationResources = {
         label: "常に思考プロセスを展開",
         description: "デフォルトでAIのエージェント思考・推論ブロックを完全に展開して表示します",
       },
+      autoExpandSwarmCards: {
+        label: "Swarm カードを展開",
+        description:
+          "Swarm の設定、チームメッセージ、実行時通知を既定で展開して表示します。コンテキストの更新は常に折りたたんだ状態で始まります",
+      },
       toolCallDetail: {
         label: "ツール呼び出しの表示",
         description: "タイムラインでのツール呼び出しの表示方法",

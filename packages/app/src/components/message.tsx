@@ -88,6 +88,7 @@ import {
   type SwarmEnvelopeCardProps,
 } from "./swarm-envelope-card";
 import { parseSwarmEnvelope } from "@/swarm/system-envelope";
+import { useSettings } from "@/hooks/use-settings";
 import { useToolCallSheet } from "./tool-call-sheet";
 import { ToolCallDetailsContent } from "./tool-call-details";
 import {
@@ -449,7 +450,10 @@ const MESSAGE_TEXT_DATASET = { messageText: "true" };
 
 function SwarmEnvelopeMessage({ envelope, original }: SwarmEnvelopeCardProps) {
   const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(() => swarmEnvelopeStartsExpanded(envelope.kind));
+  const autoExpand = useSettings((settings) => settings.autoExpandSwarmCards);
+  const [expanded, setExpanded] = useState(() =>
+    swarmEnvelopeStartsExpanded(envelope.kind, autoExpand),
+  );
   const [originalExpanded, setOriginalExpanded] = useState(false);
   const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
   const toggleOriginal = useCallback(() => setOriginalExpanded((value) => !value), []);

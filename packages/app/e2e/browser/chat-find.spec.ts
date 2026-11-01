@@ -873,7 +873,7 @@ envelopeTest.describe("Metro framed UserMessage component contract", () => {
         networkGuard = await installFixtureNetworkGuard(page, testInfo);
         phase = "before fixture navigation";
         await page.goto(fixtureUrl);
-        phase = "initial expanded assertions";
+        phase = "initial collapsed, then expanded assertions";
         const row = page.locator('[data-message-id="mounted-envelope-message"]');
         const header = row.getByRole("button", { name: "Team message", exact: true });
         const originalToggle = row.getByTestId("swarm-envelope-original-toggle");
@@ -1037,6 +1037,11 @@ envelopeTest.describe("Metro framed UserMessage component contract", () => {
         await expect(row.getByTestId("swarm-envelope-card")).toHaveCount(1);
         await assertFullWidthEnvelope();
         await expect(row.getByTestId("user-message")).toHaveAttribute("aria-busy", "false");
+        // Swarm cards start collapsed unless the person chose to expand them.
+        await expect(header).toHaveAttribute("aria-expanded", "false");
+        await expect(body).toHaveCount(0);
+        await header.click();
+        await page.mouse.move(1000, 650);
         await expect(header).toHaveAttribute("aria-expanded", "true");
         await expect(originalToggle).toHaveAttribute("aria-expanded", "false");
         await expect(originalToggle).toHaveAccessibleName("Original message");

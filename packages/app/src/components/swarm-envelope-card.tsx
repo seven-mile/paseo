@@ -38,9 +38,13 @@ export const swarmEnvelopeTitleKeys = {
   return: "message.envelope.titles.return",
 } as const;
 
-// A prompt refresh is addressed to the agent and long; its title says what happened.
-export function swarmEnvelopeStartsExpanded(kind: SwarmEnvelope["kind"]): boolean {
-  return kind !== "refresh";
+// Cards start collapsed unless the person chose to expand them. A prompt refresh is addressed to
+// the agent and long, so it always starts collapsed; its title says what happened.
+export function swarmEnvelopeStartsExpanded(
+  kind: SwarmEnvelope["kind"],
+  autoExpand: boolean,
+): boolean {
+  return autoExpand && kind !== "refresh";
 }
 
 export function SwarmEnvelopeBody({ envelope }: Pick<SwarmEnvelopeCardProps, "envelope">) {
