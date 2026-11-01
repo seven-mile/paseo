@@ -167,3 +167,26 @@ export function swarmSeats(swarmId: string, includeRetired = false): AgentRecord
 export function swarmTasks(swarmId: string): Task[] {
   return store.read().tasks.filter((task) => task.swarmId === swarmId);
 }
+
+// A seat by qualified name; or by local name or alias among scopeName's reports, then in the whole
+// swarm when only one seat has it.
+export function findAgent(swarmId: string, reference: string, scopeName?: string): AgentRecord {
+  const agents = swarmSeats(swarmId);
+  const qualified = agents.filter((candidate) => agentQualifiedName(candidate) === reference);
+  if (qualified.length === 1) return qualified[0];
+
+  if (scopeName) {
+    const children = agents.filter((candidate) => candidate.reportsTo === scopeName);
+    const scoped = children.filter(
+      (candidate) => candidate.name === reference || candidate.aliases.includes(reference),
+    );
+    if (scoped.length === 1) return scoped[0];
+  }
+
+  const local = agents.filter(
+    (candidate) => candidate.name === reference || candidate.aliases.includes(reference),
+  );
+  if (local.length === 1) return local[0];
+  if (local.length > 1) throw new Error(`Ambiguous agent reference: ${reference}`);
+  throw new Error(`Unknown active agent: ${reference}`);
+}

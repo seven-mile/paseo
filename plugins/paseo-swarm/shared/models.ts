@@ -91,7 +91,15 @@ export function providerFamily(provider: string): string {
   return provider.split("/")[0];
 }
 
-// A Task id is unique within its swarm.
+// How a Task's commitment ended. Absent while the Task is open. Swarm reads only this to know a
+// Task is finished; status is the PWA's vocabulary, which Swarm never interprets. done comes from a
+// delivery that completes the Task; the others are dispositions that need no result.
+export const taskResolutionSchema = z.enum(["done", "wont-do", "duplicate", "superseded"]);
+export type TaskResolution = z.infer<typeof taskResolutionSchema>;
+
+// A Task id is unique within its swarm. managerName is the owner: the one seat responsible for
+// the Task day to day. The owner and every seat above it may change it. createdBy is provenance
+// and workerNames a record of who works on it; neither grants anything.
 export const taskSchema = z.object({
   id: slugNameSchema,
   swarmId: z.string(),
@@ -102,6 +110,12 @@ export const taskSchema = z.object({
   workerNames: z.array(z.string()),
   createdBy: z.string(),
   data: metadataSchema,
+  resolution: taskResolutionSchema.optional(),
+  duplicateOf: slugNameSchema.optional(),
+  resolvedAt: z.string().optional(),
+  // When the brief was last written. Human notes after it are instructions the owner has not yet
+  // folded into the brief. Absent on Tasks from before it was recorded.
+  briefUpdatedAt: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

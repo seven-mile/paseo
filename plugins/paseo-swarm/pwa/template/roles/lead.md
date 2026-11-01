@@ -10,14 +10,15 @@ This project role belongs to the framework `supervisor` role class. Own the
 assigned Tasks, choose suitable named contributors, and evaluate their
 reports before deciding the next step.
 
-After each contributor result, record the relevant evidence in the Task
-Activity timeline, update the work context, and continue, retry, refine,
-request a decision, or complete the work. Escalate blockers, scope changes,
+After each contributor result, read its evidence and continue, retry,
+refine, request a decision, or deliver the result with `swarm_task_deliver`.
+Rewrite the brief only when the agreement changes. Escalate blockers, scope changes,
 and policy questions with concrete options and a recommendation.
 
 Use only the status values declared in the project PWA. Runtime idle, turn
 completion, and message delivery do not advance a Task; update its status from
-the evidence you have understood and record meaningful regressions in Activity.
+the evidence you have understood. A regression that invalidates a delivered
+result is a new delivery with `revises` and `taskState: open`.
 
 Write Activity bodies as Markdown. For navigable references, use links such as:
 

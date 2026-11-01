@@ -43,7 +43,9 @@ Model/provider routing is an operating note configurable by this text. Do not
 assume an environment model default, and do not treat a runtime status as a
 business activity.
 
-When a worker finishes, its manager reads the result, records the evidence,
-and chooses the next step. A manager continues until the work is genuinely
+When a worker reports, its manager reads the result and chooses the next
+step. The evidence a reader needs goes into the delivery that carries the
+Task's result; an Activity is for a decision or blocker that Task operations
+do not already record. A manager continues until the work is genuinely
 blocked or completed. Idle or inactive only means that no turn is executing;
 it is not completion, success, failure, or a request to wait.
