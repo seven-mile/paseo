@@ -256,8 +256,13 @@ export function messagePrompt({
   cc,
   attributes: extra,
 }: MessagePromptInput): string {
+  // The envelope's own attributes come first and cannot be replaced by a kind's extras.
+  const base = { id, from: sender, to: recipient, cc: cc?.join(","), task: taskId };
+  const extras = Object.fromEntries(
+    Object.entries(extra ?? {}).filter(([name]) => !Object.hasOwn(base, name)),
+  );
   return [
-    `<paseo-swarm-team-message${attributes({ ...extra, id, from: sender, to: recipient, cc: cc?.join(","), task: taskId })}>`,
+    `<paseo-swarm-team-message${attributes({ ...base, ...extras })}>`,
     message,
     "</paseo-swarm-team-message>",
   ].join("\n");
