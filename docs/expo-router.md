@@ -17,7 +17,7 @@ Each layout owns only the routes directly inside its directory.
   `h/[serverId]/index`.
 - `packages/app/src/app/h/[serverId]/_layout.tsx` owns the host leaves with
   relative screen names: `index`, `workspace/[workspaceId]/index`,
-  `agent/[agentId]`, `sessions`, `open-project`, `settings`,
+  `agent/[agentId]`, `seat/[seatId]`, `sessions`, `open-project`, `settings`,
   `plugin/[pluginId]/[surfaceId]`, and
   `plugin/[pluginId]/[contributionKind]/[contributionId]`.
 

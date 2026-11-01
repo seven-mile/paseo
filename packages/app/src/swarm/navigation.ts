@@ -1,3 +1,4 @@
+import { router, type Href } from "expo-router";
 import { z } from "zod";
 import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
 import { useSessionStore } from "@/stores/session-store";
@@ -14,6 +15,7 @@ import {
   resolveWorkspaceMapKeyByIdentity,
 } from "@/utils/workspace-identity";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
+import { buildHostSeatRoute } from "@/utils/host-routes";
 import {
   openExplorerSidebarView,
   usesCompactExplorerSidebar,
@@ -323,4 +325,26 @@ export function openSwarmReference(input: {
       }
       break;
   }
+}
+
+/**
+ * A seat opens as its tab in the seat's workspace. A seat that has no workspace yet, because no
+ * message has started its agent, opens on its own host route until its first message places it.
+ */
+export function openSwarmSeat(input: {
+  serverId: string;
+  seatId: string;
+  workspaceId: string | null;
+  isCompact?: boolean;
+}): void {
+  if (input.isCompact) usePanelStore.getState().showMobileAgent();
+  if (input.workspaceId) {
+    navigateToWorkspace({
+      serverId: input.serverId,
+      workspaceId: input.workspaceId,
+      target: { kind: "swarm_seat", seatId: input.seatId },
+    });
+    return;
+  }
+  router.navigate(buildHostSeatRoute(input.serverId, input.seatId) as Href);
 }

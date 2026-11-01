@@ -28,6 +28,41 @@ export const fr: TranslationResources = {
       notStarted: "Non démarré",
       connectHost: "Connectez-vous à un hôte où Swarm est activé.",
     },
+    seat: {
+      tabLabel: "Poste",
+      loading: "Chargement du poste…",
+      missing: "Ce poste ne figure plus dans l'effectif.",
+      noAgent: "Pas encore d'agent",
+      occupants: "Occupants",
+      occupant: "Occupant {{number}}",
+      occupantWithProvider: "Occupant {{number}} · {{provider}}",
+      inSeat: "Au poste maintenant",
+      arriving: "Démarrage en cours",
+      left: "Parti {{time}} : {{reason}}",
+      openAgentTab: "Ouvrir {{occupant}} dans son onglet d'agent",
+      viewingPast:
+        "L'occupant {{number}} a quitté le poste {{time}}. Les messages au poste vont à son occupant actuel.",
+      backToCurrent: "Revenir à l'occupant actuel",
+      startsSeat: "Votre message démarre {{name}}.",
+      startsHint:
+        "Swarm le remet par la boîte aux lettres du poste, et le nouvel agent commence avec lui.",
+      placeholder: "Message à {{name}}",
+      pending: "S'applique à votre prochain message : {{reason}}",
+      mailQueued: "En file : remis quand l'occupant est libre",
+      mailFailed: "Non remis : {{reason}}",
+      textOnly:
+        "Les messages au poste ne contiennent que du texte. Retirez les pièces jointes pour envoyer.",
+      handover: {
+        new: "L'occupant {{to}} a pris la relève de l'occupant {{from}} {{time}} ({{reason}}).",
+        returning: "L'occupant {{to}} est revenu au poste {{time}} ({{reason}}).",
+        given: "Ce qu'il a reçu",
+        givenNew:
+          "Le prompt permanent du poste, une note de relève et le message qui l'a réveillé. La conversation de l'occupant {{from}} ne lui a pas été donnée ; il peut en parcourir la transcription avec swarm_transcript_list.",
+        givenReturning:
+          "Sa propre session, reprise : il se souvient de ses tours d'avant son départ. Il a aussi reçu une note de retour et le message qui l'a réveillé. La conversation de l'occupant {{from}} ne lui a pas été donnée.",
+        showPrevious: "Afficher l'occupant {{from}}",
+      },
+    },
     message: {
       title: "Envoyer un message à {{name}}",
       placeholder: "Écrivez un message",

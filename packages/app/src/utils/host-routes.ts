@@ -412,6 +412,15 @@ export function buildHostOpenProjectRoute(serverId: string) {
   return `${base}/open-project` as const;
 }
 
+export function buildHostSeatRoute(serverId: string, seatId: string) {
+  const base = buildHostRootRoute(serverId);
+  const normalizedSeatId = trimNonEmpty(seatId);
+  if (base === "/" || !normalizedSeatId) {
+    return "/" as const;
+  }
+  return `${base}/seat/${encodeSegment(normalizedSeatId)}` as const;
+}
+
 export function buildHostSessionsRoute(serverId: string) {
   const base = buildHostRootRoute(serverId);
   if (base === "/") {

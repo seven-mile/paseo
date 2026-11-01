@@ -11,9 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import type { EditingTextInputHandle } from "@/components/ui/text-input";
 import { useSwarmRpc } from "./rpc";
-
-// The name a person's mail carries, as a person's Activities do.
-const HUMAN_SENDER = "human";
+import { PERSON_SENDER } from "./system-envelope";
 
 const receiptSchema = z.object({
   status: z.enum(["queued", "delivered", "consumed", "failed"]),
@@ -73,7 +71,7 @@ export function SwarmMessageSeatSheet({
       const result = receiptSchema.parse(
         await invoke("swarm.message.send", {
           ...(seat.swarmId ? { swarmId: seat.swarmId } : {}),
-          senderName: HUMAN_SENDER,
+          senderName: PERSON_SENDER,
           recipientName: recipient,
           body: body.trim(),
         }),

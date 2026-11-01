@@ -21,6 +21,8 @@ export const seatSchema = agentRecordSchema.extend({
       reason: z.string(),
     })
     .nullable(),
+  // The agent the seat is bringing in, until it binds it. Absent from older hosts.
+  arrivingAgentId: z.string().nullable().optional(),
 });
 
 // What `up` does to a swarm's accepted state, or would do. Refusals stop the whole plan.

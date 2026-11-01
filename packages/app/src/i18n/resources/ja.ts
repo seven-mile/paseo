@@ -27,6 +27,40 @@ export const ja: TranslationResources = {
       notStarted: "未開始",
       connectHost: "Swarm が有効なホストに接続してください。",
     },
+    seat: {
+      tabLabel: "シート",
+      loading: "シートを読み込み中…",
+      missing: "このシートは名簿にありません。",
+      noAgent: "まだエージェントがいません",
+      occupants: "担当者",
+      occupant: "担当者 {{number}}",
+      occupantWithProvider: "担当者 {{number}} · {{provider}}",
+      inSeat: "現在の担当",
+      arriving: "起動中",
+      left: "{{time}}に離任: {{reason}}",
+      openAgentTab: "{{occupant}}をエージェントタブで開く",
+      viewingPast:
+        "担当者 {{number}} は{{time}}にシートを離れました。シートへのメッセージは現在の担当者に届きます。",
+      backToCurrent: "現在の担当者に戻る",
+      startsSeat: "メッセージを送ると {{name}} が起動します。",
+      startsHint:
+        "Swarm がシートのメールボックス経由で届け、新しいエージェントはそこから始めます。",
+      placeholder: "{{name}} にメッセージ",
+      pending: "次のメッセージで適用: {{reason}}",
+      mailQueued: "待機中: 担当者が空いたら届きます",
+      mailFailed: "未配信: {{reason}}",
+      textOnly: "シートへのメッセージはテキストのみです。送信するには添付を外してください。",
+      handover: {
+        new: "担当者 {{to}} が{{time}}に担当者 {{from}} から引き継ぎました ({{reason}})。",
+        returning: "担当者 {{to}} が{{time}}にシートに戻りました ({{reason}})。",
+        given: "渡された内容",
+        givenNew:
+          "シートの常設プロンプト、引き継ぎの概要、起こしたメッセージ。担当者 {{from}} の会話は渡されていません。swarm_transcript_list でその記録を参照できます。",
+        givenReturning:
+          "自身のセッションを再開したため、離任前のターンを覚えています。加えて復帰の概要と起こしたメッセージ。担当者 {{from}} の会話は渡されていません。",
+        showPrevious: "担当者 {{from}} を表示",
+      },
+    },
     message: {
       title: "{{name}} にメッセージ",
       placeholder: "メッセージを入力",

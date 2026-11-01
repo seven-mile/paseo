@@ -33,14 +33,13 @@ import { usePluginInstallations } from "@/plugins/registry";
 import type { InstalledPlugin } from "@/plugins/types";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 import type { Theme } from "@/styles/theme";
-import { navigateToAgent } from "@/utils/navigate-to-agent";
-import { useFetchQuery } from "@/data/query";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { isNative, isWeb } from "@/constants/platform";
 import { useIsCompactFormFactor } from "@/constants/layout";
-import { openSwarmTasks } from "./navigation";
+import { openSwarmSeat, openSwarmTasks } from "./navigation";
 import { SwarmMessageSeatSheet } from "./message-seat-sheet";
 import { plannerRowIdentities, type PlannerRowIdentity } from "./swarm-labels";
+import { useSwarmRoster, type RosterSeat } from "./roster";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useMenuContext } from "@/components/ui/menu/menu-context";
 import {
@@ -84,29 +83,7 @@ export const useSwarmSidebar = create<{ mode: Mode; setMode: (mode: Mode) => voi
   }),
 );
 
-const rosterSchema = z.object({
-  agents: z.array(
-    z.object({
-      id: z.string(),
-      swarmId: z.string().optional(),
-      // Null until the seat's first message starts its agent.
-      paseoAgentId: z.string().nullable(),
-      name: z.string(),
-      qualifiedName: z.string().optional(),
-      roleClass: z.enum(["planner", "supervisor", "worker"]),
-      reportsTo: z.string().nullable(),
-      workspaceId: z.string().nullable(),
-      retired: z.boolean(),
-      // Why the seat's agent will be replaced when mail next wakes it. Absent on older hosts.
-      pending: z.object({ kind: z.string(), reason: z.string() }).nullable().optional(),
-    }),
-  ),
-  // Absent on older hosts.
-  swarms: z
-    .array(z.object({ id: z.string(), name: z.string(), projectId: z.string().nullable() }))
-    .optional(),
-});
-type Agent = z.infer<typeof rosterSchema>["agents"][number];
+type Agent = RosterSeat;
 type WorkspaceState = Pick<SidebarWorkspaceEntry, "statusBucket" | "workspaceKind">;
 interface SwarmSidebarGestureProps {
   parentGestureRef?: MutableRefObject<GestureType | undefined>;
@@ -182,18 +159,11 @@ function PlannerGroup({
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(true);
   const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
-  // A seat with no agent yet has no chat to open; a message starts its agent.
+  // A row opens its seat whatever the occupant state; a seat with no agent yet starts one from
+  // its first message there.
   const openAgent = useCallback(
-    (agent: Agent) =>
-      agent.paseoAgentId
-        ? navigateToAgent({
-            serverId,
-            agentId: agent.paseoAgentId,
-            workspaceId: agent.workspaceId,
-            pin: true,
-          })
-        : onMessage(agent),
-    [onMessage, serverId],
+    (agent: Agent) => openSwarmSeat({ serverId, seatId: agent.id, workspaceId: agent.workspaceId }),
+    [serverId],
   );
   const supervisors = useMemo(
     () =>
@@ -868,17 +838,7 @@ function HostRoster({
     areSidebarWorkspaceSessionsEqual,
   );
   const pendingCreateAttempts = useCreateFlowStore((state) => state.pendingByDraftId);
-  const query = useFetchQuery(
-    {
-      queryKey: ["swarm", "roster", plugin.serverId],
-      queryFn: async () =>
-        rosterSchema.parse(await plugin.invoke("swarm.board.read", { includeReserved: true })),
-      refetchInterval: 3000,
-      dataShape: "value",
-      staleTimeMs: 2500,
-    },
-    plugin.queryClient,
-  );
+  const query = useSwarmRoster(plugin);
   const workspaceStates = useMemo(() => {
     const states = new Map<string, WorkspaceState>();
     const session = sessions[0];

@@ -17,6 +17,22 @@ describe("New tab identity", () => {
   });
 });
 
+describe("Swarm seat tab identity", () => {
+  test("is the seat, whichever agent occupies it", () => {
+    const target = normalizeWorkspaceTabTarget({ kind: "swarm_seat", seatId: " seat-1 " });
+
+    expect(target).toEqual({ kind: "swarm_seat", seatId: "seat-1" });
+    expect(
+      target && workspaceTabTargetsEqual(target, { kind: "swarm_seat", seatId: "seat-1" }),
+    ).toBe(true);
+    expect(workspaceTabTargetsEqual(target!, { kind: "swarm_seat", seatId: "seat-2" })).toBe(false);
+    expect(buildDeterministicWorkspaceTabId({ kind: "swarm_seat", seatId: "seat-1" })).toBe(
+      "swarm_seat_seat-1",
+    );
+    expect(normalizeWorkspaceTabTarget({ kind: "swarm_seat", seatId: "  " })).toBeNull();
+  });
+});
+
 describe("provider subagent tab identity", () => {
   test("normalizes and compares the parent and provider child as one tab identity", () => {
     const target = normalizeWorkspaceTabTarget({
