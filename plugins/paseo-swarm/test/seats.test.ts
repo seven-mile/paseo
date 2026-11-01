@@ -75,7 +75,11 @@ function fakePaseo() {
   const runtime = new Map<string, Runtime>();
   const calls: string[] = [];
   const sends: Array<{ agentId: string; text: string }> = [];
-  const creations: Array<{ workspaceId: string; config: Record<string, unknown> }> = [];
+  const creations: Array<{
+    workspaceId: string;
+    config: Record<string, unknown>;
+    labels?: Record<string, string>;
+  }> = [];
   const timeline: Array<{ seq: number; item: Record<string, unknown> }> = [];
   const applied: Array<{ agentId: string; config: Record<string, unknown> }> = [];
   const failSend = new Set<string>();
@@ -151,12 +155,16 @@ function fakePaseo() {
         ref(workspaceId: string) {
           return {
             agents: {
-              async create(creation: { agentId: string; config: Record<string, unknown> }) {
+              async create(creation: {
+                agentId: string;
+                config: Record<string, unknown>;
+                labels?: Record<string, string>;
+              }) {
                 if (failCreate) throw new Error(failCreate);
                 const id = creation.agentId;
                 createdIds.push(id);
                 openedIn.push([id, seatOfAgent(id)?.name]);
-                creations.push({ workspaceId, config: creation.config });
+                creations.push({ workspaceId, config: creation.config, labels: creation.labels });
                 runtime.set(id, {
                   status: "idle",
                   provider: "fast",
@@ -447,6 +455,8 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   const replaced = seat(supervisor.id);
   assert.equal(replaced.paseoAgentId, fake.created(1));
   assert.equal(planSeat(replaced).kind, "keep");
+  // Swarm declares its agents' tab close layout-only, so closing a tab never archives them.
+  assert.equal(fake.creations.at(-1)?.labels?.["paseo.tab-close"], "layout-only");
   // Nothing of the old provider carries over, including the thinking option the old agent ran.
   assert.deepEqual(replaced.occupant?.config, { provider: "fast/small", modeId: "build" });
   assert.equal(replaced.occupant?.number, 2);

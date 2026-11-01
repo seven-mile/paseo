@@ -40,9 +40,16 @@ const PARENT_LABEL = "paseo.parent-agent-id";
 // reads it to keep native agent tools from a seat's agent when it cannot reach Swarm to look the
 // seat up.
 const SEAT_LABEL = "paseo-swarm.seat";
+// Swarm owns its agents' lifecycle, so closing one's tab only changes the layout: the agent and
+// its runtime outlive the tab, and Stop and Archive stay explicit. The label stays when the agent
+// leaves its seat, since Swarm still manages its history. Paseo's TAB_CLOSE_LABEL contract.
+const TAB_CLOSE_LABEL = "paseo.tab-close";
 
 function seatLabels(seat: AgentRecord): Record<string, string> {
-  return { [SEAT_LABEL]: `${swarmOf(seat).id}/${agentQualifiedName(seat)}` };
+  return {
+    [SEAT_LABEL]: `${swarmOf(seat).id}/${agentQualifiedName(seat)}`,
+    [TAB_CLOSE_LABEL]: "layout-only",
+  };
 }
 
 const now = () => new Date().toISOString();

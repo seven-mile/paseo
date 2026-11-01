@@ -148,6 +148,8 @@ These are two distinct concepts that used to be conflated:
 
 Closing a tab on a **root agent** still archives — the tab is the agent's home, so closing it means "I'm done with this agent." A confirm dialog protects against archiving a running agent by accident.
 
+A root agent whose lifecycle something else manages declares `paseo.tab-close=layout-only` (`TAB_CLOSE_LABEL` in `packages/protocol/src/agent-labels.ts`). Closing its tab is then layout-only, as for a subagent: the agent and its runtime keep going, and Stop and Archive stay explicit actions. The app reads only the label, so it never needs the manager running to decide. Swarm sets it on every agent it starts for a seat and leaves it on past occupants.
+
 Closing a tab on a **subagent** (any agent with `parentAgentId`) is **layout-only**. The app clears the current client's open-tab label before removing the tab. Another client's open tab remains protected. The agent stays unarchived and stays in its parent's track, so a later parent archive cascades to it when no client still has it open. The user can re-open the tab from the track at any time. Single and bulk tab close apply the same policy.
 
 The asymmetry is intentional: a subagent's persistent relationship lives in the parent's track. Same-workspace subagents are not auto-opened as tabs; the user opens one from that track when needed. A cross-workspace subagent is also auto-opened as a tab in its own workspace so opening that workspace does not appear empty. It remains in the parent's track until it is actually detached.
