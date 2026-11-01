@@ -110,6 +110,9 @@ export const boardReadRpc = defineRpc({
     swarms: z
       .array(z.object({ id: z.string(), name: z.string(), projectId: z.string().nullable() }))
       .optional(),
+    // Swarm features this host supports. A client offers a feature only when its name is here;
+    // absent on hosts from before the list. "cc": messages and human notes take a cc list.
+    features: z.array(z.string()).optional(),
   }),
 });
 

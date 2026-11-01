@@ -83,6 +83,12 @@ const taskSchema = z.object({
   workerNames: z.array(z.string()),
   createdBy: z.string(),
   updatedAt: z.string(),
+  // Absent while the Task is open, and on hosts from before resolutions.
+  resolution: z.string().optional(),
+  duplicateOf: z.string().optional(),
+  resolvedAt: z.string().optional(),
+  // When the brief last changed; absent on hosts from before it was recorded.
+  briefUpdatedAt: z.string().optional(),
 });
 const activitySchema = z.object({
   id: z.string(),
@@ -106,6 +112,8 @@ export const swarmTaskBoardSchema = z.object({
   agents: z.array(agentSchema),
   tasks: z.array(taskSchema),
   activities: z.array(activitySchema),
+  // Swarm features the host supports; absent on hosts from before the list.
+  features: z.array(z.string()).optional(),
 });
 export type SwarmTaskBoard = z.infer<typeof swarmTaskBoardSchema>;
 export type SwarmTask = SwarmTaskBoard["tasks"][number];
@@ -316,6 +324,50 @@ export function scopedSwarmTasks(
     );
 }
 
+const DELIVERY = "delivery";
+
+// The Task's result is its newest delivery. A delivery that a later one revises stays in the
+// history, marked as revised.
+export function swarmTaskResult(activities: readonly SwarmActivity[]) {
+  const deliveries = activities.filter((activity) => activity.kind === DELIVERY);
+  const revised = new Set(
+    deliveries
+      .map((activity) => activity.data.revises)
+      .filter((id): id is string => typeof id === "string"),
+  );
+  return { latest: deliveries.at(-1) ?? null, revised };
+}
+
+// Human notes newer than the brief: instructions its owner has not yet written into it.
+export function notesNotInBrief(
+  task: Pick<SwarmTask, "briefUpdatedAt">,
+  activities: readonly SwarmActivity[],
+) {
+  const since = task.briefUpdatedAt;
+  if (!since) return new Set<string>();
+  return new Set(
+    activities
+      .filter((activity) => activity.actorKind === "human" && activity.createdAt > since)
+      .map((activity) => activity.id),
+  );
+}
+
+// A person's message to a seat copies the seat's manager by default, so the manager sees
+// direction given to its report.
+export function defaultSwarmCc(
+  agents: readonly Pick<SwarmTaskAgent, "name" | "qualifiedName" | "reportsTo" | "retired">[],
+  recipient: string,
+): string[] {
+  const seat = agents.find(
+    (agent) => !agent.retired && (agent.qualifiedName ?? agent.name) === recipient,
+  );
+  if (!seat?.reportsTo) return [];
+  const manager = agents.find(
+    (agent) => !agent.retired && (agent.qualifiedName ?? agent.name) === seat.reportsTo,
+  );
+  return manager ? [seat.reportsTo] : [];
+}
+
 export function unansweredChoices(activities: readonly SwarmActivity[]) {
   const answered = new Set(
     activities
@@ -333,10 +385,18 @@ export interface HumanActivityInput {
   replyTo: string | null;
   responseProfile: SwarmResponseProfile | null;
   data: { selectedOption?: string };
+  cc: string[];
 }
 
-export function openSwarmReply(taskId: string, initialActivities: readonly SwarmActivity[]) {
+export function openSwarmReply(
+  taskId: string,
+  initialActivities: readonly SwarmActivity[],
+  initialCc: readonly string[] = [],
+) {
   let activities = initialActivities;
+  // The Cc the composer offers until the person edits it; the owner can change under it.
+  let defaultCc = [...initialCc];
+  let ccEdited = false;
   let closed = false;
   let submissionError: (() => string) | null = null;
   const listeners = new Set<() => void>();
@@ -345,6 +405,7 @@ export function openSwarmReply(taskId: string, initialActivities: readonly Swarm
     replyTo: null as string | null,
     selectedOption: null as string | null,
     responseProfile: "decision" as SwarmResponseProfile,
+    cc: [...initialCc],
     pending: false,
     error: null as string | null,
     notificationWarning: null as string | null,
@@ -385,6 +446,7 @@ export function openSwarmReply(taskId: string, initialActivities: readonly Swarm
       replyTo: state.replyTo,
       responseProfile: state.responseProfile,
       data: option ? { selectedOption: option.id } : {},
+      cc: state.cc,
     };
   }
   function publish(next: typeof state) {
@@ -437,6 +499,21 @@ export function openSwarmReply(taskId: string, initialActivities: readonly Swarm
         error: null,
       });
     },
+    applyDefaultCc(next: readonly string[]) {
+      if (closed) return;
+      defaultCc = [...next];
+      if (!ccEdited && !state.pending) publish({ ...state, cc: [...defaultCc] });
+    },
+    removeCc(name: string) {
+      if (state.pending) return;
+      ccEdited = true;
+      publish({ ...state, cc: state.cc.filter((entry) => entry !== name) });
+    },
+    restoreCc() {
+      if (state.pending) return;
+      ccEdited = false;
+      publish({ ...state, cc: [...defaultCc] });
+    },
     setProfile(responseProfile: SwarmResponseProfile) {
       if (!state.pending) {
         submissionError = null;
@@ -463,11 +540,13 @@ export function openSwarmReply(taskId: string, initialActivities: readonly Swarm
       publish({ ...state, pending: true });
       try {
         const receipt = await send(input);
+        ccEdited = false;
         publish({
           ...state,
           body: "",
           replyTo: null,
           selectedOption: null,
+          cc: [...defaultCc],
           pending: false,
           error: null,
           notificationWarning: receipt?.notificationWarning ?? null,
@@ -508,12 +587,12 @@ export function openSwarmTaskSurfaceState() {
       statuses: [] as string[],
       search: "",
     },
-    detail(taskId: string, activities: readonly SwarmActivity[]) {
+    detail(taskId: string, activities: readonly SwarmActivity[], cc: readonly string[] = []) {
       if (closed) throw new Error("Tasks tab state is closed");
       let detail = details.get(taskId);
       if (!detail) {
         detail = {
-          model: openSwarmReply(taskId, activities),
+          model: openSwarmReply(taskId, activities, cc),
           actor: "",
           referenceUnavailable: false,
           selection: null,

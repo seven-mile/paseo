@@ -43,13 +43,16 @@ import {
   useWorkspaceFields,
   useWorkspaceStructure,
 } from "@/stores/session-store-hooks";
+import { SwarmCcLine } from "./cc-line";
 import { useSwarmRpc } from "./rpc";
 import {
   activityChoice,
+  defaultSwarmCc,
   defaultSwarmTaskScope,
   findSwarmTaskAgent,
   filterSwarmTasks,
   isSwarmActivitySubmitShortcut,
+  notesNotInBrief,
   openSwarmTaskSurfaceState,
   responseProfiles,
   resolveSwarmTaskReference,
@@ -58,6 +61,7 @@ import {
   swarmHumanActivityReceiptSchema,
   swarmTaskScopeOptions,
   swarmTaskColumns,
+  swarmTaskResult,
   unansweredChoices,
   type SwarmActivity,
   type SwarmTask,
@@ -83,6 +87,9 @@ export interface SwarmTaskSurfaceProps {
 }
 
 const FLEX_STYLE = { flex: 1 };
+const NO_CC: string[] = [];
+// Swarm writes these itself when a Task operation changes it; they read as one line of history.
+const CHANGE_KIND = "change";
 const TaskMarkdown = memo(MarkdownRenderer);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const spinnerMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
@@ -825,6 +832,7 @@ function TaskRow({
       </Text>
       <View style={styles.rowMeta}>
         <StatusBadge label={task.status} />
+        {task.resolution ? <ResolutionBadge resolution={task.resolution} /> : null}
         <Text style={styles.meta} numberOfLines={1}>
           {task.managerName}
         </Text>
@@ -869,7 +877,8 @@ function TaskDetail({
     () => board.activities.filter((activity) => activity.taskId === task.id),
     [board.activities, task.id],
   );
-  const [detail] = useState(() => retainedState.detail(task.id, activities));
+  const { ccSupported, defaultCc } = useTaskCc(board, task.managerName);
+  const [detail] = useState(() => retainedState.detail(task.id, activities, defaultCc));
   const model = detail.model;
   const reply = useSyncExternalStore(model.subscribe, model.getState, model.getState);
   const editor = useRef<EditingTextInputHandle>(null);
@@ -987,6 +996,11 @@ function TaskDetail({
     model.applyActivities(activities);
   }, [activities, model]);
   useEffect(() => {
+    model.applyDefaultCc(defaultCc);
+  }, [defaultCc, model]);
+  const result = useMemo(() => swarmTaskResult(activities), [activities]);
+  const unbriefed = useMemo(() => notesNotInBrief(task, activities), [task, activities]);
+  useEffect(() => {
     model.refreshTranslations();
   }, [model, t]);
 
@@ -1037,9 +1051,14 @@ function TaskDetail({
     const viewRevision = committedView.current.revision;
     let savedReceiptId: string | null = null;
     const sent = await model.submit(async (input) => {
+      const { cc, ...note } = input;
       const receipt = swarmHumanActivityReceiptSchema.parse(
         // Task ids are unique only within a swarm.
-        await invoke("swarm.activity.append_human", { ...input, swarmId: task.swarmId }),
+        await invoke("swarm.activity.append_human", {
+          ...note,
+          ...(cc.length > 0 ? { cc } : {}),
+          swarmId: task.swarmId,
+        }),
       );
       savedReceiptId = receipt.id;
       return receipt;
@@ -1115,21 +1134,13 @@ function TaskDetail({
         contentContainerStyle={styles.detailContent}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.rowMeta}>
-          <Text style={styles.title}>{task.title}</Text>
-          <StatusBadge label={task.status} />
-        </View>
-        <Text style={styles.meta}>{task.id}</Text>
-        <TaskMarkdown text={task.brief} compact onLinkPress={openLink} />
-        <View style={styles.participants}>
-          <Text style={styles.meta}>{t("swarm.tasks.manager")}</Text>
-          <PersonButton name={task.managerName} onOpen={openAgent} />
-          <Text style={styles.meta}>{t("swarm.tasks.createdBy")}</Text>
-          <PersonButton name={task.createdBy} onOpen={openAgent} />
-          {task.workerNames.map((name) => (
-            <PersonButton key={name} name={name} onOpen={openAgent} />
-          ))}
-        </View>
+        <TaskSummary
+          task={task}
+          result={result}
+          unbriefedCount={unbriefed.size}
+          onOpenActor={openAgent}
+          onLinkPress={openLink}
+        />
         <SettingsSection title={t("swarm.tasks.activity")} flush trailing={actorFilter}>
           {visible.length === 0 ? (
             <Text style={styles.meta}>{t("swarm.tasks.emptyActivity")}</Text>
@@ -1138,6 +1149,8 @@ function TaskDetail({
               <ActivityRow
                 key={activity.id}
                 activity={activity}
+                revised={result.revised.has(activity.id)}
+                notInBrief={unbriefed.has(activity.id)}
                 canChoose={choices.some((choice) => choice.id === activity.id)}
                 selectedOption={reply.replyTo === activity.id ? reply.selectedOption : null}
                 onReply={model.replyTo}
@@ -1169,6 +1182,16 @@ function TaskDetail({
           <Text style={styles.meta} accessibilityRole="alert">
             {t("swarm.tasks.notificationFailed", { reason: reply.notificationWarning })}
           </Text>
+        ) : null}
+        {ccSupported ? (
+          <SwarmCcLine
+            recipient={task.managerName}
+            cc={reply.cc}
+            defaultCc={defaultCc}
+            disabled={reply.pending}
+            onRemove={model.removeCc}
+            onRestore={model.restoreCc}
+          />
         ) : null}
         <Field
           label={
@@ -1224,6 +1247,8 @@ function TaskDetail({
 
 function ActivityRow({
   activity,
+  revised,
+  notInBrief,
   canChoose,
   selectedOption,
   onReply,
@@ -1232,6 +1257,8 @@ function ActivityRow({
   onLinkPress,
 }: {
   activity: SwarmActivity;
+  revised: boolean;
+  notInBrief: boolean;
   canChoose: boolean;
   selectedOption: string | null;
   onReply: (id: string, option?: string | null) => void;
@@ -1242,6 +1269,17 @@ function ActivityRow({
   const { t } = useTranslation();
   const choice = activityChoice(activity);
   const reply = useCallback(() => onReply(activity.id), [onReply, activity.id]);
+  const revises = typeof activity.data.revises === "string" ? activity.data.revises : null;
+  if (activity.kind === CHANGE_KIND) {
+    return (
+      <View style={styles.change} testID={`swarm-activity-${activity.id}`}>
+        <Text style={styles.meta}>
+          {activity.actorName} · {new Date(activity.createdAt).toLocaleString()}
+        </Text>
+        <TaskMarkdown text={activity.body} compact onLinkPress={onLinkPress} />
+      </View>
+    );
+  }
   return (
     <View style={styles.activity} testID={`swarm-activity-${activity.id}`}>
       <View style={styles.activityHeader}>
@@ -1251,9 +1289,13 @@ function ActivityRow({
           <Text style={styles.primary}>{activity.actorName}</Text>
         )}
         <Text style={styles.meta}>
-          {activity.kind}
+          {activity.kind === "delivery" ? t("swarm.tasks.result") : activity.kind}
           {activity.responseProfile ? ` · ${activity.responseProfile}` : ""}
         </Text>
+        {revised ? <StatusBadge size="xs" label={t("swarm.tasks.revised")} /> : null}
+        {notInBrief ? (
+          <StatusBadge size="xs" variant="warning" label={t("swarm.tasks.notInBrief")} />
+        ) : null}
         <Button
           variant="ghost"
           size="xs"
@@ -1267,6 +1309,7 @@ function ActivityRow({
       <Text style={styles.meta}>
         {new Date(activity.createdAt).toLocaleString()}
         {activity.replyTo ? ` · ${t("swarm.tasks.replyToActivity", { id: activity.replyTo })}` : ""}
+        {revises ? ` · ${t("swarm.tasks.revises", { id: revises })}` : ""}
       </Text>
       <TaskMarkdown text={activity.body} compact onLinkPress={onLinkPress} />
       {choice && canChoose ? (
@@ -1285,6 +1328,106 @@ function ActivityRow({
         </View>
       ) : null}
     </View>
+  );
+}
+
+// A note on a Task goes to its owner; on hosts that take a Cc, it copies the owner's manager.
+function useTaskCc(board: SwarmTaskBoard, owner: string) {
+  const ccSupported = board.features?.includes("cc") ?? false;
+  const key = ccSupported ? defaultSwarmCc(board.agents, owner).join("\n") : "";
+  const defaultCc = useMemo(() => (key ? key.split("\n") : NO_CC), [key]);
+  return { ccSupported, defaultCc };
+}
+
+// The Task as agreed and as delivered: brief, current result, and the seats on it.
+function TaskSummary({
+  task,
+  result,
+  unbriefedCount,
+  onOpenActor,
+  onLinkPress,
+}: {
+  task: SwarmTask;
+  result: ReturnType<typeof swarmTaskResult>;
+  unbriefedCount: number;
+  onOpenActor: (name: string) => void;
+  onLinkPress: (uri: string) => boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <View style={styles.rowMeta}>
+        <Text style={styles.title}>{task.title}</Text>
+        <StatusBadge label={task.status} />
+        {task.resolution ? <ResolutionBadge resolution={task.resolution} /> : null}
+      </View>
+      <Text style={styles.meta}>
+        {task.id}
+        {task.duplicateOf ? ` · ${t("swarm.tasks.duplicateOf", { id: task.duplicateOf })}` : ""}
+      </Text>
+      <TaskMarkdown text={task.brief} compact onLinkPress={onLinkPress} />
+      {unbriefedCount > 0 ? (
+        <Text style={styles.meta} testID="swarm-task-notes-not-in-brief">
+          {t("swarm.tasks.notesNotInBrief", { count: unbriefedCount })}
+        </Text>
+      ) : null}
+      {result.latest ? (
+        <TaskResult
+          delivery={result.latest}
+          revised={result.revised.has(result.latest.id)}
+          onOpenActor={onOpenActor}
+          onLinkPress={onLinkPress}
+        />
+      ) : null}
+      <View style={styles.participants}>
+        <Text style={styles.meta}>{t("swarm.tasks.owner")}</Text>
+        <PersonButton name={task.managerName} onOpen={onOpenActor} />
+        <Text style={styles.meta}>{t("swarm.tasks.createdBy")}</Text>
+        <PersonButton name={task.createdBy} onOpen={onOpenActor} />
+        {task.workerNames.map((name) => (
+          <PersonButton key={name} name={name} onOpen={onOpenActor} />
+        ))}
+      </View>
+    </>
+  );
+}
+
+function ResolutionBadge({ resolution }: { resolution: string }) {
+  const { t } = useTranslation();
+  return (
+    <StatusBadge
+      variant={resolution === "done" ? "success" : "muted"}
+      label={t(`swarm.tasks.resolutions.${resolution}`, { defaultValue: resolution })}
+    />
+  );
+}
+
+// The Task's newest delivery, shown above the history as its current result.
+function TaskResult({
+  delivery,
+  revised,
+  onOpenActor,
+  onLinkPress,
+}: {
+  delivery: SwarmActivity;
+  revised: boolean;
+  onOpenActor: (name: string) => void;
+  onLinkPress: (uri: string) => boolean;
+}) {
+  const { t } = useTranslation();
+  const stage = delivery.data.taskState === "open";
+  return (
+    <SurfaceCard style={styles.result} testID="swarm-task-result">
+      <View style={styles.activityHeader}>
+        <Text style={styles.primary}>
+          {stage ? t("swarm.tasks.stageResult") : t("swarm.tasks.result")}
+        </Text>
+        {revised ? <StatusBadge size="xs" label={t("swarm.tasks.revised")} /> : null}
+        <PersonButton name={delivery.actorName} onOpen={onOpenActor} />
+        <Text style={styles.meta}>{new Date(delivery.createdAt).toLocaleString()}</Text>
+      </View>
+      <TaskMarkdown text={delivery.body} compact onLinkPress={onLinkPress} />
+    </SurfaceCard>
   );
 }
 
@@ -1430,6 +1573,12 @@ const styles = StyleSheet.create((theme) => ({
     flexWrap: "wrap",
     gap: theme.spacing[2],
   },
+  change: {
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+    paddingBottom: theme.spacing[2],
+  },
+  result: { padding: theme.spacing[3], gap: theme.spacing[1] },
   choices: { gap: theme.spacing[2], paddingVertical: theme.spacing[2] },
   choice: { alignItems: "flex-start", gap: theme.spacing[1] },
   receiptLayoutMarker: { position: "absolute", bottom: 0, width: 0, height: 0 },

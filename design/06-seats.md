@@ -64,7 +64,7 @@ A new occupant recovers from three sources:
 
 Workspace facts such as git status are not fed to the new agent. They live in the workspace, which the new agent shares, and the business record lives in Tasks and Activities.
 
-The takeover brief tells the occupant its number, why its predecessor was replaced, that the record is the source of truth, that transcripts are claims to check, and that its first turn ends with a takeover report to its manager (or an Activity, for a planner). The return brief tells a revived occupant who held the seat meanwhile and to read its seat and Tasks before acting. Activities record `actorOccupant`, so the work of a degraded occupant can be found after the fact.
+The takeover brief tells the occupant its number, why its predecessor was replaced, that the record is the source of truth, that transcripts are claims to check, and that its first turn ends with a takeover report to its manager (or, for a planner, a reply to the human). The return brief tells a revived occupant who held the seat meanwhile and to read its seat and Tasks before acting. Activities record `actorOccupant`, so the work of a degraded occupant can be found after the fact.
 
 A new occupant starts a new provider session, so no conversation state carries over. A provider that encrypts reasoning content cannot poison its successor on another provider.
 

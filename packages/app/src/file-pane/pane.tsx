@@ -18,7 +18,7 @@ import { filePreviewRenderKind } from "@/components/file-pane-render-mode";
 import { useAttachmentPreviewUrl } from "@/attachments/use-attachment-preview-url";
 import { getFileNameFromPath } from "@/attachments/utils";
 import { resolveFilePreviewReadTarget } from "@/file-explorer/preview-target";
-import type { WorkspaceFileLocation } from "@/workspace/file-open";
+import type { WorkspaceFileLocation, WorkspaceFileOpenRequest } from "@/workspace/file-open";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { useAppActivelyVisible } from "@/hooks/use-app-visible";
 import { isFileQueryEnabled } from "@/components/file-pane-enabled";
@@ -29,7 +29,8 @@ import { useFilePreview } from "./preview-lifecycle/hook";
 import { resolveFilePreviewLifecycle } from "./preview-lifecycle/model";
 import { FilePanelBar } from "./bar";
 import { FileHtmlPreview } from "./html-preview";
-import { FileMarkdownPreview } from "./markdown-preview";
+import { FileMarkdownPreview, MarkdownPreviewLinkContext } from "./markdown-preview";
+import { resolveMarkdownFileLink } from "./markdown-preview/links";
 import { FileEditorModel, getFileConflictCallout, type FileConflictCallout } from "./editor/model";
 import { createFileObservationSource } from "./editor/observation-source";
 import { FileEditorView } from "./editor/view";
@@ -224,11 +225,13 @@ export function FilePane({
   workspaceRoot,
   location,
   navigationRevision,
+  onOpenWorkspaceFile,
 }: {
   serverId: string;
   workspaceRoot: string;
   location: WorkspaceFileLocation;
   navigationRevision: number;
+  onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const { t } = useTranslation();
   const isMobile = useIsCompactFormFactor();
@@ -294,29 +297,45 @@ export function FilePane({
     previewLifecycle.status === "read_pending" ||
     previewLifecycle.status === "preparing";
 
+  const openMarkdownLink = useCallback(
+    (href: string) => {
+      const target = resolveMarkdownFileLink({
+        href,
+        documentPath: location.path,
+        workspaceRoot: normalizedWorkspaceRoot,
+      });
+      if (!target || !onOpenWorkspaceFile) return true;
+      onOpenWorkspaceFile({ location: target, disposition: "main" });
+      return false;
+    },
+    [location.path, normalizedWorkspaceRoot, onOpenWorkspaceFile],
+  );
+
   return (
-    <FilePanePresentation
-      serverId={serverId}
-      client={client}
-      readTarget={readTarget}
-      preview={preview}
-      liveFile={liveFile.model}
-      onRetryRead={liveFile.refresh}
-      retryingRead={liveFile.isRetrying}
-      retryLabel={t("common.actions.retry")}
-      filename={getFileNameFromPath(location.path) ?? location.path}
-      previewMode={canTogglePreviewMode ? previewMode : undefined}
-      onPreviewModeChange={canTogglePreviewMode ? setPreviewMode : undefined}
-      lineCount={lineCount}
-      editable={editable}
-      disconnectedMessage={t("workspace.terminal.hostDisconnected")}
-      errorMessage={errorMessage}
-      isLoading={isLoading}
-      isMobile={isMobile}
-      location={location}
-      navigationRevision={navigationRevision}
-      imagePreviewUri={imagePreviewUri}
-    />
+    <MarkdownPreviewLinkContext.Provider value={openMarkdownLink}>
+      <FilePanePresentation
+        serverId={serverId}
+        client={client}
+        readTarget={readTarget}
+        preview={preview}
+        liveFile={liveFile.model}
+        onRetryRead={liveFile.refresh}
+        retryingRead={liveFile.isRetrying}
+        retryLabel={t("common.actions.retry")}
+        filename={getFileNameFromPath(location.path) ?? location.path}
+        previewMode={canTogglePreviewMode ? previewMode : undefined}
+        onPreviewModeChange={canTogglePreviewMode ? setPreviewMode : undefined}
+        lineCount={lineCount}
+        editable={editable}
+        disconnectedMessage={t("workspace.terminal.hostDisconnected")}
+        errorMessage={errorMessage}
+        isLoading={isLoading}
+        isMobile={isMobile}
+        location={location}
+        navigationRevision={navigationRevision}
+        imagePreviewUri={imagePreviewUri}
+      />
+    </MarkdownPreviewLinkContext.Provider>
   );
 }
 

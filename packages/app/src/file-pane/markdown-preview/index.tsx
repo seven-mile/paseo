@@ -1,11 +1,17 @@
-import { useMemo } from "react";
+import { createContext, useContext, useMemo } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { parseMarkdownPreviewDocument } from "./document";
 
+// The file pane's handler for links in the previewed document; returns false when it handled one.
+export const MarkdownPreviewLinkContext = createContext<((href: string) => boolean) | undefined>(
+  undefined,
+);
+
 export function FileMarkdownPreview({ source }: { source: string }) {
   const document = useMemo(() => parseMarkdownPreviewDocument(source), [source]);
+  const onLinkPress = useContext(MarkdownPreviewLinkContext);
 
   return (
     <View style={styles.outerGutter}>
@@ -31,7 +37,7 @@ export function FileMarkdownPreview({ source }: { source: string }) {
             ))}
           </View>
         ) : null}
-        <MarkdownRenderer text={document.body} />
+        <MarkdownRenderer text={document.body} onLinkPress={onLinkPress} />
       </View>
     </View>
   );

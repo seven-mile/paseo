@@ -105,6 +105,8 @@ const rosterSchema = z.object({
   swarms: z
     .array(z.object({ id: z.string(), name: z.string(), projectId: z.string().nullable() }))
     .optional(),
+  // Swarm features the host supports; absent on older hosts.
+  features: z.array(z.string()).optional(),
 });
 type Agent = z.infer<typeof rosterSchema>["agents"][number];
 type WorkspaceState = Pick<SidebarWorkspaceEntry, "statusBucket" | "workspaceKind">;
@@ -1028,6 +1030,7 @@ function HostRoster({
       <SwarmMessageSeatSheet
         serverId={plugin.serverId}
         seat={messageTarget}
+        ccSupported={query.data?.features?.includes("cc") ?? false}
         onClose={closeMessage}
         onSent={retry}
       />

@@ -457,6 +457,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         name: swarm.name,
         projectId: swarm.projectId,
       })),
+      features: ["cc"],
     };
     if (!projectId && !swarmId) return board;
     if (swarms.length !== 1) return { ...board, statuses: [] };

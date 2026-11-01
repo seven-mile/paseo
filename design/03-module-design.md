@@ -61,15 +61,16 @@ append_human_activity
 
 最小输入输出约定如下：
 
-| 操作                    | 必要输入                                                                                    | 结果                             |
-| ----------------------- | ------------------------------------------------------------------------------------------- | -------------------------------- |
-| `create_agent`          | Paseo 默认创建参数，`name`、`roleClass`、`role`；可选 aliases、上级 name、existing agent ID | roster agent 和 Paseo agent 引用 |
-| `update_agent`          | name；aliases 或展示字段 patch                                                              | 更新后的 roster agent            |
-| `retire_agent`          | name                                                                                        | 标记为 retired 的 roster agent   |
-| `create_task`           | slug id、title、brief、supervisor                                                           | 新 Task，初始 status/data 可选   |
-| `update_task`           | Task；title、brief、status 或 data patch                                                    | 更新后的 Task                    |
-| `append_activity`       | Task、正文、结构化 data                                                                     | 新 Activity；worker 不允许调用   |
-| `append_human_activity` | Task、正文、结构化 data                                                                     | 新 Activity，并通知 Task manager |
+| 操作                    | 必要输入                                                                                    | 结果                                |
+| ----------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `create_agent`          | Paseo 默认创建参数，`name`、`roleClass`、`role`；可选 aliases、上级 name、existing agent ID | roster agent 和 Paseo agent 引用    |
+| `update_agent`          | name；aliases 或展示字段 patch                                                              | 更新后的 roster agent               |
+| `retire_agent`          | name                                                                                        | 标记为 retired 的 roster agent      |
+| `create_task`           | slug id、title、brief，可选 owner                                                           | 新 Task；owner 不是调用者时即为分派 |
+| `update_task`           | Task；title、brief、status、owner、resolution 或 data patch                                 | 更新后的 Task 和 change Activity    |
+| `deliver_task`          | Task、result、taskState（done 或 open），可选 status、revises                               | delivery Activity 和交付后的 Task   |
+| `append_activity`       | Task、正文、结构化 data                                                                     | 新 Activity；worker 不允许调用      |
+| `append_human_activity` | Task、正文、结构化 data，可选 cc                                                            | 新 Activity，通知 owner 和 cc       |
 
 `Task.id` 和 agent name 都是可读 slug。`Task.status` 是字符串，PWA 声明其有效值和业务转移，plugin 保存和索引它们但不执行状态机。Activity 必须属于一个 Task，并记录 `actorName` 与 `actorKind`。正文以 Markdown 为主；其中的 `paseo-swarm://` link 在写入时派生为 canonical ref，指向具名 agent、Task、Workspace 或 Workspace-relative file。这样项目级的 PWA proposal、审阅意见或人类决定也有稳定的 Task 时间线归属，不需要另建全局 mailbox。
 
@@ -145,7 +146,9 @@ UI 侧直接使用 Paseo 提供的 client hooks 和 navigation；server 侧才�
 
 ## Task 与 agent
 
-`create_task` 写入一个使用可读 slug 的 Task。Task 直接保存 manager 和 worker names；supervisor 通过 Paseo 原生消息向 worker 派发具体工作，worker 报告结果和阻塞。Paseo runtime status 与 transcript 是运行事实，不复制为第二个工作对象。
+`create_task` 写入一个使用可读 slug 的 Task。Task 是一项承诺：`managerName` 是它的 owner，brief 是当前约定，Activities 是正式履历。给另一个 seat 创建 Task 就是分派，owner 收到带 brief 的 `task-assigned` 邮件。owner 及其上级链（“line”）可以修改、交付、改派、关闭 Task 和追加 Activity；所有人都能读，worker 不修改 Task。`workerNames` 只是信息，不授予任何权限。supervisor 通过带 taskId 的消息向 worker 派发具体工作，taskId 不限制谁能给谁发消息。Paseo runtime status 与 transcript 是运行事实，不复制为第二个工作对象。
+
+结果只通过 `deliver_task` 记录：一次调用写 delivery Activity、设置 Task 交付后的状态（`taskState`），并通知 owner 的 line。修正已交付的结论时再交付一次并用 `revises` 指向被修正的 delivery；修正意味着还要继续工作时用 `taskState: open`，同一次调用即重新打开 Task。只有 Task 最新的 Activity 是同一 seat 在 5 分钟内的相同 delivery 时，调用才被当作重试。`resolution`（done、wont-do、duplicate、superseded）是 plugin 唯一读取的关闭语义；done 只来自交付，其余三种通过 `update_task` 并附理由。PWA status 只是项目词汇。retire 一个 seat 时，它未关闭的 Task 交给最近的未退休上级。
 
 ```mermaid
 sequenceDiagram
@@ -164,14 +167,14 @@ sequenceDiagram
     S->>P: send Task-scoped assignment
     P-->>S: accepted
     P-->>S: worker report or runtime notification
-    S->>D: append understood Activity
+    S->>D: deliver result (taskState done or open)
 ```
 
-重新分派、并行工作和重试都由 supervisor 通过 Task 的 worker names 与消息表达，不产生新的 plugin 工作实体。
+并行工作和重试都由 supervisor 通过消息表达，不产生新的 plugin 工作实体。
 
 ## Activity 与人工交互
 
-Activity 是追加记录，可以带 Markdown 正文、派生 ref、结构化 `data`、展示信息和一个需要人操作的 action。UI 将它渲染成进度条目、可导航引用、决策卡片或带输入的交互条目；人的回复追加新的 Activity，并通知 Task manager。未来 custom card 只扩展 renderer 和 typed view data，不改变 Markdown/ref 的基础内容语义。
+Activity 是追加记录，可以带 Markdown 正文、派生 ref、结构化 `data`、展示信息和一个需要人操作的 action。UI 将它渲染成进度条目、可导航引用、决策卡片或带输入的交互条目；人的回复追加新的 Activity，并通知 Task owner 和 cc 中的 seat。plugin 自己写两种 kind：`delivery`（只来自 `deliver_task`）和 `change`（owner、status、title、brief、resolution 的变化，`data.previousBrief` 保留旧 brief）；`append_activity` 不接受这两种 kind。未来 custom card 只扩展 renderer 和 typed view data，不改变 Markdown/ref 的基础内容语义。
 
 待处理列表是对带有未完成 action 的 Activity 的查询投影。只有当未来需要跨 Task 的独立分派、期限或复杂履历时，才重新考虑独立记录。
 
@@ -199,18 +202,18 @@ Paseo 已经拥有 runtime status；plugin 第一版不建立重复的 runtime p
 
 权限检查使用调用者的 roster 身份。role class 和 hierarchy 只给出粗粒度的 authorization allow；use case 还要检查 Task、Activity 等具体上下文。Agent-facing MCP 通过每个 agent 独立的 capability URL 识别调用者，再映射到 roster；请求正文和 agent 自报身份都不能替代这个身份。当前实现仍不限制 Paseo 原生 agent tools，原生工具权限由 Paseo 的 provider/tool policy 决定。
 
-| 操作                            | planner          | supervisor           | worker                     |
-| ------------------------------- | ---------------- | -------------------- | -------------------------- |
-| 读取项目 roster、PWA、Task 总览 | 项目范围         | 项目范围内可见内容   | 自己相关内容               |
-| 创建 supervisor agent           | 可以             | 不可以               | 不可以                     |
-| 创建 worker agent               | 项目范围内可以   | 自己管理范围内可以   | 不可以                     |
-| 创建 Workspace                  | 可以             | 可以                 | 不可以                     |
-| 创建 Task                       | 项目范围         | 自己管理范围内可以   | 可提出，不能取得管理权     |
-| 修改 Task 看板字段              | 项目范围         | 自己管理的 Task      | 不可以                     |
-| 追加 Activity                   | 可以             | 自己管理的 Task      | 不允许                     |
-| 发送 Task 报告                  | 可联系项目参与者 | 可联系上下级及协作者 | 可发送给 manager           |
-| 发送 A2A 消息                   | 可联系项目参与者 | 可联系上下级及协作者 | 默认联系上级及 Task 相关者 |
-| 启用 PWA 版本                   | 由人类授权后执行 | 不可以               | 不可以                     |
+| 操作                            | planner             | supervisor           | worker                     |
+| ------------------------------- | ------------------- | -------------------- | -------------------------- |
+| 读取项目 roster、PWA、Task 总览 | 项目范围            | 项目范围内可见内容   | 自己相关内容               |
+| 创建 supervisor agent           | 可以                | 不可以               | 不可以                     |
+| 创建 worker agent               | 项目范围内可以      | 自己管理范围内可以   | 不可以                     |
+| 创建 Workspace                  | 可以                | 可以                 | 不可以                     |
+| 创建 Task                       | owner 为自己或下级  | owner 为自己或下级   | 不可以                     |
+| 修改、交付、关闭 Task           | 在 owner 的 line 上 | 在 owner 的 line 上  | 不可以                     |
+| 追加 Activity                   | 在 owner 的 line 上 | 在 owner 的 line 上  | 不允许                     |
+| 发送 Task 报告                  | 可联系项目参与者    | 可联系上下级及协作者 | 带 taskId 发给 manager     |
+| 发送 A2A 消息                   | 可联系项目参与者    | 可联系上下级及协作者 | 默认联系上级及 Task 相关者 |
+| 启用 PWA 版本                   | 由人类授权后执行    | 不可以               | 不可以                     |
 
 人类 UI 作为项目管理员可以执行项目级操作。具体调用仍通过同一套 use case，避免 UI 绕过记录和权限检查。role 只影响上下文和业务说明，不改变 role class 的基础权限。
 
