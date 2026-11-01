@@ -198,6 +198,24 @@ describe("loadAppSettingsFromStorage", () => {
     expect(result.chatOutlineEnabled).toBe(false);
   });
 
+  it("starts Swarm cards collapsed by default", async () => {
+    const result = await loadAppSettingsFromStorage(makeDeps());
+
+    expect(result.autoExpandSwarmCards).toBe(false);
+  });
+
+  it("loads an expanded Swarm cards preference", async () => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({ autoExpandSwarmCards: true }),
+      }),
+    });
+
+    const result = await loadAppSettingsFromStorage(deps);
+
+    expect(result.autoExpandSwarmCards).toBe(true);
+  });
+
   it("defaults sidebar navigation items to an empty preference list", async () => {
     const deps = makeDeps();
 

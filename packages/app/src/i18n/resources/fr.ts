@@ -2253,6 +2253,11 @@ export const fr: TranslationResources = {
         label: "Toujours afficher le raisonnement",
         description: "Afficher le raisonnement de l'agent entièrement développé par défaut",
       },
+      autoExpandSwarmCards: {
+        label: "Développer les cartes Swarm",
+        description:
+          "Affiche développés par défaut les réglages Swarm, les messages d’équipe et les notifications d’exécution. Les actualisations de contexte commencent toujours repliées",
+      },
       toolCallDetail: {
         label: "Affichage des appels d’outils",
         description: "Comment les appels d’outils apparaissent dans la chronologie",
