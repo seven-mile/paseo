@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { useFetchQuery } from "@/data/query";
 import type { InstalledPlugin } from "@/plugins/types";
-import type { RosterSeat } from "./roster";
+import { swarmRosterKey, swarmSeatKey, type SwarmSeat } from "./roster";
 import { undeliveredMail, type SeatMail } from "./seat-model";
 import { PERSON_SENDER, personMailWords } from "./system-envelope";
 
@@ -23,7 +23,7 @@ const mailboxSchema = z.object({
 
 const receiptSchema = z.object({ status: statusSchema, receipt: z.string() });
 
-export function seatRecipient(seat: Pick<RosterSeat, "name" | "qualifiedName">): string {
+export function seatRecipient(seat: Pick<SwarmSeat, "name" | "qualifiedName">): string {
   return seat.qualifiedName ?? seat.name;
 }
 
@@ -33,7 +33,7 @@ function seatMailQueryKey(serverId: string, seatId: string) {
 
 // The person's mail to the seat that has not reached its occupant yet. Reading the mailbox also
 // makes Swarm retry delivery, so this polls only while the seat is on screen.
-export function useUndeliveredSeatMail(plugin: InstalledPlugin, seat: RosterSeat, active: boolean) {
+export function useUndeliveredSeatMail(plugin: InstalledPlugin, seat: SwarmSeat, active: boolean) {
   const query = useFetchQuery(
     {
       queryKey: seatMailQueryKey(plugin.serverId, seat.id),
@@ -75,7 +75,7 @@ const EMPTY_MAIL: SeatMail[] = [];
 // a seat with a pending change applies it first. A refused delivery throws its receipt.
 export async function sendSeatMail(
   plugin: InstalledPlugin,
-  seat: RosterSeat,
+  seat: SwarmSeat,
   body: string,
 ): Promise<void> {
   const result = receiptSchema.parse(
@@ -88,7 +88,8 @@ export async function sendSeatMail(
   );
   await Promise.all([
     plugin.queryClient.invalidateQueries({ queryKey: seatMailQueryKey(plugin.serverId, seat.id) }),
-    plugin.queryClient.invalidateQueries({ queryKey: ["swarm", "roster", plugin.serverId] }),
+    plugin.queryClient.invalidateQueries({ queryKey: swarmSeatKey(plugin.serverId, seat.id) }),
+    plugin.queryClient.invalidateQueries({ queryKey: swarmRosterKey(plugin.serverId) }),
   ]);
   if (result.status === "failed") throw new Error(result.receipt);
 }

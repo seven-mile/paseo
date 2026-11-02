@@ -31,7 +31,7 @@ import { deriveSidebarStateBucket } from "@/utils/sidebar-agent-state";
 import { formatTimeAgo } from "@/utils/time";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
-import { useSwarmSeat, type RosterSeat } from "./roster";
+import { useSwarmSeat, type SwarmSeat } from "./roster";
 import { useSeatAgentTimeline } from "./seat-agent-timeline";
 import { sendSeatMail, seatRecipient, useUndeliveredSeatMail } from "./seat-mail";
 import {
@@ -91,7 +91,7 @@ function SeatConversationContent({
   onOpenWorkspaceFile,
 }: {
   plugin: InstalledPlugin;
-  seat: RosterSeat;
+  seat: SwarmSeat;
   workspaceId: string | null;
   isPaneFocused: boolean;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
@@ -199,7 +199,7 @@ function occupantLabel(
 
 function occupantDescription(
   t: ReturnType<typeof useTranslation>["t"],
-  seat: RosterSeat,
+  seat: SwarmSeat,
   occupant: SeatOccupant,
 ) {
   if (occupant.current) {
@@ -219,7 +219,7 @@ function SeatHeader({
   onShow,
 }: {
   serverId: string;
-  seat: RosterSeat;
+  seat: SwarmSeat;
   occupants: SeatOccupant[];
   shown: SeatOccupant | null;
   onShow: (paseoAgentId: string | null) => void;
@@ -295,7 +295,7 @@ function OccupantItem({
   selected,
   onShow,
 }: {
-  seat: RosterSeat;
+  seat: SwarmSeat;
   occupant: SeatOccupant;
   selected: boolean;
   onShow: (paseoAgentId: string | null) => void;
@@ -326,7 +326,7 @@ function HandoverRow({
   onShow,
 }: {
   handover: SeatHandover;
-  seat: RosterSeat;
+  seat: SwarmSeat;
   onShow: (paseoAgentId: string | null) => void;
 }) {
   const { t } = useTranslation();
@@ -440,7 +440,7 @@ function EmptySeat({
   aboveComposer,
 }: {
   serverId: string;
-  seat: RosterSeat;
+  seat: SwarmSeat;
   workspaceId: string | null;
   isPaneFocused: boolean;
   submit: (payload: MessagePayload) => Promise<void>;

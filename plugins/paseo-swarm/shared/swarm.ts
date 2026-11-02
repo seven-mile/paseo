@@ -184,6 +184,14 @@ export const tasksReadRpc = defineRpc({
   ),
 });
 
+// One seat with its occupants, retired seats included: a seat tab. Data is a null seat when no
+// seat has this id.
+export const seatReadRpc = defineRpc({
+  name: "swarm.seat.read",
+  input: z.object({ seatId: z.string().min(1), ...etagInputSchema }),
+  output: conditionalOutput(z.object({ seat: seatSchema.nullable() })),
+});
+
 export const TASK_ACTIVITY_PAGE = 100;
 export const MAX_TASK_ACTIVITIES = 1000;
 

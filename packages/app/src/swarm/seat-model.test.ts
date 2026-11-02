@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RosterSeat } from "./roster";
+import type { SwarmSeat } from "./roster";
 import {
   latestHandover,
   seatConversationAgentId,
@@ -9,7 +9,7 @@ import {
 } from "./seat-model";
 import { personMailWords } from "./system-envelope";
 
-const baseSeat: RosterSeat = {
+const baseSeat: SwarmSeat = {
   id: "seat-dev",
   swarmId: "swarm-1",
   paseoAgentId: null,
@@ -34,7 +34,7 @@ function past(number: number, paseoAgentId: string, retiredAt: string, provider 
 
 describe("seat occupants", () => {
   it("lists the current occupant first, then earlier ones from the most recently replaced", () => {
-    const seat: RosterSeat = {
+    const seat: SwarmSeat = {
       ...baseSeat,
       paseoAgentId: "agent-3",
       occupant: { number: 3, boundAt: "2026-10-03T00:00:00.000Z", config: { provider: "codex" } },
@@ -52,7 +52,7 @@ describe("seat occupants", () => {
   });
 
   it("shows the agent a seat is bringing in as its next occupant before it binds it", () => {
-    const seat: RosterSeat = {
+    const seat: SwarmSeat = {
       ...baseSeat,
       arrivingAgentId: "agent-new",
       agentConfig: { provider: "codex" },
@@ -68,7 +68,7 @@ describe("seat occupants", () => {
   });
 
   it("keeps a returning occupant's number and does not list it twice", () => {
-    const seat: RosterSeat = {
+    const seat: SwarmSeat = {
       ...baseSeat,
       arrivingAgentId: "agent-1",
       pastOccupants: [past(1, "agent-1", "2026-10-02T00:00:00.000Z")],
@@ -84,7 +84,7 @@ describe("seat occupants", () => {
 
 describe("seat handover", () => {
   it("matches the outgoing occupant by the incoming one's bind time", () => {
-    const seat: RosterSeat = {
+    const seat: SwarmSeat = {
       ...baseSeat,
       paseoAgentId: "agent-2",
       occupant: { number: 2, boundAt: "2026-10-03T00:00:00.000Z", config: { provider: "codex" } },
@@ -102,7 +102,7 @@ describe("seat handover", () => {
   });
 
   it("marks an earlier occupant coming back as returning", () => {
-    const seat: RosterSeat = {
+    const seat: SwarmSeat = {
       ...baseSeat,
       paseoAgentId: "agent-1",
       occupant: { number: 1, boundAt: "2026-10-04T00:00:00.000Z" },
@@ -112,7 +112,7 @@ describe("seat handover", () => {
   });
 
   it("reports no handover for a first occupant", () => {
-    const seat: RosterSeat = {
+    const seat: SwarmSeat = {
       ...baseSeat,
       paseoAgentId: "agent-1",
       occupant: { number: 1, boundAt: "2026-10-01T00:00:00.000Z" },

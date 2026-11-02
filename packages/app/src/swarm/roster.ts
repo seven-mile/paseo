@@ -1,6 +1,8 @@
+import { useMemo } from "react";
 import { z } from "zod";
 import { useFetchQuery } from "@/data/query";
 import type { InstalledPlugin } from "@/plugins/types";
+import { SWARM_POLL_MS, selectSwarmValue, swarmConditionalQuery } from "./sync";
 
 const configSchema = z.object({
   provider: z.string().optional(),
@@ -14,8 +16,7 @@ const occupantSchema = z.object({
   boundAt: z.string().optional(),
 });
 
-// The fields of a Swarm seat the app reads. The plugin's seat schema is the source; fields added
-// after the first Swarm release are optional, since an older host omits them.
+// A seat as the roster lists it. The plugin's seat summary is the source.
 export const rosterSeatSchema = z.object({
   id: z.string(),
   swarmId: z.string().optional(),
@@ -28,6 +29,13 @@ export const rosterSeatSchema = z.object({
   reportsTo: z.string().nullable(),
   workspaceId: z.string().nullable(),
   retired: z.boolean(),
+  // Why the seat's agent will be replaced when mail next wakes it.
+  pending: z.object({ kind: z.string(), reason: z.string() }).nullable().optional(),
+});
+export type RosterSeat = z.infer<typeof rosterSeatSchema>;
+
+// One seat with its occupants, as its seat tab reads it.
+export const swarmSeatSchema = rosterSeatSchema.extend({
   agentConfig: configSchema.optional(),
   occupant: occupantSchema.optional(),
   pastOccupants: z
@@ -39,46 +47,79 @@ export const rosterSeatSchema = z.object({
       }),
     )
     .optional(),
-  // Why the seat's agent will be replaced when mail next wakes it.
-  pending: z.object({ kind: z.string(), reason: z.string() }).nullable().optional(),
   // The agent the seat is bringing in before it binds it.
   arrivingAgentId: z.string().nullable().optional(),
 });
-export type RosterSeat = z.infer<typeof rosterSeatSchema>;
+export type SwarmSeat = z.infer<typeof swarmSeatSchema>;
 
 export const rosterSchema = z.object({
   agents: z.array(rosterSeatSchema),
-  swarms: z
-    .array(z.object({ id: z.string(), name: z.string(), projectId: z.string().nullable() }))
-    .optional(),
+  swarms: z.array(z.object({ id: z.string(), name: z.string(), projectId: z.string().nullable() })),
 });
 export type Roster = z.infer<typeof rosterSchema>;
 
-// Every seat of every swarm on the host, reserved seats included. The sidebar and seat tabs share
-// this query, so they agree on each seat's occupant.
-export function useSwarmRoster(plugin: InstalledPlugin | null) {
+export function swarmRosterKey(serverId: string) {
+  return ["swarm", "roster", serverId];
+}
+
+export function swarmSeatKey(serverId: string, seatId: string) {
+  return ["swarm", "seat", serverId, seatId];
+}
+
+function requirePlugin(plugin: InstalledPlugin | null): InstalledPlugin {
+  if (!plugin) throw new Error("Paseo Swarm plugin is not installed on this host");
+  return plugin;
+}
+
+// The seats that are not retired, in every swarm on the host.
+export function useSwarmRoster(plugin: InstalledPlugin) {
+  const rosterKey = useMemo(() => swarmRosterKey(plugin.serverId), [plugin.serverId]);
   return useFetchQuery(
     {
-      queryKey: ["swarm", "roster", plugin?.serverId ?? ""],
-      queryFn: async () => {
-        if (!plugin) throw new Error("Paseo Swarm plugin is not installed on this host");
-        return rosterSchema.parse(
-          await plugin.invoke("swarm.board.read", { includeReserved: true }),
-        );
-      },
-      enabled: plugin !== null,
-      refetchInterval: 3000,
+      queryKey: rosterKey,
+      queryFn: swarmConditionalQuery({
+        queryClient: plugin.queryClient,
+        queryKey: rosterKey,
+        schema: rosterSchema,
+        read: (etag) => plugin.invoke("swarm.roster.read", etag ? { etag } : {}),
+      }),
+      select: selectSwarmValue<Roster>,
+      refetchInterval: SWARM_POLL_MS,
       dataShape: "value",
-      staleTimeMs: 2500,
+      staleTimeMs: SWARM_POLL_MS - 500,
     },
-    plugin?.queryClient,
+    plugin.queryClient,
   );
 }
 
+const seatReadSchema = z.object({ seat: swarmSeatSchema.nullable() });
+type SeatRead = z.infer<typeof seatReadSchema>;
+
+// One seat and its occupants, retired seats included. A poll whose etag still holds costs a few
+// hundred bytes, so a seat tab can follow its occupant without reading the roster.
 export function useSwarmSeat(plugin: InstalledPlugin | null, seatId: string) {
-  const query = useSwarmRoster(plugin);
+  const serverId = plugin?.serverId ?? "";
+  const seatKey = useMemo(() => swarmSeatKey(serverId, seatId), [seatId, serverId]);
+  const query = useFetchQuery(
+    {
+      queryKey: seatKey,
+      queryFn: swarmConditionalQuery({
+        queryClient: plugin?.queryClient,
+        queryKey: seatKey,
+        schema: seatReadSchema,
+        read: (etag) =>
+          requirePlugin(plugin).invoke("swarm.seat.read", { seatId, ...(etag ? { etag } : {}) }),
+      }),
+      select: selectSwarmValue<SeatRead>,
+      enabled: plugin !== null && seatId.length > 0,
+      refetchInterval: SWARM_POLL_MS,
+      dataShape: "value",
+      staleTimeMs: SWARM_POLL_MS - 500,
+    },
+    plugin?.queryClient,
+  );
   return {
-    seat: query.data?.agents.find((agent) => agent.id === seatId) ?? null,
+    seat: query.data?.seat ?? null,
     isPending: query.isPending,
     error: query.error,
   };
