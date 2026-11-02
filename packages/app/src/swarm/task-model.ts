@@ -73,16 +73,18 @@ const agentSchema = z.object({
   workspaceId: z.string().nullable(),
   retired: z.boolean(),
 });
+// A Task as the list shows it; its brief and Activities come with the Task's own read.
 const taskSchema = z.object({
   id: z.string(),
-  swarmId: z.string().optional(),
+  swarmId: z.string(),
   title: z.string(),
-  brief: z.string(),
   status: z.string(),
   managerName: z.string(),
   workerNames: z.array(z.string()),
   createdBy: z.string(),
   updatedAt: z.string(),
+  // Choices on the Task that wait for a human.
+  attention: z.number(),
 });
 const activitySchema = z.object({
   id: z.string(),
@@ -101,16 +103,22 @@ export const swarmHumanActivityReceiptSchema = activitySchema.extend({
   notificationWarning: z.string().optional(),
 });
 export const swarmTaskBoardSchema = z.object({
-  version: z.literal(1),
-  statuses: z.array(z.string()).optional(),
+  statuses: z.array(z.string()),
   agents: z.array(agentSchema),
   tasks: z.array(taskSchema),
-  activities: z.array(activitySchema),
 });
 export type SwarmTaskBoard = z.infer<typeof swarmTaskBoardSchema>;
 export type SwarmTask = SwarmTaskBoard["tasks"][number];
-export type SwarmActivity = SwarmTaskBoard["activities"][number];
 export type SwarmTaskAgent = SwarmTaskBoard["agents"][number];
+
+export const swarmTaskDetailSchema = z.object({
+  task: z.object({ id: z.string(), swarmId: z.string(), brief: z.string() }),
+  activities: z.array(activitySchema),
+  // Earlier Activities the read left out; unanswered choices are always included.
+  olderCount: z.number(),
+});
+export type SwarmTaskDetail = z.infer<typeof swarmTaskDetailSchema>;
+export type SwarmActivity = SwarmTaskDetail["activities"][number];
 
 export function defaultSwarmTaskScope(
   board: SwarmTaskBoard,
@@ -135,7 +143,7 @@ export function defaultSwarmTaskScope(
 }
 
 export function swarmTaskColumns(board: SwarmTaskBoard, tasks: readonly SwarmTask[]) {
-  const declared = [...new Set(board.statuses ?? [])];
+  const declared = [...new Set(board.statuses)];
   const observed = [...new Set(tasks.map((task) => task.status))]
     .filter((status) => !declared.includes(status))
     .sort();

@@ -15,7 +15,7 @@ import { ArrowLeft } from "lucide-react-native";
 import { i18n } from "@/i18n/i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import Animated from "react-native-reanimated";
-import type { UseQueryResult } from "@tanstack/react-query";
+import type { QueryClient, UseQueryResult } from "@tanstack/react-query";
 import { RetainedPanel, useRetainedPanelActive } from "@/components/retained-panel";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { isNative } from "@/constants/platform";
@@ -45,6 +45,13 @@ import {
 } from "@/stores/session-store-hooks";
 import { useSwarmRpc } from "./rpc";
 import {
+  SWARM_POLL_MS,
+  SWARM_TASK_ACTIVITY_MAX,
+  SWARM_TASK_ACTIVITY_PAGE,
+  selectSwarmValue,
+  swarmConditionalQuery,
+} from "./sync";
+import {
   activityChoice,
   defaultSwarmTaskScope,
   findSwarmTaskAgent,
@@ -55,6 +62,7 @@ import {
   resolveSwarmTaskReference,
   scopedSwarmTasks,
   swarmTaskBoardSchema,
+  swarmTaskDetailSchema,
   swarmHumanActivityReceiptSchema,
   swarmTaskScopeOptions,
   swarmTaskColumns,
@@ -62,6 +70,7 @@ import {
   type SwarmActivity,
   type SwarmTask,
   type SwarmTaskBoard,
+  type SwarmTaskDetail,
   type SwarmTaskReference,
   type SwarmTaskSurfaceState,
 } from "./task-model";
@@ -83,6 +92,7 @@ export interface SwarmTaskSurfaceProps {
 }
 
 const FLEX_STYLE = { flex: 1 };
+const EMPTY_ACTIVITIES: readonly SwarmActivity[] = [];
 const TaskMarkdown = memo(MarkdownRenderer);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const spinnerMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
@@ -224,20 +234,25 @@ function TaskSurface({
     [structure, serverId],
   );
   const online = connection === "online";
+  const boardKey = useMemo(() => ["swarm", "tasks", serverId, projectId], [serverId, projectId]);
   const query = useFetchQuery(
     {
-      queryKey: ["swarm", "task-board", serverId, projectId],
-      queryFn: async () =>
-        swarmTaskBoardSchema.parse(
-          await invoke("swarm.board.read", {
+      queryKey: boardKey,
+      queryFn: swarmConditionalQuery({
+        queryClient: plugin?.queryClient,
+        queryKey: boardKey,
+        schema: swarmTaskBoardSchema,
+        read: (etag) =>
+          invoke("swarm.tasks.read", {
             projectId: projectId ?? undefined,
-            includeReserved: true,
+            ...(etag ? { etag } : {}),
           }),
-        ),
+      }),
+      select: selectSwarmValue<SwarmTaskBoard>,
       enabled: Boolean(plugin) && Boolean(projectId) && hydrated && online && active,
       dataShape: "value",
-      staleTimeMs: 2500,
-      refetchInterval: active ? 3000 : false,
+      staleTimeMs: SWARM_POLL_MS - 500,
+      refetchInterval: active ? SWARM_POLL_MS : false,
     },
     plugin?.queryClient,
   );
@@ -280,6 +295,8 @@ function TaskSurface({
           knownWorkspaceIds={knownWorkspaceIds}
           compact={compact}
           invoke={invoke}
+          queryClient={plugin?.queryClient}
+          serverId={serverId}
           onRefresh={refresh}
           {...selection}
         />
@@ -297,6 +314,8 @@ type LoadedTasksProps = {
   compact: boolean;
   online: boolean;
   invoke: <T>(method: string, input: unknown) => Promise<T>;
+  queryClient: QueryClient | undefined;
+  serverId: string;
   onRefresh: () => void;
 } & Pick<
   SwarmTaskSurfaceProps,
@@ -469,6 +488,8 @@ function LoadedTasks({
   compact,
   online,
   invoke,
+  queryClient,
+  serverId,
   onRefresh,
   plannerName,
   agentName,
@@ -637,7 +658,6 @@ function LoadedTasks({
           <RetainedPanel active={!showKanban}>
             <TaskRows
               tasks={filtered}
-              board={board}
               selectedTaskId={selectedTaskId}
               emptyMessage={
                 tasks.length === 0 ? t("swarm.tasks.emptyScope") : t("swarm.tasks.noMatches")
@@ -665,6 +685,8 @@ function LoadedTasks({
                   onOpenTask={openTask}
                   onOpenReference={onOpenReference}
                   invoke={invoke}
+                  queryClient={queryClient}
+                  serverId={serverId}
                   onRefresh={onRefresh}
                   online={online && visible}
                   knownWorkspaceIds={knownWorkspaceIds}
@@ -737,11 +759,7 @@ function TaskKanban({
                   <TaskRow
                     task={task}
                     selected={false}
-                    attention={
-                      unansweredChoices(
-                        board.activities.filter((activity) => activity.taskId === task.id),
-                      ).length
-                    }
+                    attention={task.attention}
                     onOpen={onOpen}
                   />
                 </SurfaceCard>
@@ -756,13 +774,11 @@ function TaskKanban({
 
 function TaskRows({
   tasks,
-  board,
   selectedTaskId,
   emptyMessage,
   onOpen,
 }: {
   tasks: readonly SwarmTask[];
-  board: SwarmTaskBoard;
   selectedTaskId: string | null;
   emptyMessage: string;
   onOpen: (id: string) => void;
@@ -777,10 +793,7 @@ function TaskRows({
             key={task.id}
             task={task}
             selected={selectedTaskId === task.id}
-            attention={
-              unansweredChoices(board.activities.filter((activity) => activity.taskId === task.id))
-                .length
-            }
+            attention={task.attention}
             onOpen={onOpen}
           />
         ))
@@ -839,6 +852,119 @@ function TaskRow({
   );
 }
 
+interface SwarmTaskDetailState {
+  activities: readonly SwarmActivity[];
+  brief: string | null;
+  // The read has answered at least once, so an empty list means no Activity.
+  loaded: boolean;
+  olderCount: number;
+  canShowEarlier: boolean;
+  loadingEarlier: boolean;
+  error: string | null;
+  showEarlier: () => void;
+  refetch: () => void;
+}
+
+// One Task's brief and latest Activities, polled while its detail is shown. Earlier Activities
+// load a page at a time on request.
+function useSwarmTaskDetail(input: {
+  serverId: string;
+  task: SwarmTask;
+  invoke: <T>(method: string, input: unknown) => Promise<T>;
+  queryClient: QueryClient | undefined;
+  enabled: boolean;
+}): SwarmTaskDetailState {
+  const { serverId, task, invoke, queryClient, enabled } = input;
+  const [limit, setLimit] = useState(SWARM_TASK_ACTIVITY_PAGE);
+  const queryKey = useMemo(
+    () => ["swarm", "task", serverId, task.swarmId, task.id, limit],
+    [serverId, task.swarmId, task.id, limit],
+  );
+  const query = useFetchQuery(
+    {
+      queryKey,
+      queryFn: swarmConditionalQuery({
+        queryClient,
+        queryKey,
+        schema: swarmTaskDetailSchema,
+        read: (etag) =>
+          invoke("swarm.task.read", {
+            swarmId: task.swarmId,
+            taskId: task.id,
+            limit,
+            ...(etag ? { etag } : {}),
+          }),
+      }),
+      select: selectSwarmValue<SwarmTaskDetail>,
+      enabled,
+      refetchInterval: enabled ? SWARM_POLL_MS : false,
+      // Keeps the shown page while a longer one loads.
+      dataShape: "list",
+      staleTimeMs: SWARM_POLL_MS - 500,
+    },
+    queryClient,
+  );
+  const { refetch } = query;
+  const showEarlier = useCallback(
+    () =>
+      setLimit((current) => Math.min(current + SWARM_TASK_ACTIVITY_PAGE, SWARM_TASK_ACTIVITY_MAX)),
+    [],
+  );
+  const refresh = useCallback(() => void refetch(), [refetch]);
+  const olderCount = query.data?.olderCount ?? 0;
+  return {
+    activities: query.data?.activities ?? EMPTY_ACTIVITIES,
+    brief: query.data?.task.brief ?? null,
+    loaded: query.data !== undefined,
+    olderCount,
+    canShowEarlier: olderCount > 0 && limit < SWARM_TASK_ACTIVITY_MAX,
+    loadingEarlier: query.isPlaceholderData,
+    error: query.isError ? query.error.message : null,
+    showEarlier,
+    refetch: refresh,
+  };
+}
+
+function TaskActivityStatus({
+  detail,
+  online,
+  empty,
+}: {
+  detail: SwarmTaskDetailState;
+  online: boolean;
+  // Whether the actor filter leaves no Activity to show.
+  empty: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {detail.canShowEarlier ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          loading={detail.loadingEarlier}
+          disabled={!online}
+          onPress={detail.showEarlier}
+          testID="swarm-task-earlier-activity"
+        >
+          {t("swarm.tasks.earlierActivity", { count: detail.olderCount })}
+        </Button>
+      ) : null}
+      {detail.error ? (
+        <Text style={styles.error} accessibilityRole="alert">
+          {detail.error}
+        </Text>
+      ) : null}
+      {!detail.loaded && !detail.error ? (
+        <Text style={styles.meta}>{t("swarm.tasks.loadingActivity")}</Text>
+      ) : null}
+      {detail.loaded && empty ? (
+        <Text style={styles.meta}>{t("swarm.tasks.emptyActivity")}</Text>
+      ) : null}
+    </>
+  );
+}
+
 function TaskDetail({
   retainedState,
   task,
@@ -848,6 +974,8 @@ function TaskDetail({
   onOpenTask,
   onOpenReference,
   invoke,
+  queryClient,
+  serverId,
   onRefresh,
   online,
   knownWorkspaceIds,
@@ -860,22 +988,28 @@ function TaskDetail({
   onOpenTask: (id: string) => void;
   onOpenReference?: (reference: SwarmTaskReference) => void;
   invoke: <T>(method: string, input: unknown) => Promise<T>;
+  queryClient: QueryClient | undefined;
+  serverId: string;
   onRefresh: () => void;
   online: boolean;
   knownWorkspaceIds: readonly string[];
 }) {
   const { t } = useTranslation();
-  const activities = useMemo(
-    () => board.activities.filter((activity) => activity.taskId === task.id),
-    [board.activities, task.id],
-  );
+  const active = useRetainedPanelActive();
+  const taskDetail = useSwarmTaskDetail({
+    serverId,
+    task,
+    invoke,
+    queryClient,
+    enabled: online && active,
+  });
+  const { activities, refetch: refetchDetail } = taskDetail;
   const [detail] = useState(() => retainedState.detail(task.id, activities));
   const model = detail.model;
   const reply = useSyncExternalStore(model.subscribe, model.getState, model.getState);
   const editor = useRef<EditingTextInputHandle>(null);
   const [actor, setActor] = useState(detail.actor);
   const [referenceUnavailable, setReferenceUnavailable] = useState(detail.referenceUnavailable);
-  const active = useRetainedPanelActive();
   const activityScroll = useRef<ScrollView>(null);
   const [scrollReceiptId, setScrollReceiptId] = useState<string | null>(null);
   const scrollReceipt = useRef<string | null>(null);
@@ -1058,8 +1192,9 @@ function TaskDetail({
         setScrollReceiptId(savedReceiptId);
       }
       onRefresh();
+      refetchDetail();
     }
-  }, [invoke, model, onRefresh, online, task.swarmId]);
+  }, [invoke, model, onRefresh, online, refetchDetail, task.swarmId]);
   const handleActivityKeyPress = useCallback<
     NonNullable<ComponentProps<typeof FormTextInput>["onKeyPress"]>
   >(
@@ -1120,7 +1255,9 @@ function TaskDetail({
           <StatusBadge label={task.status} />
         </View>
         <Text style={styles.meta}>{task.id}</Text>
-        <TaskMarkdown text={task.brief} compact onLinkPress={openLink} />
+        {taskDetail.brief !== null ? (
+          <TaskMarkdown text={taskDetail.brief} compact onLinkPress={openLink} />
+        ) : null}
         <View style={styles.participants}>
           <Text style={styles.meta}>{t("swarm.tasks.manager")}</Text>
           <PersonButton name={task.managerName} onOpen={openAgent} />
@@ -1131,22 +1268,19 @@ function TaskDetail({
           ))}
         </View>
         <SettingsSection title={t("swarm.tasks.activity")} flush trailing={actorFilter}>
-          {visible.length === 0 ? (
-            <Text style={styles.meta}>{t("swarm.tasks.emptyActivity")}</Text>
-          ) : (
-            visible.map((activity) => (
-              <ActivityRow
-                key={activity.id}
-                activity={activity}
-                canChoose={choices.some((choice) => choice.id === activity.id)}
-                selectedOption={reply.replyTo === activity.id ? reply.selectedOption : null}
-                onReply={model.replyTo}
-                pending={reply.pending}
-                onOpenActor={openAgent}
-                onLinkPress={openLink}
-              />
-            ))
-          )}
+          <TaskActivityStatus detail={taskDetail} online={online} empty={visible.length === 0} />
+          {visible.map((activity) => (
+            <ActivityRow
+              key={activity.id}
+              activity={activity}
+              canChoose={choices.some((choice) => choice.id === activity.id)}
+              selectedOption={reply.replyTo === activity.id ? reply.selectedOption : null}
+              onReply={model.replyTo}
+              pending={reply.pending}
+              onOpenActor={openAgent}
+              onLinkPress={openLink}
+            />
+          ))}
           {scrollReceiptId &&
           active &&
           !actor &&

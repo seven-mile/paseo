@@ -15,6 +15,7 @@ import {
 } from "@/stores/workspace-layout-store";
 import { workspaceTabTargetsEqual } from "@/workspace-tabs/identity";
 import { openSwarmReference } from "./navigation";
+import { parseSwarmRead } from "./sync";
 import { resolveSwarmTaskReference, swarmTaskBoardSchema } from "./task-model";
 
 const CanonicalLinkContext = createContext<((uri: string) => boolean) | null>(null);
@@ -99,9 +100,7 @@ export function SwarmCanonicalLinkProvider({ children }: { children: ReactNode }
         const board = await plugin.queryClient.fetchQuery({
           queryKey: ["swarm", "canonical-link-board", serverId],
           queryFn: async () =>
-            swarmTaskBoardSchema.parse(
-              await plugin.invoke("swarm.board.read", { includeReserved: true }),
-            ),
+            parseSwarmRead(swarmTaskBoardSchema, await plugin.invoke("swarm.tasks.read", {})),
           staleTime: 0,
           retry: false,
         });
