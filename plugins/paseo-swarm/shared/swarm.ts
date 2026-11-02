@@ -90,6 +90,8 @@ export const directoryRecoverRpc = defineRpc({
   output: z.object({ swarm: swarmSummarySchema, seats: z.array(z.string()) }),
 });
 
+// COMPAT(boardRead): the app polled the whole board before the conditional reads below; remove
+// after 2027-02-01. Its output grows with every Activity, so nothing new reads it.
 export const boardReadRpc = defineRpc({
   name: "swarm.board.read",
   input: z.object({
@@ -110,6 +112,97 @@ export const boardReadRpc = defineRpc({
       .array(z.object({ id: z.string(), name: z.string(), projectId: z.string().nullable() }))
       .optional(),
   }),
+});
+
+// The reads clients poll. Each answers with the etag of what it would return; a request that
+// already holds that etag gets data null instead of the same records again. A view is bounded by
+// what one surface shows, so a change re-sends that surface's records, never the whole board.
+const etagInputSchema = { etag: z.string().min(1).optional() };
+const conditionalOutput = <T extends z.ZodTypeAny>(data: T) =>
+  z.object({ etag: z.string(), data: data.nullable() });
+
+const swarmRefSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  projectId: z.string().nullable(),
+});
+
+// What a list or a link needs of a seat: no prompt receipts, occupant history or agent config.
+export const seatSummarySchema = seatSchema.pick({
+  id: true,
+  swarmId: true,
+  paseoAgentId: true,
+  name: true,
+  qualifiedName: true,
+  aliases: true,
+  roleClass: true,
+  role: true,
+  reportsTo: true,
+  workspaceId: true,
+  retired: true,
+  pending: true,
+});
+
+// A Task as a list shows it: no brief or data, and how many of its choices wait for a human.
+export const taskSummarySchema = taskSchema
+  .pick({
+    id: true,
+    swarmId: true,
+    title: true,
+    status: true,
+    managerName: true,
+    workerNames: true,
+    createdBy: true,
+    updatedAt: true,
+  })
+  .extend({ attention: z.number().int().nonnegative() });
+
+// The seats that are not retired, in every swarm: the sidebar roster.
+export const rosterReadRpc = defineRpc({
+  name: "swarm.roster.read",
+  input: z.object(etagInputSchema),
+  output: conditionalOutput(
+    z.object({ agents: z.array(seatSummarySchema), swarms: z.array(swarmRefSchema) }),
+  ),
+});
+
+// The Task list of one swarm, or of every swarm when the request names none. Activities are read
+// per Task.
+export const tasksReadRpc = defineRpc({
+  name: "swarm.tasks.read",
+  input: z.object({ ...swarmScopeSchema, ...etagInputSchema }),
+  output: conditionalOutput(
+    z.object({
+      agents: z.array(seatSummarySchema),
+      tasks: z.array(taskSummarySchema),
+      // The planner role's declared statuses, when the request scopes one swarm.
+      statuses: z.array(z.string()),
+      swarms: z.array(swarmRefSchema),
+    }),
+  ),
+});
+
+export const TASK_ACTIVITY_PAGE = 100;
+export const MAX_TASK_ACTIVITIES = 1000;
+
+// One Task with its latest `limit` Activities, oldest first. Unanswered choices from before
+// them are included too, so a person can always answer them.
+export const taskReadRpc = defineRpc({
+  name: "swarm.task.read",
+  input: z.object({
+    swarmId: z.string().min(1),
+    taskId: z.string().min(1),
+    limit: z.number().int().positive().max(MAX_TASK_ACTIVITIES).default(TASK_ACTIVITY_PAGE),
+    ...etagInputSchema,
+  }),
+  output: conditionalOutput(
+    z.object({
+      task: taskSchema,
+      activities: z.array(activitySchema),
+      // Activities before the oldest one returned, other than unanswered choices.
+      olderCount: z.number().int().nonnegative(),
+    }),
+  ),
 });
 
 export const pwaSourceReadRpc = defineRpc({

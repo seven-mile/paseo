@@ -57,7 +57,7 @@ function activity(id = "question"): SwarmActivity {
 }
 function board(): SwarmTaskBoard {
   return {
-    version: 1,
+    statuses: [],
     agents: [
       agent("planner", null, "planner-workspace"),
       agent("planner.manager", "planner", "manager-workspace"),
@@ -66,15 +66,15 @@ function board(): SwarmTaskBoard {
     ],
     tasks: ["planner.manager", "other.manager"].map((managerName) => ({
       id: managerName,
+      swarmId: "swarm",
       title: managerName,
-      brief: "Work",
       status: "development",
       managerName,
       workerNames: [],
       createdBy: "planner",
       updatedAt: "2026-10-06T00:00:00Z",
+      attention: 0,
     })),
-    activities: [],
   };
 }
 
@@ -177,7 +177,7 @@ describe("Swarm Task scope", () => {
       ["completed", []],
       ["custom", ["other.manager"]],
     ]);
-    value.statuses = undefined;
+    value.statuses = [];
     expect(swarmTaskColumns(value, value.tasks).map((column) => column.status)).toEqual([
       "custom",
       "development",

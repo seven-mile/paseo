@@ -39,6 +39,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { isNative, isWeb } from "@/constants/platform";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { openSwarmTasks } from "./navigation";
+import { SWARM_POLL_MS, selectSwarmValue, swarmConditionalQuery } from "./sync";
 import { SwarmMessageSeatSheet } from "./message-seat-sheet";
 import { plannerRowIdentities, type PlannerRowIdentity } from "./swarm-labels";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -97,16 +98,14 @@ const rosterSchema = z.object({
       reportsTo: z.string().nullable(),
       workspaceId: z.string().nullable(),
       retired: z.boolean(),
-      // Why the seat's agent will be replaced when mail next wakes it. Absent on older hosts.
-      pending: z.object({ kind: z.string(), reason: z.string() }).nullable().optional(),
+      // Why the seat's agent will be replaced when mail next wakes it.
+      pending: z.object({ kind: z.string(), reason: z.string() }).nullable(),
     }),
   ),
-  // Absent on older hosts.
-  swarms: z
-    .array(z.object({ id: z.string(), name: z.string(), projectId: z.string().nullable() }))
-    .optional(),
+  swarms: z.array(z.object({ id: z.string(), name: z.string(), projectId: z.string().nullable() })),
 });
-type Agent = z.infer<typeof rosterSchema>["agents"][number];
+type Roster = z.infer<typeof rosterSchema>;
+type Agent = Roster["agents"][number];
 type WorkspaceState = Pick<SidebarWorkspaceEntry, "statusBucket" | "workspaceKind">;
 interface SwarmSidebarGestureProps {
   parentGestureRef?: MutableRefObject<GestureType | undefined>;
@@ -868,14 +867,20 @@ function HostRoster({
     areSidebarWorkspaceSessionsEqual,
   );
   const pendingCreateAttempts = useCreateFlowStore((state) => state.pendingByDraftId);
+  const rosterKey = useMemo(() => ["swarm", "roster", plugin.serverId], [plugin.serverId]);
   const query = useFetchQuery(
     {
-      queryKey: ["swarm", "roster", plugin.serverId],
-      queryFn: async () =>
-        rosterSchema.parse(await plugin.invoke("swarm.board.read", { includeReserved: true })),
-      refetchInterval: 3000,
+      queryKey: rosterKey,
+      queryFn: swarmConditionalQuery({
+        queryClient: plugin.queryClient,
+        queryKey: rosterKey,
+        schema: rosterSchema,
+        read: (etag) => plugin.invoke("swarm.roster.read", etag ? { etag } : {}),
+      }),
+      select: selectSwarmValue<Roster>,
+      refetchInterval: SWARM_POLL_MS,
       dataShape: "value",
-      staleTimeMs: 2500,
+      staleTimeMs: SWARM_POLL_MS - 500,
     },
     plugin.queryClient,
   );

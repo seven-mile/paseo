@@ -117,6 +117,16 @@ unreadable snapshot, log line, or legacy file stops every Swarm read and write w
 naming the file until it is repaired or moved aside; nothing is written meanwhile. Only an unterminated final
 log line, left by a crash mid-append, is dropped automatically.
 
+Swarm surfaces poll conditional reads (`server/views.ts`): `swarm.roster.read` for the sidebar,
+`swarm.tasks.read` for a Task list with each Task's count of unanswered choices, and
+`swarm.task.read` for one Task's brief and latest Activities, a page at a time, plus any older
+unanswered choice. Each answer carries an etag hashed from its content; a poll that sends the
+current etag gets `data: null`, so commits a view does not show, such as mailbox deliveries, cost
+its clients nothing. Do not add a read whose answer grows with the board's history: the app polled
+the whole board, 2.4 MB with 900 Activities, every three seconds, and on slow relay paths that
+starved the connection's heartbeat ([architecture](architecture.md)). `swarm.board.read` remains
+for older apps only.
+
 Seats, Tasks, and Activities belong to a swarm: a directory holding `swarm.yaml`, `PWA.md`, and
 `roles/`, attached to one project and identified by an id the daemon mints. Seat names and Task ids
 are unique within a swarm, so requests that name them carry `swarmId`, or name an actor whose swarm
