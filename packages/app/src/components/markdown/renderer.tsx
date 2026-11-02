@@ -520,7 +520,13 @@ function getMarkdownLinkHref(node: ASTNode): string {
   return typeof href === "string" ? href : "";
 }
 
-export function createSharedMarkdownRules(): RenderRules {
+export interface SharedMarkdownRuleOptions {
+  // Turns inline code that names something openable, such as a file path, into a link.
+  inlineCodeHref?: (content: string) => string | null;
+  onLinkPress?: (url: string) => boolean;
+}
+
+export function createSharedMarkdownRules(options: SharedMarkdownRuleOptions = {}): RenderRules {
   return {
     text: (
       node: ASTNode,
@@ -643,19 +649,35 @@ export function createSharedMarkdownRules(): RenderRules {
     code_inline: (
       node: ASTNode,
       _children: ReactNode[],
-      _parent: ASTNode[],
+      parent: ASTNode[],
       styles: MarkdownStyles,
       inheritedStyles: TextStyle = {},
-    ) => (
-      <MarkdownInheritedText
-        key={node.key}
-        inheritedStyles={inheritedStyles}
-        textStyle={styles.code_inline}
-        monoSurface
-      >
-        {node.content ?? ""}
-      </MarkdownInheritedText>
-    ),
+    ) => {
+      const code = (
+        <MarkdownInheritedText
+          key={node.key}
+          inheritedStyles={inheritedStyles}
+          textStyle={styles.code_inline}
+          monoSurface
+        >
+          {node.content ?? ""}
+        </MarkdownInheritedText>
+      );
+      const insideLink = parent.some((ancestor) => ancestor.type === "link");
+      const href = insideLink ? null : options.inlineCodeHref?.(node.content ?? "");
+      if (!href) return code;
+      return (
+        <SharedMarkdownLink
+          key={node.key}
+          href={href}
+          inheritedStyles={inheritedStyles}
+          linkStyle={styles.link}
+          onLinkPress={options.onLinkPress}
+        >
+          {colorMarkdownLinkChildren([code], styles.link.color)}
+        </SharedMarkdownLink>
+      );
+    },
     bullet_list: (
       node: ASTNode,
       children: ReactNode[],

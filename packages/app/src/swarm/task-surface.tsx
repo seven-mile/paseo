@@ -1,6 +1,8 @@
 import {
+  createContext,
   memo,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -22,7 +24,7 @@ import { isNative } from "@/constants/platform";
 import { useContainerWidthBelow } from "@/hooks/use-container-width";
 import { useKeyboardShiftStyle } from "@/keyboard/shift";
 import type { Theme } from "@/styles/theme";
-import { MarkdownRenderer } from "@/components/markdown/renderer";
+import { createSharedMarkdownRules, MarkdownRenderer } from "@/components/markdown/renderer";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { Button } from "@/components/ui/button";
 import { SurfaceCard } from "@/components/ui/scrollable-code-surface";
@@ -40,6 +42,7 @@ import { useFetchQuery } from "@/data/query";
 import { useHostRuntimeConnectionStatus } from "@/runtime/host-runtime";
 import {
   useHasHydratedWorkspaces,
+  useWorkspaceDirectory,
   useWorkspaceFields,
   useWorkspaceStructure,
 } from "@/stores/session-store-hooks";
@@ -61,10 +64,12 @@ import {
   swarmHumanActivityReceiptSchema,
   swarmTaskScopeOptions,
   swarmTaskColumns,
+  swarmArtifactHref,
   swarmTaskResult,
   unansweredChoices,
   type SwarmActivity,
   type SwarmTask,
+  type SwarmTaskAgent,
   type SwarmTaskBoard,
   type SwarmTaskReference,
   type SwarmTaskSurfaceState,
@@ -88,9 +93,15 @@ export interface SwarmTaskSurfaceProps {
 
 const FLEX_STYLE = { flex: 1 };
 const NO_CC: string[] = [];
+const NO_AGENTS: SwarmTaskAgent[] = [];
 // Swarm writes these itself when a Task operation changes it; they read as one line of history.
 const CHANGE_KIND = "change";
 const TaskMarkdown = memo(MarkdownRenderer);
+// What authored Markdown needs to link the paths its author wrote: the host and the seats.
+const TaskAuthorsContext = createContext<{
+  serverId: string;
+  agents: readonly SwarmTaskAgent[];
+} | null>(null);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const spinnerMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
@@ -264,34 +275,40 @@ function TaskSurface({
     projectId,
     hasProject: Boolean(project),
   });
+  const authors = useMemo(
+    () => ({ serverId, agents: query.data?.agents ?? NO_AGENTS }),
+    [serverId, query.data?.agents],
+  );
   return (
-    <View style={styles.root} testID="swarm-task-surface">
-      <Animated.View style={insetStyle}>
-        <TaskToolbar
-          label={project?.projectName}
-          compact={compact}
-          refreshing={query.isFetching}
-          disabled={!plugin || !online || !active}
-          onRefresh={refresh}
-        />
-        <TaskLoadContent
-          retainedState={retainedState}
-          query={query}
-          unavailable={unavailable}
-          hydrated={hydrated}
-          connecting={connection === "connecting" || connection === "idle"}
-          online={online}
-          active={active}
-          workspaceId={workspaceId}
-          projectWorkspaceIds={projectWorkspaceIds}
-          knownWorkspaceIds={knownWorkspaceIds}
-          compact={compact}
-          invoke={invoke}
-          onRefresh={refresh}
-          {...selection}
-        />
-      </Animated.View>
-    </View>
+    <TaskAuthorsContext.Provider value={authors}>
+      <View style={styles.root} testID="swarm-task-surface">
+        <Animated.View style={insetStyle}>
+          <TaskToolbar
+            label={project?.projectName}
+            compact={compact}
+            refreshing={query.isFetching}
+            disabled={!plugin || !online || !active}
+            onRefresh={refresh}
+          />
+          <TaskLoadContent
+            retainedState={retainedState}
+            query={query}
+            unavailable={unavailable}
+            hydrated={hydrated}
+            connecting={connection === "connecting" || connection === "idle"}
+            online={online}
+            active={active}
+            workspaceId={workspaceId}
+            projectWorkspaceIds={projectWorkspaceIds}
+            knownWorkspaceIds={knownWorkspaceIds}
+            compact={compact}
+            invoke={invoke}
+            onRefresh={refresh}
+            {...selection}
+          />
+        </Animated.View>
+      </View>
+    </TaskAuthorsContext.Provider>
   );
 }
 
@@ -1276,7 +1293,11 @@ function ActivityRow({
         <Text style={styles.meta}>
           {activity.actorName} · {new Date(activity.createdAt).toLocaleString()}
         </Text>
-        <TaskMarkdown text={activity.body} compact onLinkPress={onLinkPress} />
+        <AuthoredMarkdown
+          text={activity.body}
+          author={activity.actorName}
+          onLinkPress={onLinkPress}
+        />
       </View>
     );
   }
@@ -1311,7 +1332,11 @@ function ActivityRow({
         {activity.replyTo ? ` · ${t("swarm.tasks.replyToActivity", { id: activity.replyTo })}` : ""}
         {revises ? ` · ${t("swarm.tasks.revises", { id: revises })}` : ""}
       </Text>
-      <TaskMarkdown text={activity.body} compact onLinkPress={onLinkPress} />
+      <AuthoredMarkdown
+        text={activity.body}
+        author={activity.actorName}
+        onLinkPress={onLinkPress}
+      />
       {choice && canChoose ? (
         <View style={styles.choices}>
           <Text style={styles.primary}>{choice.prompt}</Text>
@@ -1365,7 +1390,7 @@ function TaskSummary({
         {task.id}
         {task.duplicateOf ? ` · ${t("swarm.tasks.duplicateOf", { id: task.duplicateOf })}` : ""}
       </Text>
-      <TaskMarkdown text={task.brief} compact onLinkPress={onLinkPress} />
+      <AuthoredMarkdown text={task.brief} author={task.managerName} onLinkPress={onLinkPress} />
       {unbriefedCount > 0 ? (
         <Text style={styles.meta} testID="swarm-task-notes-not-in-brief">
           {t("swarm.tasks.notesNotInBrief", { count: unbriefedCount })}
@@ -1390,6 +1415,33 @@ function TaskSummary({
       </View>
     </>
   );
+}
+
+// Markdown a seat wrote. Paths it wrote in inline code open in that seat's workspace.
+function AuthoredMarkdown({
+  text,
+  author,
+  onLinkPress,
+}: {
+  text: string;
+  author: string;
+  onLinkPress: (uri: string) => boolean;
+}) {
+  const authors = useContext(TaskAuthorsContext);
+  const seat = authors ? findSwarmTaskAgent(authors.agents, author) : undefined;
+  const workspaceId = seat?.workspaceId ?? null;
+  const workspaceRoot = useWorkspaceDirectory(authors?.serverId ?? null, workspaceId);
+  const rules = useMemo(
+    () =>
+      workspaceId
+        ? createSharedMarkdownRules({
+            inlineCodeHref: (content) => swarmArtifactHref(content, { workspaceId, workspaceRoot }),
+            onLinkPress,
+          })
+        : undefined,
+    [workspaceId, workspaceRoot, onLinkPress],
+  );
+  return <TaskMarkdown text={text} compact rules={rules} onLinkPress={onLinkPress} />;
 }
 
 function ResolutionBadge({ resolution }: { resolution: string }) {
@@ -1426,7 +1478,11 @@ function TaskResult({
         <PersonButton name={delivery.actorName} onOpen={onOpenActor} />
         <Text style={styles.meta}>{new Date(delivery.createdAt).toLocaleString()}</Text>
       </View>
-      <TaskMarkdown text={delivery.body} compact onLinkPress={onLinkPress} />
+      <AuthoredMarkdown
+        text={delivery.body}
+        author={delivery.actorName}
+        onLinkPress={onLinkPress}
+      />
     </SurfaceCard>
   );
 }

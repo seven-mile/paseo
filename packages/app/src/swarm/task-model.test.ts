@@ -15,6 +15,7 @@ import {
   swarmTaskBoardSchema,
   swarmTaskColumns,
   swarmHumanActivityReceiptSchema,
+  swarmArtifactHref,
   swarmTaskResult,
   unansweredChoices,
   type HumanActivityInput,
@@ -711,5 +712,29 @@ describe("Swarm Task results and Cc", () => {
     model.removeCc("planner.ops");
     model.restoreCc();
     expect(model.getState().cc).toEqual(["planner.ops"]);
+  });
+});
+
+describe("Swarm artifact paths", () => {
+  const author = { workspaceId: "lab ws", workspaceRoot: "/home/me/lab" };
+  it("links a path the author wrote to that file in the author's workspace", () => {
+    expect(swarmArtifactHref("reports/final.md", author)).toBe(
+      "paseo-swarm://file/lab%20ws/reports/final.md",
+    );
+    expect(swarmArtifactHref("./reports/final.md:12", author)).toBe(
+      "paseo-swarm://file/lab%20ws/reports/final.md",
+    );
+    expect(swarmArtifactHref("/home/me/lab/src/headings.ts", author)).toBe(
+      "paseo-swarm://file/lab%20ws/src/headings.ts",
+    );
+  });
+  it("leaves code, paths outside the workspace, and unknown roots alone", () => {
+    expect(swarmArtifactHref("npm test", author)).toBeNull();
+    expect(swarmArtifactHref("taskState: done", author)).toBeNull();
+    expect(swarmArtifactHref("/etc/hosts.conf", author)).toBeNull();
+    expect(swarmArtifactHref("../outside.md", author)).toBeNull();
+    expect(
+      swarmArtifactHref("/home/me/lab/a.md", { workspaceId: "lab", workspaceRoot: null }),
+    ).toBeNull();
   });
 });

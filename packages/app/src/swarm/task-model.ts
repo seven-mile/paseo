@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { i18n } from "@/i18n/i18next";
+import { isFileLookingAssistantToken, parseAssistantFileLink } from "@/assistant-file-links/parse";
 import { isImeComposingKeyboardEvent } from "@/utils/keyboard-ime";
+import { isAbsolutePath } from "@/utils/path";
+import { resolveWorkspaceFilePaths } from "@/workspace/file-open";
 
 export function isSwarmActivitySubmitShortcut(event: {
   key: string;
@@ -207,6 +210,31 @@ export function resolveSwarmTaskReference(
   const path = segments.slice(1).join("/");
   if (!validReferencePath(path)) return null;
   return { kind: "file", workspaceId: segments[0], path };
+}
+
+// A path an agent wrote in inline code, as a link to that file in the author's workspace. A Task
+// is read from other workspaces too, so a path resolves against the workspace of the seat that
+// wrote it, never the reader's.
+export function swarmArtifactHref(
+  content: string,
+  author: { workspaceId: string; workspaceRoot: string | null },
+): string | null {
+  const token = content.trim();
+  if (!isFileLookingAssistantToken(token)) return null;
+  const root = author.workspaceRoot ?? undefined;
+  const target = parseAssistantFileLink(token, { workspaceRoot: root });
+  if (!target) return null;
+  let path: string | null = null;
+  if (isAbsolutePath(target.path)) {
+    if (!root) return null;
+    path =
+      resolveWorkspaceFilePaths({ path: target.path, workspaceRoot: root })?.relativePath ?? null;
+  } else {
+    path = target.path.replace(/^(\.\/)+/, "");
+  }
+  if (!path || !validReferencePath(path)) return null;
+  const encoded = path.split("/").map(encodeURIComponent).join("/");
+  return `paseo-swarm://file/${encodeURIComponent(author.workspaceId)}/${encoded}`;
 }
 
 function validReferencePath(path: string) {
