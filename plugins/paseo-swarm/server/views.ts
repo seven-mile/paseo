@@ -1,0 +1,152 @@
+import { createHash } from "node:crypto";
+import type { z } from "zod";
+import type { seatSummarySchema, taskSummarySchema } from "../shared/swarm";
+import {
+  unansweredChoices,
+  type Activity,
+  type SwarmRecord,
+  type SwarmState,
+  type Task,
+} from "../shared/models";
+import { listPwaRoles, readPwa } from "./pwa";
+import { seatView } from "./seats";
+import { store } from "./state";
+
+type SeatSummary = z.input<typeof seatSummarySchema>;
+type TaskSummary = z.input<typeof taskSummarySchema>;
+
+// A conditional read's answer: data is null when the caller already holds this etag.
+export interface Conditional<T> {
+  etag: string;
+  data: T | null;
+}
+
+interface CachedView {
+  revision: string;
+  etag: string;
+  value: unknown;
+}
+
+// Views are pure functions of the store, so one built at a store revision stands until the next
+// commit. Polling clients that hold the current etag cost a map lookup, not a rebuild.
+const MAX_CACHED_VIEWS = 128;
+const cache = new Map<string, CachedView>();
+
+export function conditionalView<T>(
+  key: string,
+  etag: string | undefined,
+  build: (state: Readonly<SwarmState>) => T,
+): Conditional<T> {
+  const revision = store.revision();
+  let view = cache.get(key);
+  if (!view || view.revision !== revision) {
+    const value = build(store.read());
+    // The etag hashes the content, not the revision: commits that leave this view unchanged, such
+    // as mailbox deliveries, keep its etag, so clients that hold it are not sent it again.
+    const digest = createHash("sha256").update(JSON.stringify(value)).digest("base64url");
+    view = { revision, etag: digest, value };
+  }
+  // Refreshing the entry's position keeps the views in use; the least recently read go first.
+  cache.delete(key);
+  cache.set(key, view);
+  if (cache.size > MAX_CACHED_VIEWS) cache.delete(cache.keys().next().value!);
+  if (etag === view.etag) return { etag: view.etag, data: null };
+  return { etag: view.etag, data: view.value as T };
+}
+
+export function seatSummary(seat: SwarmState["agents"][number]): SeatSummary {
+  const view = seatView(seat);
+  return {
+    id: view.id,
+    swarmId: view.swarmId,
+    paseoAgentId: view.paseoAgentId,
+    name: view.name,
+    ...(view.qualifiedName ? { qualifiedName: view.qualifiedName } : {}),
+    aliases: view.aliases,
+    roleClass: view.roleClass,
+    role: view.role,
+    reportsTo: view.reportsTo,
+    workspaceId: view.workspaceId,
+    retired: view.retired,
+    pending: view.pending,
+  };
+}
+
+function swarmRef(swarm: SwarmRecord) {
+  return { id: swarm.id, name: swarm.name, projectId: swarm.projectId };
+}
+
+export function rosterView(state: Readonly<SwarmState>) {
+  return {
+    agents: state.agents.filter((seat) => !seat.retired).map(seatSummary),
+    swarms: state.swarms.map(swarmRef),
+  };
+}
+
+export function tasksView(
+  state: Readonly<SwarmState>,
+  scope: { projectId?: string; swarmId?: string },
+) {
+  const swarms = state.swarms.filter(
+    (swarm) =>
+      (!scope.swarmId || swarm.id === scope.swarmId) &&
+      (!scope.projectId || swarm.projectId === scope.projectId),
+  );
+  const inScope = new Set(swarms.map((swarm) => swarm.id));
+  const activities = new Map<string, Activity[]>();
+  for (const activity of state.activities) {
+    if (!inScope.has(activity.swarmId)) continue;
+    const key = `${activity.swarmId}/${activity.taskId}`;
+    const list = activities.get(key);
+    if (list) list.push(activity);
+    else activities.set(key, [activity]);
+  }
+  const tasks: TaskSummary[] = state.tasks
+    .filter((task) => inScope.has(task.swarmId))
+    .map((task) => ({
+      id: task.id,
+      swarmId: task.swarmId,
+      title: task.title,
+      status: task.status,
+      managerName: task.managerName,
+      workerNames: task.workerNames,
+      createdBy: task.createdBy,
+      updatedAt: task.updatedAt,
+      attention: unansweredChoices(activities.get(`${task.swarmId}/${task.id}`) ?? []).length,
+    }));
+  return {
+    // Retired seats stay: a Task can still name one as its manager or a worker.
+    agents: state.agents.filter((seat) => inScope.has(seat.swarmId)).map(seatSummary),
+    tasks,
+    statuses: swarms.length === 1 ? plannerStatuses(swarms[0]) : [],
+    swarms: swarms.map(swarmRef),
+  };
+}
+
+function plannerStatuses(swarm: SwarmRecord): string[] {
+  const { files } = swarm.source;
+  const planner = listPwaRoles(files).find((role) => role.roleClass === "planner");
+  return planner ? readPwa(files, planner.role).statuses : [];
+}
+
+export function taskView(
+  state: Readonly<SwarmState>,
+  input: { swarmId: string; taskId: string; limit: number },
+): { task: Task; activities: Activity[]; olderCount: number } {
+  const task = state.tasks.find(
+    (candidate) => candidate.swarmId === input.swarmId && candidate.id === input.taskId,
+  );
+  if (!task) throw new Error(`Unknown Task: ${input.taskId}`);
+  const all = state.activities.filter(
+    (activity) => activity.swarmId === input.swarmId && activity.taskId === input.taskId,
+  );
+  const start = Math.max(0, all.length - input.limit);
+  const older = all.slice(0, start);
+  const open = new Set(unansweredChoices(all).map((activity) => activity.id));
+  const kept = older.filter((activity) => open.has(activity.id));
+  return {
+    task,
+    activities: [...kept, ...all.slice(start)],
+    olderCount: older.length - kept.length,
+  };
+}
