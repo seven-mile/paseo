@@ -90,8 +90,8 @@ export const directoryRecoverRpc = defineRpc({
   output: z.object({ swarm: swarmSummarySchema, seats: z.array(z.string()) }),
 });
 
-// COMPAT(boardRead): the app polled the whole board before the conditional reads below; remove
-// after 2027-02-01. Its output grows with every Activity, so nothing new reads it.
+// Every record of the board. Agent tools read it in process; its answer grows with every Activity,
+// so app surfaces, which poll across the network, use the conditional reads below.
 export const boardReadRpc = defineRpc({
   name: "swarm.board.read",
   input: z.object({

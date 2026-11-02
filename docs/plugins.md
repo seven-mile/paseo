@@ -125,7 +125,7 @@ current etag gets `data: null`, so commits a view does not show, such as mailbox
 its clients nothing. Do not add a read whose answer grows with the board's history: the app polled
 the whole board, 2.4 MB with 900 Activities, every three seconds, and on slow relay paths that
 starved the connection's heartbeat ([architecture](architecture.md)). `swarm.board.read` remains
-for older apps only.
+for Swarm's agent tools, which call it in process, and for older apps.
 
 Seats, Tasks, and Activities belong to a swarm: a directory holding `swarm.yaml`, `PWA.md`, and
 `roles/`, attached to one project and identified by an id the daemon mints. Seat names and Task ids

@@ -151,8 +151,8 @@ const CANONICAL_PANE: PaneContextValue = {
   openFileInWorkspace() {},
   openImportSheet() {},
 };
-const CANONICAL_BOARD = {
-  version: 1,
+const CANONICAL_TASKS = {
+  statuses: [],
   agents: [
     {
       id: "worker-seat",
@@ -169,17 +169,18 @@ const CANONICAL_BOARD = {
   tasks: [
     {
       id: "task-ID",
+      swarmId: "swarm",
       title: "Task",
-      brief: "",
       status: "development",
       managerName: "planner.worker",
       workerNames: [],
       createdBy: "human",
       updatedAt: "now",
+      attention: 0,
     },
   ],
-  activities: [],
 };
+const CANONICAL_BOARD = { etag: "board", data: CANONICAL_TASKS };
 
 function createCanonicalWrapper() {
   const tabId = useWorkspaceLayoutStore
@@ -368,7 +369,10 @@ describe("canonical assistant links", () => {
     async ({ line, label, uri, reference }) => {
       canonicalPlugin?.invoke.mockResolvedValueOnce({
         ...CANONICAL_BOARD,
-        tasks: CANONICAL_BOARD.tasks.map((task) => ({ ...task, id: "task-id" })),
+        data: {
+          ...CANONICAL_TASKS,
+          tasks: CANONICAL_TASKS.tasks.map((task) => ({ ...task, id: "task-id" })),
+        },
       });
       const { Wrapper, openedFiles, getDirectorySuggestions } = createCanonicalWrapper();
       const presses: Array<{ uri: string; allowDefault: boolean }> = [];
@@ -392,9 +396,7 @@ describe("canonical assistant links", () => {
           reference,
         }),
       );
-      expect(canonicalPlugin?.invoke).toHaveBeenCalledExactlyOnceWith("swarm.board.read", {
-        includeReserved: true,
-      });
+      expect(canonicalPlugin?.invoke).toHaveBeenCalledExactlyOnceWith("swarm.tasks.read", {});
       expect(openedFiles).toEqual([]);
       expect(getDirectorySuggestions).not.toHaveBeenCalled();
       expect(openExternalUrl).not.toHaveBeenCalled();
@@ -419,9 +421,7 @@ describe("canonical assistant links", () => {
         { variant: "error" },
       ),
     );
-    expect(canonicalPlugin?.invoke).toHaveBeenCalledExactlyOnceWith("swarm.board.read", {
-      includeReserved: true,
-    });
+    expect(canonicalPlugin?.invoke).toHaveBeenCalledExactlyOnceWith("swarm.tasks.read", {});
     expect(openSwarmReference).not.toHaveBeenCalled();
     expect(openedFiles).toEqual([]);
     expect(getDirectorySuggestions).not.toHaveBeenCalled();
