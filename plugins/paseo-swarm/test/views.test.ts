@@ -208,7 +208,7 @@ test("the Task list carries attention counts, not Activities or briefs", async (
   });
 });
 
-test("a Task read returns its latest Activities and every unanswered choice before them", async () => {
+test("a Task read returns its latest Activities and every unanswered choice and its result before them", async () => {
   await withHandlers(async (invoke) => {
     const notes = Array.from({ length: 6 }, (_, index) => activity(`note-${index}`, "first"));
     await seed({
@@ -217,6 +217,8 @@ test("a Task read returns its latest Activities and every unanswered choice befo
       activities: [
         activity("old-choice", "first", { data: choice }),
         activity("old-answered", "first", { data: choice }),
+        activity("first-result", "first", { kind: "delivery" }),
+        activity("result", "first", { kind: "delivery" }),
         ...notes,
         activity("elsewhere", "other"),
         activity("late-reply", "first", {
@@ -237,12 +239,12 @@ test("a Task read returns its latest Activities and every unanswered choice befo
     assert.equal(page.data.task.brief.startsWith("A long brief"), true);
     assert.deepEqual(
       page.data.activities.map((entry) => entry.id),
-      ["old-choice", "note-4", "note-5", "late-reply"],
+      ["old-choice", "result", "note-4", "note-5", "late-reply"],
     );
-    assert.equal(page.data.olderCount, 5);
+    assert.equal(page.data.olderCount, 6);
 
     const all = await read({});
-    assert.equal(all.data?.activities.length, 9);
+    assert.equal(all.data?.activities.length, 11);
     assert.equal(all.data?.olderCount, 0);
     assert.deepEqual(await read({ etag: all.etag }), { etag: all.etag, data: null });
     await assert.rejects(async () => read({ taskId: "missing" }), /Unknown Task/);
