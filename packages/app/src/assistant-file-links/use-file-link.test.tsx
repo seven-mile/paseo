@@ -371,7 +371,7 @@ describe("canonical assistant links", () => {
         ...CANONICAL_BOARD,
         data: {
           ...CANONICAL_TASKS,
-          tasks: CANONICAL_TASKS.tasks.map((task) => ({ ...task, id: "task-id" })),
+          tasks: [{ ...CANONICAL_TASKS.tasks[0], id: "task-id" }],
         },
       });
       const { Wrapper, openedFiles, getDirectorySuggestions } = createCanonicalWrapper();
