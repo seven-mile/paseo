@@ -32,6 +32,7 @@ import { formatTimeAgo } from "@/utils/time";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
 import { useSwarmSeat, type RosterSeat } from "./roster";
+import { useSeatAgentTimeline } from "./seat-agent-timeline";
 import { sendSeatMail, seatRecipient, useUndeliveredSeatMail } from "./seat-mail";
 import {
   latestHandover,
@@ -106,6 +107,7 @@ function SeatConversationContent({
   );
   const shownAgentId = viewedPast?.paseoAgentId ?? currentAgentId;
   const shownOccupant = occupants.find((occupant) => occupant.paseoAgentId === shownAgentId);
+  useSeatAgentTimeline(plugin.serverId, workspaceId ? shownAgentId : null, active);
   const handover = useMemo(() => latestHandover(seat), [seat]);
   const mail = useUndeliveredSeatMail(plugin, seat, active);
   const name = seatRecipient(seat);
