@@ -10,6 +10,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
 import {
@@ -301,6 +302,8 @@ export function writeSnapshot(state: SwarmState, seq: number): void {
 
 interface Loaded {
   directory: string;
+  // Minted at each load, so a revision read before a reload or a migration never matches after.
+  epoch: string;
   state: SwarmState;
   seq: number;
   commitsSinceSnapshot: number;
@@ -317,6 +320,13 @@ export class StateStore {
 
   read(): Readonly<SwarmState> {
     return this.load().state;
+  }
+
+  // Changes with every commit and every load. Reads derived from the state can be cached and
+  // compared under it: the same revision always means the same state.
+  revision(): string {
+    const loaded = this.load();
+    return `${loaded.epoch}:${loaded.seq}`;
   }
 
   // Drops what was read, so the next read loads the files again. The migration calls it after
@@ -360,6 +370,7 @@ export class StateStore {
     const files = readStoreFiles(currentFormat, emptyState);
     const loaded = {
       directory,
+      epoch: randomUUID(),
       state: files.state,
       seq: files.seq,
       commitsSinceSnapshot: files.commits,

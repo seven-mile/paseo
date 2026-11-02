@@ -139,6 +139,31 @@ export const activitySchema = z.object({
 });
 export type Activity = z.infer<typeof activitySchema>;
 
+// An Activity that asks the human to choose: data.action holds the question and its options.
+export const choiceActionSchema = z.object({
+  type: z.literal("choice"),
+  prompt: z.string(),
+  options: z
+    .array(z.object({ id: z.string(), label: z.string(), description: z.string().optional() }))
+    .min(1),
+  responseProfiles: z.array(responseProfileSchema).min(1).optional(),
+});
+
+// The choices of one Task that no human Activity has replied to yet.
+export function unansweredChoices<
+  T extends Pick<Activity, "id" | "actorKind" | "replyTo" | "data">,
+>(activities: readonly T[]): T[] {
+  const answered = new Set(
+    activities
+      .filter((activity) => activity.actorKind === "human" && activity.replyTo)
+      .map((activity) => activity.replyTo),
+  );
+  return activities.filter(
+    (activity) =>
+      choiceActionSchema.safeParse(activity.data.action).success && !answered.has(activity.id),
+  );
+}
+
 export const messageKindSchema = z.enum(["team", "runtime", "human_activity"]);
 export type MessageKind = z.infer<typeof messageKindSchema>;
 

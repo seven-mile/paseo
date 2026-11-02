@@ -32,6 +32,7 @@ import {
   swarmSeats,
   swarmTasks,
 } from "./swarms";
+import { conditionalView, rosterView, taskView, tasksView } from "./views";
 import { planRoster, readDesired } from "./roster";
 import {
   assertNoConflict,
@@ -44,6 +45,9 @@ import {
 import {
   appendHumanActivityRpc,
   boardReadRpc,
+  rosterReadRpc,
+  taskReadRpc,
+  tasksReadRpc,
   createSeatRpc,
   directoryRecoverRpc,
   directoryUpRpc,
@@ -60,6 +64,7 @@ import {
   seatResetRpc,
   seatRetireRpc,
   seatUpdateRpc,
+  SWARM_FEATURES,
 } from "../shared/swarm";
 import type {
   AgentConfig,
@@ -457,7 +462,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         name: swarm.name,
         projectId: swarm.projectId,
       })),
-      features: ["cc"],
+      features: SWARM_FEATURES,
     };
     if (!projectId && !swarmId) return board;
     if (swarms.length !== 1) return { ...board, statuses: [] };
@@ -466,6 +471,18 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     if (!planner) return { ...board, statuses: [] };
     return { ...board, statuses: readPwa(files, planner.role).statuses };
   });
+  server.handle(rosterReadRpc, ({ etag }) => conditionalView("roster", etag, rosterView));
+  server.handle(tasksReadRpc, async ({ projectId, swarmId, etag }, context) => {
+    if (projectId) await projectRoot(projectId, context);
+    return conditionalView(`tasks:${projectId ?? ""}:${swarmId ?? ""}`, etag, (state) =>
+      tasksView(state, { projectId, swarmId }),
+    );
+  });
+  server.handle(taskReadRpc, ({ swarmId, taskId, limit, etag }) =>
+    conditionalView(`task:${swarmId}/${taskId}:${limit}`, etag, (state) =>
+      taskView(state, { swarmId, taskId, limit }),
+    ),
+  );
   // A project's swarm directory, or the PWA directory chosen before swarms that its swarm will
   // be instantiated from.
   server.handle(pwaSourceReadRpc, async ({ projectId }, context) => {
