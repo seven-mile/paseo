@@ -183,6 +183,7 @@ import {
   closeBulkWorkspaceTabs,
 } from "@/screens/workspace/workspace-bulk-close";
 import { resolveCloseAgentTabPolicy } from "@/subagents";
+import { agentsShownOnlyBySeatTab } from "@/swarm/seat-labels";
 import {
   getPanelInstanceAttributes,
   useModifiedPanelTabIds,
@@ -1912,6 +1913,22 @@ function WorkspaceScreenContent({
         unpinWorkspaceAgent(persistenceKey, input.target.agentId);
         hideWorkspaceAgent(persistenceKey, input.target.agentId);
       }
+      if (input.target?.kind === "swarm_seat") {
+        const openAgentIds = new Set(
+          useWorkspaceLayoutStore
+            .getState()
+            .getWorkspaceTabs(persistenceKey)
+            .flatMap((tab) => (tab.target.kind === "agent" ? [tab.target.agentId] : [])),
+        );
+        const agents = useSessionStore.getState().sessions[normalizedServerId]?.agents;
+        for (const agentId of agentsShownOnlyBySeatTab({
+          agents: agents?.values() ?? [],
+          seatId: input.target.seatId,
+          openAgentIds,
+        })) {
+          hideWorkspaceAgent(persistenceKey, agentId);
+        }
+      }
       if (input.target?.kind === "browser") {
         const { browserId } = input.target;
         useBrowserStore.getState().removeBrowser(browserId);
@@ -1920,7 +1937,13 @@ function WorkspaceScreenContent({
       }
       closeWorkspaceTab(persistenceKey, normalizedTabId);
     },
-    [closeWorkspaceTab, hideWorkspaceAgent, persistenceKey, unpinWorkspaceAgent],
+    [
+      closeWorkspaceTab,
+      hideWorkspaceAgent,
+      normalizedServerId,
+      persistenceKey,
+      unpinWorkspaceAgent,
+    ],
   );
 
   const focusedPaneTabState = useMemo(

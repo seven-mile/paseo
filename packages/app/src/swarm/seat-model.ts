@@ -56,6 +56,8 @@ export function seatConversationAgentId(seat: SwarmSeat): string | null {
 
 export interface SeatHandover {
   from: number;
+  // The outgoing occupant, whose conversation the person can open from the handover.
+  fromAgentId: string;
   to: number;
   at: string;
   reason: string;
@@ -65,21 +67,20 @@ export interface SeatHandover {
   returning: boolean;
 }
 
-// The handover that put the current occupant in the seat. Swarm stamps the outgoing occupant's
-// retiredAt with the incoming one's boundAt, so the two match.
+// The handover that put the current occupant in the seat: the last one Swarm logged, if it
+// brought in the agent that holds the seat now.
 export function latestHandover(seat: SwarmSeat): SeatHandover | null {
-  const occupant = seat.occupant;
-  if (!seat.paseoAgentId || !occupant?.boundAt) return null;
-  const outgoing = (seat.pastOccupants ?? []).find((past) => past.retiredAt === occupant.boundAt);
-  if (!outgoing) return null;
+  const handover = seat.handovers?.at(-1);
+  if (!seat.paseoAgentId || handover?.to.paseoAgentId !== seat.paseoAgentId) return null;
   return {
-    from: outgoing.number,
-    to: occupant.number,
-    at: occupant.boundAt,
-    reason: outgoing.reason,
-    fromProvider: outgoing.config?.provider,
-    toProvider: occupant.config?.provider,
-    returning: occupant.number < outgoing.number,
+    from: handover.from.number,
+    fromAgentId: handover.from.paseoAgentId,
+    to: handover.to.number,
+    at: handover.at,
+    reason: handover.reason,
+    fromProvider: handover.from.config?.provider,
+    toProvider: handover.to.config?.provider,
+    returning: handover.returning,
   };
 }
 

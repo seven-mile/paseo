@@ -2,7 +2,7 @@ import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin
 import { flushMailbox, markConsumed, noteTurnEnded, noteTurnStarted } from "./server/mailbox";
 import { migrateStore } from "./server/migration";
 import { notifyManager, registerOperations } from "./server/operations";
-import { declareTabClose } from "./server/seats";
+import { declareSeatLabels } from "./server/seats";
 import { recoverIntents } from "./server/spec";
 import { summarizeTurn } from "./server/turns";
 
@@ -15,13 +15,13 @@ export default function contribute(server: PluginServerContext) {
     console.error("[paseo-swarm] Could not prepare Swarm state", error);
   });
   // Plugins get a Paseo connection only with a request or a hook, so agents started by an older
-  // Swarm get their tab-close declaration at the first one after startup. A failure is retried at
+  // Swarm get the labels it declared since at the first one after startup. A failure is retried at
   // the next; nothing waits for it.
   let declared: Promise<unknown> | null = null;
   const declare = (context: PluginHandlerContext) => {
-    declared ??= declareTabClose(context).catch((error) => {
+    declared ??= declareSeatLabels(context).catch((error) => {
       declared = null;
-      console.warn("[paseo-swarm] Could not declare layout-only tab close", error);
+      console.warn("[paseo-swarm] Could not declare seat labels", error);
     });
   };
   registerOperations({

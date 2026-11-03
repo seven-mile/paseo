@@ -83,15 +83,26 @@ describe("seat occupants", () => {
 });
 
 describe("seat handover", () => {
-  it("matches the outgoing occupant by the incoming one's bind time", () => {
+  function handover(from: [number, string], to: [number, string], returning = false) {
+    return {
+      at: `2026-10-0${to[0] + from[0]}T00:00:00.000Z`,
+      from: { number: from[0], paseoAgentId: from[1], config: { provider: "claude" } },
+      to: { number: to[0], paseoAgentId: to[1], config: { provider: "codex" } },
+      reason: `reason ${from[0]}`,
+      returning,
+    };
+  }
+
+  it("reads the handover that brought in the current occupant from the log", () => {
     const seat: SwarmSeat = {
       ...baseSeat,
       paseoAgentId: "agent-2",
-      occupant: { number: 2, boundAt: "2026-10-03T00:00:00.000Z", config: { provider: "codex" } },
-      pastOccupants: [past(1, "agent-1", "2026-10-03T00:00:00.000Z")],
+      occupant: { number: 2, boundAt: "2026-10-03T00:00:00.000Z" },
+      handovers: [handover([1, "agent-1"], [2, "agent-2"])],
     };
     expect(latestHandover(seat)).toEqual({
       from: 1,
+      fromAgentId: "agent-1",
       to: 2,
       at: "2026-10-03T00:00:00.000Z",
       reason: "reason 1",
@@ -101,23 +112,34 @@ describe("seat handover", () => {
     });
   });
 
-  it("marks an earlier occupant coming back as returning", () => {
+  it("keeps a return apart from the stint before it", () => {
     const seat: SwarmSeat = {
       ...baseSeat,
       paseoAgentId: "agent-1",
       occupant: { number: 1, boundAt: "2026-10-04T00:00:00.000Z" },
-      pastOccupants: [past(2, "agent-2", "2026-10-04T00:00:00.000Z")],
+      handovers: [
+        handover([1, "agent-1"], [2, "agent-2"]),
+        handover([2, "agent-2"], [1, "agent-1"], true),
+      ],
     };
-    expect(latestHandover(seat)).toMatchObject({ from: 2, to: 1, returning: true });
+    expect(latestHandover(seat)).toMatchObject({
+      from: 2,
+      fromAgentId: "agent-2",
+      to: 1,
+      returning: true,
+    });
   });
 
-  it("reports no handover for a first occupant", () => {
-    const seat: SwarmSeat = {
+  it("reports no handover for a first occupant, or one the log does not end with", () => {
+    const first: SwarmSeat = {
       ...baseSeat,
       paseoAgentId: "agent-1",
       occupant: { number: 1, boundAt: "2026-10-01T00:00:00.000Z" },
     };
-    expect(latestHandover(seat)).toBeNull();
+    expect(latestHandover(first)).toBeNull();
+    expect(
+      latestHandover({ ...first, handovers: [handover([2, "agent-2"], [3, "agent-3"])] }),
+    ).toBeNull();
   });
 });
 

@@ -1621,7 +1621,6 @@ function ActiveAgentComposer({
 
   return (
     <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
-      {route?.aboveComposer}
       <Composer
         agentId={agentId}
         serverId={serverId}
@@ -1648,6 +1647,7 @@ function ActiveAgentComposer({
         onSubmitMessage={route?.submit}
         queueWhileAgentRunning={!route}
         placeholder={route?.placeholder}
+        aboveInput={route?.aboveInput}
         isCompactLayout={isCompactComposerLayout}
       />
     </View>
