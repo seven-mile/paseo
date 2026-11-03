@@ -158,6 +158,12 @@ export const ru: TranslationResources = {
       audienceTo: "Кому: {{names}}",
       audienceCc: "Копия: {{names}}",
       briefUnconfirmed: "Описание написал {{author}}, {{owner}} ещё не подтвердил его",
+      delivered: "Сдано",
+      history: "История",
+      emptyHistory: "Нет подходящих закрытых задач.",
+      supersededBy: "Заменена {{id}}",
+      closedBy: "Закрыл {{name}}",
+      absorbed: "Включила {{ids}}",
       resolutions: {
         done: "Готово",
         "wont-do": "Не будет сделано",

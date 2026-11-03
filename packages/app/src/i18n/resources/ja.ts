@@ -158,6 +158,12 @@ export const ja: TranslationResources = {
       audienceTo: "宛先 {{names}}",
       audienceCc: "CC {{names}}",
       briefUnconfirmed: "{{author}} が書いた概要で、{{owner}} はまだ確認していません",
+      delivered: "納品済み",
+      history: "履歴",
+      emptyHistory: "一致する完了済みタスクはありません。",
+      supersededBy: "{{id}} に置き換え",
+      closedBy: "{{name}} がクローズ",
+      absorbed: "{{ids}} を統合",
       resolutions: {
         done: "完了",
         "wont-do": "対応しない",

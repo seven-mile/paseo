@@ -257,9 +257,11 @@ function describeChanges(changes: FieldChange[], task: Task, reason?: string): s
         return "Brief revised";
       case "resolution":
         if (change.to === null) return "Reopened";
-        return change.to === "duplicate"
-          ? `Closed as a duplicate of ${task.duplicateOf}`
-          : `Closed as ${change.to}`;
+        if (change.to === "duplicate") return `Closed as a duplicate of ${task.duplicateOf}`;
+        if (change.to === "superseded" && task.supersededBy) {
+          return `Closed as superseded by ${task.supersededBy}`;
+        }
+        return `Closed as ${change.to}`;
     }
   });
   return [...lines, ...(reason ? [`Reason: ${reason}`] : [])].join("\n");
@@ -393,6 +395,15 @@ function planUpdate(input: UpdateInput, task: Task, actor: AgentRecord): UpdateP
   } else if (input.duplicateOf) {
     throw refuse("duplicateOf goes with resolution duplicate", "Pass both, or neither.");
   }
+  if (input.supersededBy !== undefined) {
+    if (input.resolution !== "superseded" || input.supersededBy === task.id) {
+      throw refuse(
+        "supersededBy goes with resolution superseded and names another Task",
+        "Pass resolution superseded with the replacing Task's id, or leave supersededBy out.",
+      );
+    }
+    findTask(task.swarmId, input.supersededBy);
+  }
   const owner = newOwner ?? activeSeat(store.read(), task.swarmId, task.managerName);
   if (input.workerNames !== undefined) {
     if (!owner) {
@@ -454,11 +465,15 @@ function applyUpdate(
     changed.push({ field: "resolution", from: current.resolution ?? null, to: input.resolution });
     delete next.resolution;
     delete next.resolvedAt;
+    delete next.resolvedBy;
     delete next.duplicateOf;
+    delete next.supersededBy;
     if (input.resolution) {
       next.resolution = input.resolution;
       next.resolvedAt = timestamp;
+      next.resolvedBy = actorName;
       if (input.duplicateOf) next.duplicateOf = input.duplicateOf;
+      if (input.supersededBy) next.supersededBy = input.supersededBy;
     }
   }
   if (plan.workerNames !== undefined) next.workerNames = plan.workerNames;
@@ -824,10 +839,14 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
         const reopened = input.taskState === "open" && current.resolution !== undefined;
         delete next.resolution;
         delete next.resolvedAt;
+        delete next.resolvedBy;
         delete next.duplicateOf;
+        delete next.supersededBy;
         if (input.taskState === "done") {
+          const already = current.resolution === "done";
           next.resolution = "done";
-          next.resolvedAt = current.resolution === "done" ? current.resolvedAt : timestamp;
+          next.resolvedAt = already ? current.resolvedAt : timestamp;
+          next.resolvedBy = already ? (current.resolvedBy ?? actorName) : actorName;
         }
         const activity = makeActivity(
           {

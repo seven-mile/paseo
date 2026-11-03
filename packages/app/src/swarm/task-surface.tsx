@@ -65,6 +65,8 @@ import {
   isSwarmActivitySubmitShortcut,
   notesNotInBrief,
   openSwarmTaskSurfaceState,
+  partitionSwarmTasks,
+  swarmAttentionTotal,
   responseProfiles,
   resolveSwarmTaskReference,
   scopedSwarmTasks,
@@ -265,6 +267,8 @@ function TaskSurface({
         read: (etag) =>
           invoke("swarm.tasks.read", {
             projectId: projectId ?? undefined,
+            // Older hosts ignore the view and list every Task, which the lanes still sort.
+            view: "current",
             ...(etag ? { etag } : {}),
           }),
       }),
@@ -319,6 +323,7 @@ function TaskSurface({
             invoke={invoke}
             queryClient={plugin?.queryClient}
             serverId={serverId}
+            projectId={projectId}
             onRefresh={refresh}
             {...selection}
           />
@@ -339,6 +344,7 @@ type LoadedTasksProps = {
   invoke: <T>(method: string, input: unknown) => Promise<T>;
   queryClient: QueryClient | undefined;
   serverId: string;
+  projectId?: string | null;
   onRefresh: () => void;
 } & Pick<
   SwarmTaskSurfaceProps,
@@ -513,6 +519,7 @@ function LoadedTasks({
   invoke,
   queryClient,
   serverId,
+  projectId,
   onRefresh,
   plannerName,
   agentName,
@@ -611,6 +618,20 @@ function LoadedTasks({
     () => filterSwarmTasks(tasks, statuses, search),
     [tasks, statuses, search],
   );
+  const lanes = useMemo(() => partitionSwarmTasks(filtered), [filtered]);
+  const { showHistory, toggleHistory, historySupported, history, historyTasks, knownTasks } =
+    useHistoryLane({
+      board,
+      search,
+      online,
+      serverId,
+      projectId: projectId ?? null,
+      invoke,
+      queryClient,
+      projectWorkspaceIds,
+      knownWorkspaceIds,
+      agentName: scope || undefined,
+    });
   const toggleStatus = useCallback((value: string) => {
     setStatuses((current) => {
       if (!value) return [];
@@ -618,7 +639,7 @@ function LoadedTasks({
       return [...current, value];
     });
   }, []);
-  const selected = tasks.find((task) => task.id === selectedTaskId);
+  const selected = [...tasks, ...history.seen].find((task) => task.id === selectedTaskId);
   const scopeOptions = swarmTaskScopeOptions(board, projectWorkspaceIds, knownWorkspaceIds);
   const statusOptions = useMemo(
     () => [
@@ -647,7 +668,7 @@ function LoadedTasks({
     [selectedTaskId],
   );
   const bodyStyle = useMemo(() => [styles.taskBody, split && styles.taskBodySplit], [split]);
-  const showKanban = !selectedTaskId && presentation === "main" && wide;
+  const showKanban = !selectedTaskId && presentation === "main" && wide && !showHistory;
   return (
     <View style={styles.loaded} onLayout={onLayout}>
       <View style={bodyStyle}>
@@ -674,16 +695,39 @@ function LoadedTasks({
               />
             </View>
             <TaskStatusFilter statuses={statuses} options={statusOptions} onToggle={toggleStatus} />
+            <TaskLaneControls
+              attention={swarmAttentionTotal(tasks)}
+              historySupported={historySupported}
+              showHistory={showHistory}
+              onToggleHistory={toggleHistory}
+            />
           </View>
           <RetainedPanel active={showKanban}>
-            <TaskKanban tasks={filtered} board={board} statuses={statuses} onOpen={openTask} />
+            <TaskKanban
+              tasks={lanes.open}
+              delivered={lanes.closed}
+              board={board}
+              statuses={statuses}
+              onOpen={openTask}
+            />
           </RetainedPanel>
-          <RetainedPanel active={!showKanban}>
+          <RetainedPanel active={!showKanban && !showHistory}>
             <TaskRows
-              tasks={filtered}
+              tasks={lanes.open}
+              delivered={lanes.closed}
               selectedTaskId={selectedTaskId}
               emptyMessage={
                 tasks.length === 0 ? t("swarm.tasks.emptyScope") : t("swarm.tasks.noMatches")
+              }
+              onOpen={openTask}
+            />
+          </RetainedPanel>
+          <RetainedPanel active={showHistory}>
+            <TaskRows
+              tasks={historyTasks}
+              selectedTaskId={selectedTaskId}
+              emptyMessage={
+                history.loading ? t("swarm.tasks.loading") : t("swarm.tasks.emptyHistory")
               }
               onOpen={openTask}
             />
@@ -694,7 +738,7 @@ function LoadedTasks({
             <TaskPlaceholder message={t("swarm.tasks.unavailableInScope")} onBack={back} />
           </RetainedPanel>
           {visitedTaskIds.map((id) => {
-            const task = board.tasks.find((candidate) => candidate.id === id);
+            const task = knownTasks.find((candidate) => candidate.id === id);
             if (!task) return null;
             const visible = selected?.id === id;
             return (
@@ -746,11 +790,14 @@ function taskScopeSelection(board: SwarmTaskBoard, value: string) {
 
 function TaskKanban({
   tasks,
+  delivered,
   board,
   statuses,
   onOpen,
 }: {
   tasks: readonly SwarmTask[];
+  // Closed Tasks the current board still shows, as a last column.
+  delivered: readonly SwarmTask[];
   board: SwarmTaskBoard;
   statuses: readonly string[];
   onOpen: (id: string) => void;
@@ -791,38 +838,187 @@ function TaskKanban({
           </ScrollView>
         </View>
       ))}
+      {delivered.length > 0 ? (
+        <View style={styles.column} testID="swarm-column-delivered">
+          <View style={styles.columnHeading}>
+            <StatusBadge variant="success" label={t("swarm.tasks.delivered")} />
+            <Text style={styles.meta}>{delivered.length}</Text>
+          </View>
+          <ScrollView contentContainerStyle={styles.columnCards} nestedScrollEnabled>
+            {delivered.map((task) => (
+              <SurfaceCard key={task.id}>
+                <TaskRow task={task} selected={false} attention={task.attention} onOpen={onOpen} />
+              </SurfaceCard>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
     </ScrollView>
   );
 }
 
 function TaskRows({
   tasks,
+  delivered,
   selectedTaskId,
   emptyMessage,
   onOpen,
 }: {
   tasks: readonly SwarmTask[];
+  // Closed Tasks the current board still shows, listed after the open ones.
+  delivered?: readonly SwarmTask[];
   selectedTaskId: string | null;
   emptyMessage: string;
   onOpen: (id: string) => void;
 }) {
+  const { t } = useTranslation();
+  const row = (task: SwarmTask) => (
+    <TaskRow
+      key={task.id}
+      task={task}
+      selected={selectedTaskId === task.id}
+      attention={task.attention}
+      onOpen={onOpen}
+    />
+  );
   return (
     <ScrollView contentContainerStyle={styles.taskRows}>
-      {tasks.length === 0 ? (
-        <Text style={styles.meta}>{emptyMessage}</Text>
-      ) : (
-        tasks.map((task) => (
-          <TaskRow
-            key={task.id}
-            task={task}
-            selected={selectedTaskId === task.id}
-            attention={task.attention}
-            onOpen={onOpen}
-          />
-        ))
-      )}
+      {tasks.length === 0 ? <Text style={styles.meta}>{emptyMessage}</Text> : tasks.map(row)}
+      {delivered?.length ? (
+        <View style={styles.lane} testID="swarm-task-delivered">
+          <Text style={styles.laneHeading}>{t("swarm.tasks.delivered")}</Text>
+          {delivered.map(row)}
+        </View>
+      ) : null}
     </ScrollView>
   );
+}
+
+// The Task list's count of choices waiting for the person, and the switch to closed Tasks.
+function TaskLaneControls({
+  attention,
+  historySupported,
+  showHistory,
+  onToggleHistory,
+}: {
+  attention: number;
+  historySupported: boolean;
+  showHistory: boolean;
+  onToggleHistory: () => void;
+}) {
+  const { t } = useTranslation();
+  if (attention === 0 && !historySupported) return null;
+  return (
+    <View style={styles.rowMeta}>
+      {attention > 0 ? (
+        <StatusBadge
+          variant="warning"
+          label={t("swarm.tasks.awaitingReply", { count: attention })}
+        />
+      ) : null}
+      {historySupported ? (
+        <Button
+          variant={showHistory ? "secondary" : "ghost"}
+          size="sm"
+          onPress={onToggleHistory}
+          testID="swarm-task-history-toggle"
+        >
+          {t("swarm.tasks.history")}
+        </Button>
+      ) : null}
+    </View>
+  );
+}
+
+const EMPTY_TASKS: SwarmTask[] = [];
+
+// The History lane: whether it is on, the closed Tasks it shows in the current scope, and every
+// Task a detail can show, the current board's and the closed ones opened from History.
+function useHistoryLane(input: {
+  board: SwarmTaskBoard;
+  search: string;
+  online: boolean;
+  serverId: string;
+  projectId: string | null;
+  invoke: <T>(method: string, input: unknown) => Promise<T>;
+  queryClient: QueryClient | undefined;
+  projectWorkspaceIds: readonly string[];
+  knownWorkspaceIds: readonly string[];
+  agentName: string | undefined;
+}) {
+  const { board, projectWorkspaceIds, knownWorkspaceIds, agentName } = input;
+  const [showHistory, setShowHistory] = useState(false);
+  const toggleHistory = useCallback(() => setShowHistory((value) => !value), []);
+  const historySupported = board.features?.includes("board") ?? false;
+  const history = useSwarmTaskHistory({
+    serverId: input.serverId,
+    projectId: input.projectId,
+    invoke: input.invoke,
+    queryClient: input.queryClient,
+    search: input.search,
+    enabled: showHistory && historySupported && input.online,
+  });
+  const historyTasks = useMemo(
+    () =>
+      scopedSwarmTasks(
+        { ...board, tasks: history.tasks },
+        { projectWorkspaceIds, knownWorkspaceIds, agentName },
+      ),
+    [board, history.tasks, projectWorkspaceIds, knownWorkspaceIds, agentName],
+  );
+  const knownTasks = useMemo(() => {
+    const current = new Set(board.tasks.map((task) => task.id));
+    return [...board.tasks, ...history.seen.filter((task) => !current.has(task.id))];
+  }, [board.tasks, history.seen]);
+  return { showHistory, toggleHistory, historySupported, history, historyTasks, knownTasks };
+}
+
+// Closed Tasks off the current board, newest first, matching the search. Each Task the history
+// has shown stays known, so a detail opened from it survives a new search.
+function useSwarmTaskHistory(input: {
+  serverId: string;
+  projectId: string | null;
+  invoke: <T>(method: string, input: unknown) => Promise<T>;
+  queryClient: QueryClient | undefined;
+  search: string;
+  enabled: boolean;
+}) {
+  const { serverId, projectId, invoke, queryClient, enabled } = input;
+  const search = input.search.trim();
+  const queryKey = useMemo(
+    () => ["swarm", "task-history", serverId, projectId, search],
+    [serverId, projectId, search],
+  );
+  const query = useFetchQuery(
+    {
+      queryKey,
+      queryFn: swarmConditionalQuery({
+        queryClient,
+        queryKey,
+        schema: swarmTaskBoardSchema,
+        read: (etag) =>
+          invoke("swarm.tasks.read", {
+            projectId: projectId ?? undefined,
+            view: "history",
+            ...(search ? { query: search } : {}),
+            ...(etag ? { etag } : {}),
+          }),
+      }),
+      select: selectSwarmValue<SwarmTaskBoard>,
+      enabled: enabled && Boolean(projectId),
+      dataShape: "value",
+      staleTimeMs: SWARM_POLL_MS - 500,
+    },
+    queryClient,
+  );
+  const tasks = query.data?.tasks ?? EMPTY_TASKS;
+  const [seen, setSeen] = useState<SwarmTask[]>(EMPTY_TASKS);
+  useEffect(() => {
+    if (tasks.length === 0) return;
+    const ids = new Set(tasks.map((task) => task.id));
+    setSeen((current) => [...current.filter((known) => !ids.has(known.id)), ...tasks]);
+  }, [tasks]);
+  return { tasks, seen, loading: enabled && query.isPending };
 }
 
 function TaskRow({
@@ -876,10 +1072,13 @@ function TaskRow({
   );
 }
 
+// A Task's own read: its brief and closure details, with the Tasks merged into it.
+type SwarmTaskRecord = SwarmTaskDetail["task"] & { absorbed?: SwarmTaskDetail["absorbed"] };
+
 interface SwarmTaskDetailState {
   activities: readonly SwarmActivity[];
   brief: string | null;
-  record: SwarmTaskDetail["task"] | null;
+  record: SwarmTaskRecord | null;
   // The read has answered at least once, so an empty list means no Activity.
   loaded: boolean;
   olderCount: number;
@@ -937,10 +1136,14 @@ function useSwarmTaskDetail(input: {
   );
   const refresh = useCallback(() => void refetch(), [refetch]);
   const olderCount = query.data?.olderCount ?? 0;
+  const record = useMemo(
+    () => (query.data ? { ...query.data.task, absorbed: query.data.absorbed } : null),
+    [query.data],
+  );
   return {
     activities: query.data?.activities ?? EMPTY_ACTIVITIES,
     brief: query.data?.task.brief ?? null,
-    record: query.data?.task ?? null,
+    record,
     loaded: query.data !== undefined,
     olderCount,
     canShowEarlier: olderCount > 0 && limit < SWARM_TASK_ACTIVITY_MAX,
@@ -1520,7 +1723,7 @@ function TaskSummary({
 }: {
   task: SwarmTask;
   // The Task's own read: its brief and closure details, null until it loads.
-  record: SwarmTaskDetail["task"] | null;
+  record: SwarmTaskRecord | null;
   result: ReturnType<typeof swarmTaskResult>;
   unbriefedCount: number;
   onOpenActor: (name: string) => void;
@@ -1534,12 +1737,8 @@ function TaskSummary({
         <StatusBadge label={task.status} />
         {task.resolution ? <ResolutionBadge resolution={task.resolution} /> : null}
       </View>
-      <Text style={styles.meta}>
-        {task.id}
-        {record?.duplicateOf
-          ? ` · ${t("swarm.tasks.duplicateOf", { id: record.duplicateOf })}`
-          : ""}
-      </Text>
+      <Text style={styles.meta}>{task.id}</Text>
+      <TaskClosure task={task} absorbed={record?.absorbed} />
       {record ? (
         <AuthoredMarkdown text={record.brief} author={task.managerName} onLinkPress={onLinkPress} />
       ) : null}
@@ -1572,6 +1771,34 @@ function TaskSummary({
         ))}
       </View>
     </>
+  );
+}
+
+// How a closed Task ended and what replaced it, and the Tasks merged into this one. Closure is
+// history, so this never changes the brief or the result.
+function TaskClosure({
+  task,
+  absorbed,
+}: {
+  task: SwarmTask;
+  absorbed: SwarmTaskDetail["absorbed"];
+}) {
+  const { t } = useTranslation();
+  const lines = [
+    ...(task.duplicateOf ? [t("swarm.tasks.duplicateOf", { id: task.duplicateOf })] : []),
+    ...(task.supersededBy ? [t("swarm.tasks.supersededBy", { id: task.supersededBy })] : []),
+    ...(task.resolution && task.resolvedBy
+      ? [t("swarm.tasks.closedBy", { name: task.resolvedBy })]
+      : []),
+    ...(absorbed?.length
+      ? [t("swarm.tasks.absorbed", { ids: absorbed.map((entry) => entry.id).join(", ") })]
+      : []),
+  ];
+  if (lines.length === 0) return null;
+  return (
+    <Text style={styles.meta} testID="swarm-task-closure">
+      {lines.join(" · ")}
+    </Text>
   );
 }
 
@@ -1806,6 +2033,12 @@ const styles = StyleSheet.create((theme) => ({
   filtersWide: { flexDirection: "row", alignItems: "center", flexWrap: "wrap" },
   searchWide: { flex: 1, minWidth: 160 },
   taskRows: { padding: theme.spacing[2], gap: theme.spacing[1] },
+  lane: { gap: theme.spacing[1], paddingTop: theme.spacing[3] },
+  laneHeading: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    paddingHorizontal: theme.spacing[2],
+  },
   taskRow: {
     minHeight: 64,
     padding: theme.spacing[2],

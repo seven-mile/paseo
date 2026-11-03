@@ -156,6 +156,12 @@ export const ar: TranslationResources = {
       audienceTo: "إلى {{names}}",
       audienceCc: "نسخة إلى {{names}}",
       briefUnconfirmed: "موجز كتبه {{author}}، ولم يؤكده {{owner}} بعد",
+      delivered: "تم التسليم",
+      history: "السجل",
+      emptyHistory: "لا توجد مهام مغلقة مطابقة.",
+      supersededBy: "استبدلتها {{id}}",
+      closedBy: "أغلقها {{name}}",
+      absorbed: "ضمّت {{ids}}",
       resolutions: {
         done: "منجزة",
         "wont-do": "لن تُنفَّذ",

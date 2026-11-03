@@ -161,6 +161,8 @@ UI 侧直接使用 Paseo 提供的 client hooks 和 navigation；server 侧才�
 
 给出 `to` 或 `cc` 任一个，两个列表就是全部受众，所以 `to: []` 只记录不通知。两种接收者总会被加上：别的 seat 写某个 Task 时的 owner，以及回复所指 Activity 的作者。名字是 seat 或 `human`；human 没有邮箱，它的 seat 对话列出该 seat 发给它的交付。结果和 Activity 的 `audience` 列出实际受众；信封的 `addressed` 在有多个读者时说明本份是 to 还是 cc。Cc 只提供上下文：不是新分派，也不要求确认，但仍按今天的方式唤醒接收者。
 
+看板的当前视图由 resolution 和时间算出，不另存“是否在看板上”的标记：未关闭的 Task 按 status 分列，三天内完成的进入 Delivered 列，仍有人类选择未回答的 Task 不论多旧、是否关闭都留在当前视图；其余关闭的 Task 进入可搜索的 History。planner 整理看板的方式就是关闭：用 duplicate（`duplicateOf`）或 superseded（`supersededBy`）把工作合并到保留的 Task，被保留的 Task 列出并入它的 Task。整理从不改写 brief、结果，也不重新交付；交付立即生效，planner 不做审批。
+
 ```mermaid
 sequenceDiagram
     participant S as Supervisor agent

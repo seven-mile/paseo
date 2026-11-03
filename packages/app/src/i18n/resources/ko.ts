@@ -157,6 +157,12 @@ export const ko: TranslationResources = {
       audienceTo: "받는 사람 {{names}}",
       audienceCc: "참조 {{names}}",
       briefUnconfirmed: "{{author}}이(가) 쓴 개요로, {{owner}}이(가) 아직 확인하지 않았습니다",
+      delivered: "전달됨",
+      history: "기록",
+      emptyHistory: "일치하는 닫힌 작업이 없습니다.",
+      supersededBy: "{{id}}(으)로 대체됨",
+      closedBy: "{{name}}이(가) 닫음",
+      absorbed: "{{ids}} 통합",
       resolutions: {
         done: "완료",
         "wont-do": "진행 안 함",

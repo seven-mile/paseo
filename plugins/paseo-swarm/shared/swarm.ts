@@ -136,7 +136,8 @@ const swarmRefSchema = z.object({
 // Swarm features this host supports. A client offers a feature only when its name is listed;
 // absent on hosts from before the list. "cc": messages and human notes take a cc list.
 // "addressing": writes report their audience, and the seat read lists deliveries to the human.
-export const SWARM_FEATURES = ["cc", "addressing"];
+// "board": the Task list reads its current view and a searchable history.
+export const SWARM_FEATURES = ["cc", "addressing", "board"];
 const featuresSchema = z.array(z.string()).optional();
 
 // What a list or a link needs of a seat: no prompt receipts, occupant history or agent config.
@@ -167,6 +168,10 @@ export const taskSummarySchema = taskSchema
     createdBy: true,
     updatedAt: true,
     resolution: true,
+    resolvedAt: true,
+    resolvedBy: true,
+    duplicateOf: true,
+    supersededBy: true,
   })
   .extend({ attention: z.number().int().nonnegative() });
 
@@ -185,9 +190,21 @@ export const rosterReadRpc = defineRpc({
 
 // The Task list of one swarm, or of every swarm when the request names none. Activities are read
 // per Task.
+// The board's views. current: open Tasks, Tasks done in the last few days, and any Task with a
+// choice waiting for a human, whatever its age or resolution. history: every other closed Task,
+// newest first, matching query. Without a view the list has every Task, as older clients expect.
+export const DELIVERED_WINDOW_MS = 3 * 24 * 60 * 60_000;
+export const TASK_HISTORY_PAGE = 50;
+
 export const tasksReadRpc = defineRpc({
   name: "swarm.tasks.read",
-  input: z.object({ ...swarmScopeSchema, ...etagInputSchema }),
+  input: z.object({
+    ...swarmScopeSchema,
+    ...etagInputSchema,
+    view: z.enum(["current", "history"]).optional(),
+    query: z.string().optional(),
+    limit: z.number().int().positive().max(200).optional(),
+  }),
   output: conditionalOutput(
     z.object({
       agents: z.array(seatSummarySchema),
@@ -200,8 +217,6 @@ export const tasksReadRpc = defineRpc({
   ),
 });
 
-// One seat with its occupants, retired seats included: a seat tab. Data is a null seat when no
-// seat has this id.
 // A delivery the seat addressed to the human, as its conversation lists it.
 export const seatDeliverySchema = z.object({
   activityId: z.string(),
@@ -214,6 +229,8 @@ export const seatDeliverySchema = z.object({
   createdAt: z.string(),
 });
 
+// One seat with its occupants, retired seats included: a seat tab. Data is a null seat when no
+// seat has this id.
 export const seatReadRpc = defineRpc({
   name: "swarm.seat.read",
   input: z.object({ seatId: z.string().min(1), ...etagInputSchema }),
@@ -245,6 +262,10 @@ export const taskReadRpc = defineRpc({
       activities: z.array(activitySchema),
       // Activities before the oldest one returned, other than unanswered choices.
       olderCount: z.number().int().nonnegative(),
+      // Tasks closed as a duplicate of this one or superseded by it. Absent from older hosts.
+      absorbed: z
+        .array(z.object({ id: z.string(), title: z.string(), resolution: z.string() }))
+        .optional(),
     }),
   ),
 });
@@ -350,6 +371,8 @@ export const updateTaskRpc = defineRpc({
     managerName: z.string().min(1).optional(),
     resolution: taskResolutionSchema.nullable().optional(),
     duplicateOf: slugNameSchema.optional(),
+    // With resolution superseded: the Task that replaces this one.
+    supersededBy: slugNameSchema.optional(),
     reason: z.string().min(1).optional(),
     // The briefUpdatedAt the writer read. A brief rewrite by anyone but the owner needs it, and a
     // rewrite is refused when the brief changed after it.

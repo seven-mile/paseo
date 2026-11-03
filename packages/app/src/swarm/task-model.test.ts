@@ -7,6 +7,8 @@ import {
   defaultSwarmTaskScope,
   defaultSwarmCc,
   swarmAudience,
+  partitionSwarmTasks,
+  swarmAttentionTotal,
   notesNotInBrief,
   openSwarmReply,
   openSwarmTaskSurfaceState,
@@ -752,5 +754,36 @@ describe("Swarm audience", () => {
     ).toEqual({ to: ["human"], cc: ["planner"] });
     expect(swarmAudience({ audience: [] })).toBeNull();
     expect(swarmAudience({})).toBeNull();
+  });
+});
+
+describe("Swarm board lanes", () => {
+  const summary = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    swarmId: "swarm",
+    title: id,
+    status: "doing",
+    managerName: "lead",
+    workerNames: [],
+    createdBy: "planner",
+    updatedAt: "2026-11-03T00:00:00Z",
+    attention: 0,
+    ...extra,
+  });
+
+  it("keeps open Tasks in the columns and lists closed ones newest closure first", () => {
+    const lanes = partitionSwarmTasks([
+      summary("open"),
+      summary("older", { resolution: "done", resolvedAt: "2026-11-01T00:00:00Z" }),
+      summary("newer", { resolution: "wont-do", resolvedAt: "2026-11-02T00:00:00Z", attention: 1 }),
+    ]);
+    expect(lanes.open.map((task) => task.id)).toEqual(["open"]);
+    expect(lanes.closed.map((task) => task.id)).toEqual(["newer", "older"]);
+  });
+
+  it("counts every choice waiting for the person, closed Tasks included", () => {
+    expect(
+      swarmAttentionTotal([summary("a", { attention: 2 }), summary("b", { attention: 1 })]),
+    ).toBe(3);
   });
 });

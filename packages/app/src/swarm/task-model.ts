@@ -90,6 +90,11 @@ const taskSchema = z.object({
   attention: z.number(),
   // Absent while the Task is open, and on hosts from before resolutions.
   resolution: z.string().optional(),
+  // Absent while the Task is open, and on hosts from before the board views.
+  resolvedAt: z.string().optional(),
+  resolvedBy: z.string().optional(),
+  duplicateOf: z.string().optional(),
+  supersededBy: z.string().optional(),
 });
 const activitySchema = z.object({
   id: z.string(),
@@ -130,6 +135,7 @@ export const swarmTaskDetailSchema = z.object({
     // Absent while the Task is open, and on hosts from before resolutions.
     resolution: z.string().optional(),
     duplicateOf: z.string().optional(),
+    supersededBy: z.string().optional(),
     // When the brief last changed; absent on hosts from before it was recorded.
     briefUpdatedAt: z.string().optional(),
     // Who asked for the work; absent on older Tasks, which read as createdBy.
@@ -140,6 +146,10 @@ export const swarmTaskDetailSchema = z.object({
   activities: z.array(activitySchema),
   // Earlier Activities the read left out; unanswered choices are always included.
   olderCount: z.number(),
+  // Tasks closed as a duplicate of this one or superseded by it; absent on older hosts.
+  absorbed: z
+    .array(z.object({ id: z.string(), title: z.string(), resolution: z.string() }))
+    .optional(),
 });
 export type SwarmTaskDetail = z.infer<typeof swarmTaskDetailSchema>;
 export type SwarmActivity = SwarmTaskDetail["activities"][number];
@@ -669,4 +679,23 @@ export function swarmAudience(
     to: activity.audience.filter((entry) => entry.as === "to").map((entry) => entry.name),
     cc: activity.audience.filter((entry) => entry.as === "cc").map((entry) => entry.name),
   };
+}
+
+// The current board's two lanes: open Tasks in their status columns, and closed ones (done
+// recently, or still waiting on a human choice), newest closure first.
+export function partitionSwarmTasks(tasks: readonly SwarmTask[]): {
+  open: SwarmTask[];
+  closed: SwarmTask[];
+} {
+  return {
+    open: tasks.filter((task) => !task.resolution),
+    closed: tasks
+      .filter((task) => task.resolution)
+      .sort((left, right) => (right.resolvedAt ?? "").localeCompare(left.resolvedAt ?? "")),
+  };
+}
+
+// How many choices on these Tasks wait for the human.
+export function swarmAttentionTotal(tasks: readonly Pick<SwarmTask, "attention">[]): number {
+  return tasks.reduce((total, task) => total + task.attention, 0);
 }

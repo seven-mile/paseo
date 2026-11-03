@@ -1014,7 +1014,7 @@ export async function createPaseoToolCatalog(
           "swarm_task_update",
           {
             description:
-              "Update a Swarm Task. Its owner and every seat above the owner can; the owner keeps the record current, and seats above it steer by message and edit only to escalate. The owner is told of changes it did not make. Rewrite brief when the agreement changes, not to log progress; each field you supply replaces that field, so read the Task first. If you are not the owner, pass the briefUpdatedAt you read as briefBasedOn; a brief rewritten since is not overwritten. The owner confirms a brief another seat wrote by writing it, even unchanged. owner reassigns the Task to you or a seat below you, and the new owner receives it as an assignment. resolution closes it without a result: wont-do, duplicate (with duplicateOf), or superseded, each with a reason; null reopens it with a reason. A Task that produced its result is completed with swarm_task_deliver instead. Swarm records owner, status, resolution, title and brief changes in the Task's history itself.",
+              "Update a Swarm Task. Its owner and every seat above the owner can; the owner keeps the record current, and seats above it steer by message and edit only to escalate. The owner is told of changes it did not make. Rewrite brief when the agreement changes, not to log progress; each field you supply replaces that field, so read the Task first. If you are not the owner, pass the briefUpdatedAt you read as briefBasedOn; a brief rewritten since is not overwritten. The owner confirms a brief another seat wrote by writing it, even unchanged. owner reassigns the Task to you or a seat below you, and the new owner receives it as an assignment. resolution closes it without a result: wont-do, duplicate (with duplicateOf), or superseded (with supersededBy when a Task replaces it), each with a reason; null reopens it with a reason. A Task that produced its result is completed with swarm_task_deliver instead. Swarm records owner, status, resolution, title and brief changes in the Task's history itself.",
             inputSchema: {
               taskId: z.string(),
               status: z.string().min(1).optional(),
@@ -1023,6 +1023,7 @@ export async function createPaseoToolCatalog(
               owner: z.string().min(1).optional(),
               resolution: z.enum(["wont-do", "duplicate", "superseded"]).nullable().optional(),
               duplicateOf: z.string().optional(),
+              supersededBy: z.string().optional(),
               reason: z.string().min(1).optional(),
               briefBasedOn: z.string().min(1).optional(),
               workerNames: z.array(z.string()).optional(),

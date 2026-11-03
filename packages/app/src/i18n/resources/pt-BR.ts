@@ -159,6 +159,12 @@ export const ptBR: TranslationResources = {
       audienceTo: "Para {{names}}",
       audienceCc: "Cc {{names}}",
       briefUnconfirmed: "Resumo de {{author}}, ainda não confirmado por {{owner}}",
+      delivered: "Entregues",
+      history: "Histórico",
+      emptyHistory: "Nenhuma tarefa fechada corresponde.",
+      supersededBy: "Substituída por {{id}}",
+      closedBy: "Fechada por {{name}}",
+      absorbed: "Absorveu {{ids}}",
       resolutions: {
         done: "Concluída",
         "wont-do": "Não será feita",

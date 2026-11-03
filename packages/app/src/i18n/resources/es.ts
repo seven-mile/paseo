@@ -158,6 +158,12 @@ export const es: TranslationResources = {
       audienceTo: "Para {{names}}",
       audienceCc: "CC {{names}}",
       briefUnconfirmed: "Resumen de {{author}}, aún sin confirmar por {{owner}}",
+      delivered: "Entregadas",
+      history: "Historial",
+      emptyHistory: "Ninguna tarea cerrada coincide.",
+      supersededBy: "Reemplazada por {{id}}",
+      closedBy: "Cerrada por {{name}}",
+      absorbed: "Absorbió {{ids}}",
       resolutions: {
         done: "Hecha",
         "wont-do": "No se hará",

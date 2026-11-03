@@ -161,6 +161,12 @@ export const fr: TranslationResources = {
       audienceTo: "À {{names}}",
       audienceCc: "Cc {{names}}",
       briefUnconfirmed: "Brief de {{author}}, pas encore confirmé par {{owner}}",
+      delivered: "Livrées",
+      history: "Historique",
+      emptyHistory: "Aucune tâche fermée ne correspond.",
+      supersededBy: "Remplacée par {{id}}",
+      closedBy: "Fermée par {{name}}",
+      absorbed: "A absorbé {{ids}}",
       resolutions: {
         done: "Terminée",
         "wont-do": "Abandonnée",

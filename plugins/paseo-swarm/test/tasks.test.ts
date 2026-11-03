@@ -655,3 +655,47 @@ test("an Activity reaches only whom it addresses, its asker and its owner; closi
     { name: "planner.ops", as: "cc", why: "requester" },
   ]);
 });
+
+test("a superseded Task names its replacement, and every closure records who closed it", async (t) => {
+  const { call } = setup(t);
+  await seed({ agents: [planner, lead, ops, dev] });
+  await call(createTaskRpc, create({}));
+  await call(createTaskRpc, create({ id: "auth-rework", title: "Rework auth" }));
+
+  await assert.rejects(
+    call(updateTaskRpc, {
+      taskId: "fix-login",
+      actorName: "planner",
+      resolution: "wont-do",
+      supersededBy: "auth-rework",
+      reason: "Folded into the rework",
+    }),
+    /supersededBy goes with resolution superseded/,
+  );
+  await call(updateTaskRpc, {
+    taskId: "fix-login",
+    actorName: "planner",
+    resolution: "superseded",
+    supersededBy: "auth-rework",
+    reason: "Folded into the rework",
+  });
+  assert.equal(taskOf("fix-login").supersededBy, "auth-rework");
+  assert.equal(taskOf("fix-login").resolvedBy, "planner");
+  assert.match(activitiesOf("fix-login").at(-1)!.body, /Closed as superseded by auth-rework/);
+
+  // Reopening clears the closure; the owner's delivery records it again.
+  await call(updateTaskRpc, {
+    taskId: "fix-login",
+    actorName: "planner",
+    resolution: null,
+    reason: "The rework was cancelled",
+  });
+  assert.equal(taskOf("fix-login").supersededBy, undefined);
+  await call(deliverTaskRpc, {
+    taskId: "fix-login",
+    actorName: "planner.lead",
+    result: "Login works again.",
+    taskState: "done",
+  });
+  assert.equal(taskOf("fix-login").resolvedBy, "planner.lead");
+});

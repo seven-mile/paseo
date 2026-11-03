@@ -155,6 +155,12 @@ export const zhCN: TranslationResources = {
       audienceTo: "发给 {{names}}",
       audienceCc: "抄送 {{names}}",
       briefUnconfirmed: "简报由 {{author}} 撰写，{{owner}} 尚未确认",
+      delivered: "已交付",
+      history: "历史",
+      emptyHistory: "没有匹配的已关闭任务。",
+      supersededBy: "被 {{id}} 取代",
+      closedBy: "由 {{name}} 关闭",
+      absorbed: "已并入 {{ids}}",
       resolutions: {
         done: "已完成",
         "wont-do": "不做",

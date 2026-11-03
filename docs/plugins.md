@@ -119,7 +119,9 @@ log line, left by a crash mid-append, is dropped automatically.
 
 Swarm surfaces poll conditional reads (`server/views.ts`): `swarm.roster.read` for the sidebar,
 `swarm.seat.read` for a seat tab's seat, its occupants and the newest deliveries it addressed to the human, `swarm.tasks.read` for a Task list
-with each Task's count of unanswered choices, and
+with each Task's count of unanswered choices (`view: "current"` is the board: open Tasks, Tasks
+done in the last three days and any Task with a choice still waiting; `view: "history"` pages
+the rest by `query`), and
 `swarm.task.read` for one Task's brief and latest Activities, a page at a time, plus any older
 unanswered choice and the newest delivery, which the Task view shows as its result. The roster and
 Task list also carry `features`, the Swarm capabilities the app gates on (`SWARM_FEATURES` in

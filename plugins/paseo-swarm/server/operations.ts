@@ -490,10 +490,14 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   server.handle(seatReadRpc, ({ seatId, etag }) =>
     conditionalValue(seatReadView(store.read(), seatId), etag),
   );
-  server.handle(tasksReadRpc, async ({ projectId, swarmId, etag }, context) => {
+  server.handle(tasksReadRpc, async (input, context) => {
+    const { projectId, swarmId, etag, view, query, limit } = input;
     if (projectId) await projectRoot(projectId, context);
-    return conditionalView(`tasks:${projectId ?? ""}:${swarmId ?? ""}`, etag, (state) =>
-      tasksView(state, { projectId, swarmId }),
+    // The current view changes as done Tasks age out, so its cache entry also turns over hourly.
+    const hour = view ? Math.floor(Date.now() / 3_600_000) : 0;
+    const key = `tasks:${projectId ?? ""}:${swarmId ?? ""}:${view ?? ""}:${query ?? ""}:${limit ?? ""}:${hour}`;
+    return conditionalView(key, etag, (state) =>
+      tasksView(state, { projectId, swarmId, view, query, limit }),
     );
   });
   server.handle(taskReadRpc, ({ swarmId, taskId, limit, etag }) =>

@@ -154,6 +154,12 @@ export const en = {
       audienceTo: "To {{names}}",
       audienceCc: "Cc {{names}}",
       briefUnconfirmed: "Brief by {{author}}, not yet confirmed by {{owner}}",
+      delivered: "Delivered",
+      history: "History",
+      emptyHistory: "No closed Tasks match.",
+      supersededBy: "Superseded by {{id}}",
+      closedBy: "Closed by {{name}}",
+      absorbed: "Absorbed {{ids}}",
       resolutions: {
         done: "Done",
         "wont-do": "Won't do",

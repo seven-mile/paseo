@@ -112,7 +112,11 @@ export const taskSchema = z.object({
   data: metadataSchema,
   resolution: taskResolutionSchema.optional(),
   duplicateOf: slugNameSchema.optional(),
+  // The Task that replaced this one, when it was closed as superseded and the replacement is known.
+  supersededBy: slugNameSchema.optional(),
   resolvedAt: z.string().optional(),
+  // Who closed it: the owner's delivery, or the seat that closed it without a result.
+  resolvedBy: z.string().optional(),
   // When the brief was last written. Human notes after it are instructions the owner has not yet
   // folded into the brief. Absent on Tasks from before it was recorded.
   briefUpdatedAt: z.string().optional(),

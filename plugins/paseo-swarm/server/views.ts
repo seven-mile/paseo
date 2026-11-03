@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import type { z } from "zod";
 import {
+  DELIVERED_WINDOW_MS,
   SWARM_FEATURES,
+  TASK_HISTORY_PAGE,
   type seatDeliverySchema,
   type seatSummarySchema,
   type taskSummarySchema,
@@ -143,10 +145,42 @@ export function rosterView(state: Readonly<SwarmState>) {
   };
 }
 
-export function tasksView(
-  state: Readonly<SwarmState>,
-  scope: { projectId?: string; swarmId?: string },
-) {
+export interface TasksViewScope {
+  projectId?: string;
+  swarmId?: string;
+  view?: "current" | "history";
+  query?: string;
+  limit?: number;
+  now?: number;
+}
+
+// Whether a Task belongs on the current board: open, done within the Delivered window, or with a
+// choice still waiting for a human, since an outstanding human action never ages out.
+function onCurrentBoard(task: TaskSummary, now: number): boolean {
+  if (!task.resolution || task.attention > 0) return true;
+  if (task.resolution !== "done" || !task.resolvedAt) return false;
+  return now - Date.parse(task.resolvedAt) < DELIVERED_WINDOW_MS;
+}
+
+function matches(task: TaskSummary, query: string | undefined): boolean {
+  const text = query?.trim().toLowerCase();
+  if (!text) return true;
+  return `${task.id} ${task.title} ${task.managerName}`.toLowerCase().includes(text);
+}
+
+// The Tasks a view shows. History is newest closed first and paged, so the polled current view
+// stays small however long the swarm runs.
+function viewTasks(tasks: TaskSummary[], scope: TasksViewScope): TaskSummary[] {
+  if (!scope.view) return tasks;
+  const now = scope.now ?? Date.now();
+  if (scope.view === "current") return tasks.filter((task) => onCurrentBoard(task, now));
+  return tasks
+    .filter((task) => !onCurrentBoard(task, now) && matches(task, scope.query))
+    .sort((left, right) => (right.resolvedAt ?? "").localeCompare(left.resolvedAt ?? ""))
+    .slice(0, scope.limit ?? TASK_HISTORY_PAGE);
+}
+
+export function tasksView(state: Readonly<SwarmState>, scope: TasksViewScope) {
   const swarms = state.swarms.filter(
     (swarm) =>
       (!scope.swarmId || swarm.id === scope.swarmId) &&
@@ -172,14 +206,18 @@ export function tasksView(
       workerNames: task.workerNames,
       createdBy: task.createdBy,
       updatedAt: task.updatedAt,
-      // Undefined while the Task is open, so the list's JSON leaves it out.
+      // Undefined while the Task is open, so the list's JSON leaves them out.
       resolution: task.resolution,
+      resolvedAt: task.resolvedAt,
+      resolvedBy: task.resolvedBy,
+      duplicateOf: task.duplicateOf,
+      supersededBy: task.supersededBy,
       attention: unansweredChoices(activities.get(`${task.swarmId}/${task.id}`) ?? []).length,
     }));
   return {
     // Retired seats stay: a Task can still name one as its manager or a worker.
     agents: state.agents.filter((seat) => inScope.has(seat.swarmId)).map(seatSummary),
-    tasks,
+    tasks: viewTasks(tasks, scope),
     statuses: swarms.length === 1 ? plannerStatuses(swarms[0]) : [],
     swarms: swarms.map(swarmRef),
     features: SWARM_FEATURES,
@@ -195,7 +233,12 @@ function plannerStatuses(swarm: SwarmRecord): string[] {
 export function taskView(
   state: Readonly<SwarmState>,
   input: { swarmId: string; taskId: string; limit: number },
-): { task: Task; activities: Activity[]; olderCount: number } {
+): {
+  task: Task;
+  activities: Activity[];
+  olderCount: number;
+  absorbed: { id: string; title: string; resolution: string }[];
+} {
   const task = state.tasks.find(
     (candidate) => candidate.swarmId === input.swarmId && candidate.id === input.taskId,
   );
@@ -210,9 +253,21 @@ export function taskView(
   const open = new Set(unansweredChoices(all).map((activity) => activity.id));
   if (result) open.add(result.id);
   const kept = older.filter((activity) => open.has(activity.id));
+  const absorbed = state.tasks
+    .filter(
+      (candidate) =>
+        candidate.swarmId === task.swarmId &&
+        (candidate.duplicateOf === task.id || candidate.supersededBy === task.id),
+    )
+    .map((candidate) => ({
+      id: candidate.id,
+      title: candidate.title,
+      resolution: candidate.resolution ?? "",
+    }));
   return {
     task,
     activities: [...kept, ...all.slice(start)],
     olderCount: older.length - kept.length,
+    absorbed,
   };
 }
