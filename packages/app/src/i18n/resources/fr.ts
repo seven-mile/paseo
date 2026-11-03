@@ -111,7 +111,6 @@ export const fr: TranslationResources = {
       status: "État de la tâche",
       unavailableInScope: "La tâche est indisponible dans ce périmètre.",
       emptyScope: "Aucune tâche dans ce périmètre.",
-      emptyTasks: "Aucune tâche",
       awaitingReply_one: "{{count}} en attente de réponse",
       awaitingReply_other: "{{count}} en attente de réponse",
       activityActor: "Auteur de l’activité",

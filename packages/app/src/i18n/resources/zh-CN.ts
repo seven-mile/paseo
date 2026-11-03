@@ -107,7 +107,6 @@ export const zhCN: TranslationResources = {
       status: "任务状态",
       unavailableInScope: "此范围内无法访问该任务。",
       emptyScope: "此范围内暂无任务。",
-      emptyTasks: "暂无任务",
       awaitingReply_one: "{{count}} 条待回复",
       awaitingReply_other: "{{count}} 条待回复",
       activityActor: "活动发起者",

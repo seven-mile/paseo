@@ -108,7 +108,6 @@ export const ar: TranslationResources = {
       status: "حالة المهمة",
       unavailableInScope: "المهمة غير متاحة في هذا النطاق.",
       emptyScope: "لا توجد مهام في هذا النطاق.",
-      emptyTasks: "لا توجد مهام",
       awaitingReply_one: "{{count}} بانتظار الرد",
       awaitingReply_other: "{{count}} بانتظار الرد",
       activityActor: "صاحب النشاط",

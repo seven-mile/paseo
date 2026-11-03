@@ -108,7 +108,6 @@ export const es: TranslationResources = {
       status: "Estado de la tarea",
       unavailableInScope: "La tarea no está disponible en este ámbito.",
       emptyScope: "No hay tareas en este ámbito.",
-      emptyTasks: "Sin tareas",
       awaitingReply_one: "{{count}} pendiente de respuesta",
       awaitingReply_other: "{{count}} pendientes de respuesta",
       activityActor: "Autor de la actividad",

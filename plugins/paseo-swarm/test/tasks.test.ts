@@ -640,12 +640,14 @@ test("an Activity reaches only whom it addresses, its asker and its owner; closi
   });
   assert.deepEqual(answer.audience, [{ name: "planner", as: "to", why: "asker" }]);
 
-  await call(updateTaskRpc, {
+  // The update result says whom the change reached, like a delivery or an Activity does.
+  const closed = await call<Task & { audience?: AudienceEntry[] }>(updateTaskRpc, {
     taskId: "fix-login",
     actorName: "planner.lead",
     resolution: "wont-do",
     reason: "The login page is being replaced",
   });
+  assert.deepEqual(closed.audience, [{ name: "planner.ops", as: "cc", why: "requester" }]);
   const closing = mailTo(ops).slice(opsBefore);
   assert.equal(closing.length, 1);
   assert.match(closing[0], /cc="planner\.ops" addressed="cc"/);
@@ -672,13 +674,15 @@ test("a superseded Task names its replacement, and every closure records who clo
     }),
     /supersededBy goes with resolution superseded/,
   );
-  await call(updateTaskRpc, {
+  const superseded = await call<Task & { audience?: AudienceEntry[] }>(updateTaskRpc, {
     taskId: "fix-login",
     actorName: "planner",
     resolution: "superseded",
     supersededBy: "auth-rework",
     reason: "Folded into the rework",
   });
+  // The planner closing its own request reaches only the owner.
+  assert.deepEqual(superseded.audience, [{ name: "planner.lead", as: "to", why: "owner" }]);
   assert.equal(taskOf("fix-login").supersededBy, "auth-rework");
   assert.equal(taskOf("fix-login").resolvedBy, "planner");
   assert.match(activitiesOf("fix-login").at(-1)!.body, /Closed as superseded by auth-rework/);

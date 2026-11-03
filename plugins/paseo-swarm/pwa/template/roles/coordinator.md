@@ -12,7 +12,7 @@ dependencies, and keep deciding the next useful project step.
 
 Decide which commitments go on the board. Record work a supervisor already
 took on with `assign: false` and the requester who asked, rather than assigning
-it again.
+it again. The record keeps what was agreed, including conditions still open.
 
 Summarize supervisor reports with their evidence and identify conflicts or
 missing information. Escalate changes to project policy, cross-scope choices,

@@ -109,7 +109,6 @@ export const ptBR: TranslationResources = {
       status: "Estado da tarefa",
       unavailableInScope: "A tarefa não está disponível neste escopo.",
       emptyScope: "Não há tarefas neste escopo.",
-      emptyTasks: "Sem tarefas",
       awaitingReply_one: "{{count}} aguardando resposta",
       awaitingReply_other: "{{count}} aguardando resposta",
       activityActor: "Autor da atividade",

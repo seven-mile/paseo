@@ -529,7 +529,7 @@ function updateRecords(input: {
   input: UpdateInput;
   actor: AgentRecord;
   plan: UpdatePlan;
-}): SwarmChange[] {
+}): { records: SwarmChange[]; reached: AudienceEntry[] } {
   const { state, current, next, changed, actor, plan } = input;
   const { reason } = input.input;
   const actorName = agentQualifiedName(actor);
@@ -553,10 +553,10 @@ function updateRecords(input: {
     actorName,
     ownerTold: Boolean(summary) || informational.length > 0,
   });
+  const reached = [...(assigned?.entries ?? []), ...told.entries].filter(
+    (entry, index, all) => all.findIndex((other) => other.name === entry.name) === index,
+  );
   if (summary) {
-    const audience = [...(assigned?.entries ?? []), ...told.entries].filter(
-      (entry, index, all) => all.findIndex((other) => other.name === entry.name) === index,
-    );
     records.push({
       op: "put",
       collection: "activities",
@@ -580,7 +580,7 @@ function updateRecords(input: {
               ? { previousBrief: current.brief }
               : {}),
           },
-          audience,
+          audience: reached,
         },
         state,
       ),
@@ -610,7 +610,7 @@ function updateRecords(input: {
       body: summary ?? [...informational, ...(reason ? [`Reason: ${reason}`] : [])].join("\n"),
     }),
   );
-  return records;
+  return { records, reached };
 }
 
 // A brief rewrite by anyone but the owner names the version it was based on, and any rewrite that
@@ -771,6 +771,7 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
       assertOnLine(task, actor, "update");
       const plan = planUpdate(input, task, actor);
       let result!: Task;
+      let reached: AudienceEntry[] = [];
       await store.commit((state) => {
         const current = state.tasks.find(
           (candidate) => candidate.swarmId === swarmId && candidate.id === task.id,
@@ -785,13 +786,12 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
           agentQualifiedName(actor),
         );
         result = next;
-        return [
-          { op: "put", collection: "tasks", record: next },
-          ...updateRecords({ state, current, next, changed, input, actor, plan }),
-        ];
+        const written = updateRecords({ state, current, next, changed, input, actor, plan });
+        reached = written.reached;
+        return [{ op: "put", collection: "tasks", record: next }, ...written.records];
       });
       await deliverMail(context);
-      return result;
+      return { ...result, audience: reached };
     },
   );
 

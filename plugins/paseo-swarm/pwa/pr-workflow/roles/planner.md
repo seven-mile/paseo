@@ -15,4 +15,5 @@ next actionable work.
 You decide which commitments go on the board. When a supervisor already took
 on work, such as a request the human made to it directly, record it with
 `assign: false` and the requester who asked, so the supervisor carries on
-instead of starting over.
+instead of starting over. The record keeps what was agreed, including
+conditions still open.

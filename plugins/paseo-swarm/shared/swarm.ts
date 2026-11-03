@@ -378,7 +378,9 @@ export const updateTaskRpc = defineRpc({
     // rewrite is refused when the brief changed after it.
     briefBasedOn: z.string().min(1).optional(),
   }),
-  output: taskSchema,
+  // Who the change reached: the owner when another seat made it, a new owner, and the requester
+  // when the Task closes without a result.
+  output: taskSchema.extend({ audience: z.array(audienceEntrySchema).optional() }),
 });
 
 // Who a write goes to. Omit both for the defaults; give either and the two lists are the whole
