@@ -14,6 +14,7 @@ import type { Activity, AgentRecord, AudienceEntry, Task } from "../shared/model
 import {
   appendActivityRpc,
   appendHumanActivityRpc,
+  closeTasksRpc,
   createTaskRpc,
   deliverTaskRpc,
   sendMessageRpc,
@@ -702,4 +703,74 @@ test("a superseded Task names its replacement, and every closure records who clo
     taskState: "done",
   });
   assert.equal(taskOf("fix-login").resolvedBy, "planner.lead");
+});
+
+test("the human closes Tasks as done: the owner hears of one close, a quiet bulk close tells no one", async (t) => {
+  const { call, mailTo } = setup(t);
+  await seed({ agents: [planner, lead, ops, dev] });
+  await call(createTaskRpc, create({}));
+  await call(createTaskRpc, create({ id: "old-a", title: "Old A" }));
+  await call(createTaskRpc, create({ id: "old-b", title: "Old B" }));
+  const swarmId = taskOf("fix-login").swarmId;
+  const leadBefore = mailTo(lead).length;
+
+  const accepted = await call<{ closed: string[]; skipped: string[] }>(closeTasksRpc, {
+    swarmId,
+    taskIds: ["fix-login"],
+    reason: "The staging fix is enough",
+  });
+  assert.deepEqual(accepted, { closed: ["fix-login"], skipped: [] });
+  assert.equal(taskOf("fix-login").resolution, "done");
+  assert.equal(taskOf("fix-login").resolvedBy, "human");
+  const change = activitiesOf("fix-login").at(-1)!;
+  assert.equal(change.actorKind, "human");
+  assert.match(change.body, /Closed as done\nReason: The staging fix is enough/);
+  assert.deepEqual(change.audience, [{ name: "planner.lead", as: "to", why: "owner" }]);
+  const told = mailTo(lead).slice(leadBefore);
+  assert.equal(told.length, 1);
+  assert.match(told[0], /kind="task-change"/);
+
+  const cleared = await call<{ closed: string[]; skipped: string[] }>(closeTasksRpc, {
+    swarmId,
+    taskIds: ["old-a", "old-b", "fix-login"],
+    reason: "Finished before Swarm recorded results",
+    quiet: true,
+  });
+  assert.deepEqual(cleared, { closed: ["old-a", "old-b"], skipped: ["fix-login"] });
+  assert.equal(mailTo(lead).length, leadBefore + 1);
+  assert.equal(activitiesOf("old-a").at(-1)!.audience, undefined);
+  await assert.rejects(
+    call(closeTasksRpc, { swarmId, taskIds: ["no-such-task"], reason: "x" }),
+    /Unknown Task: no-such-task/,
+  );
+});
+
+test("a record may leave its brief to the owner, and a brief rewrite copies the requester and manager", async (t) => {
+  const { call, mailTo } = setup(t);
+  await seed({ agents: [planner, lead, ops, dev] });
+
+  await assert.rejects(
+    call(createTaskRpc, { ...create({}), brief: undefined }),
+    /only work recorded for another seat \(assign: false\) may wait for its owner's brief/,
+  );
+  const recorded = await call<Task>(createTaskRpc, {
+    ...create({ requester: "ops", assign: false }),
+    brief: undefined,
+  });
+  assert.equal(recorded.brief, "");
+  assert.equal(recorded.briefUnconfirmedBy, undefined);
+  assert.match(mailTo(lead).at(-1)!, /No brief yet\. Write the agreement as you hold it/);
+
+  // The owner writes the agreement it holds; the requester and the owner's manager hear of it.
+  const written = await call<Task & { audience?: AudienceEntry[] }>(updateTaskRpc, {
+    taskId: "fix-login",
+    actorName: "planner.lead",
+    brief: "Fix login for SSO users; the human still has to confirm the cookie scope.",
+    reason: "Agreed with the human in conversation",
+  });
+  assert.deepEqual(written.audience, [
+    { name: "planner.ops", as: "cc", why: "requester" },
+    { name: "planner", as: "cc", why: "manager" },
+  ]);
+  assert.match(mailTo(ops).at(-1)!, /Brief revised\nReason: Agreed with the human in conversation/);
 });

@@ -164,6 +164,13 @@ export const ptBR: TranslationResources = {
       supersededBy: "Substituída por {{id}}",
       closedBy: "Fechada por {{name}}",
       absorbed: "Absorveu {{ids}}",
+      closeAsDone: "Fechar como concluída",
+      closeAllAsDone: "Fechar todas como concluídas",
+      closeReason: "Motivo, fica no registro",
+      closeTellsOwner: "{{owner}} é avisado. Um turno em andamento continua.",
+      closeQuietly_one: "Fecha {{count}} Task aberta sem avisar o responsável.",
+      closeQuietly_other: "Fecha {{count}} Tasks abertas sem avisar os responsáveis.",
+      briefPending: "Ainda sem resumo. {{owner}} o escreve.",
       resolutions: {
         done: "Concluída",
         "wont-do": "Não será feita",

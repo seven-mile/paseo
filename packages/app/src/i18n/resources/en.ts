@@ -159,6 +159,13 @@ export const en = {
       supersededBy: "Superseded by {{id}}",
       closedBy: "Closed by {{name}}",
       absorbed: "Absorbed {{ids}}",
+      closeAsDone: "Close as done",
+      closeAllAsDone: "Close all as done",
+      closeReason: "Reason, kept on the record",
+      closeTellsOwner: "{{owner}} hears of it. A running turn keeps running.",
+      closeQuietly_one: "Closes {{count}} open Task without telling its owner.",
+      closeQuietly_other: "Closes {{count}} open Tasks without telling their owners.",
+      briefPending: "No brief yet. {{owner}} writes it.",
       resolutions: {
         done: "Done",
         "wont-do": "Won't do",

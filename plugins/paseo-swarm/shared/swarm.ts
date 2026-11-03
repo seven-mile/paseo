@@ -137,7 +137,8 @@ const swarmRefSchema = z.object({
 // absent on hosts from before the list. "cc": messages and human notes take a cc list.
 // "addressing": writes report their audience, and the seat read lists deliveries to the human.
 // "board": the Task list reads its current view and a searchable history.
-export const SWARM_FEATURES = ["cc", "addressing", "board"];
+// "close": the human closes open Tasks as done without a delivery (swarm.tasks.close).
+export const SWARM_FEATURES = ["cc", "addressing", "board", "close"];
 const featuresSchema = z.array(z.string()).optional();
 
 // What a list or a link needs of a seat: no prompt receipts, occupant history or agent config.
@@ -341,7 +342,9 @@ export const createTaskRpc = defineRpc({
     swarmId: z.string().min(1).optional(),
     id: slugNameSchema,
     title: z.string().min(1),
-    brief: z.string().min(1),
+    // Required, except on a record (assign: false), which may leave it to the owner. The Task then
+    // stores an empty brief until the owner writes one.
+    brief: z.string().min(1).optional(),
     status: z.string().min(1),
     managerName: z.string().min(1),
     workerNames: z.array(z.string()).default([]),
@@ -423,6 +426,24 @@ export const appendActivityRpc = defineRpc({
     ...audienceInputSchema,
   }),
   output: activitySchema,
+});
+
+// The human closes open Tasks as done without a delivery: accepting work as it stands, or clearing
+// Tasks finished before Swarm recorded results. Each gets a change Activity with the reason. Owners
+// hear of it unless quiet, which is for clearing old Tasks. Closing never interrupts a turn.
+export const closeTasksRpc = defineRpc({
+  name: "swarm.tasks.close",
+  input: z.object({
+    swarmId: z.string().min(1),
+    taskIds: z.array(slugNameSchema).min(1).max(500),
+    reason: z.string().min(1),
+    quiet: z.boolean().default(false),
+  }),
+  output: z.object({
+    closed: z.array(slugNameSchema),
+    // Tasks that were already closed, left as they are.
+    skipped: z.array(slugNameSchema),
+  }),
 });
 
 export const appendHumanActivityRpc = defineRpc({

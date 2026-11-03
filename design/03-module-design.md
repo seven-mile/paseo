@@ -148,16 +148,17 @@ UI 侧直接使用 Paseo 提供的 client hooks 和 navigation；server 侧才�
 
 `create_task` 写入一个使用可读 slug 的 Task。Task 是看板上的一项项目级承诺：`managerName` 是它的 owner，`requester` 是提出这项工作的人或 seat（缺省为 `createdBy`），brief 记录 requester 与 owner 的当前约定，Activities 是正式履历。拥有工作和让它上看板是两回事：seat 不需要 Task 就能开始、委派和答复；哪些承诺上看板由 planner 决定。给另一个 seat 创建 Task 就是分派，owner 收到带 brief 的 `task-assigned` 邮件；`assign: false` 记录 owner 已经在做的工作，owner 收到 `task-recorded` 通知而不是新的分派。别的 seat 写的 brief 在 owner 写过 brief 或交付之前标记为 `briefUnconfirmedBy`。非 owner 改写 brief 时须带上读到的 `briefUpdatedAt`（`briefBasedOn`），此后被改过的 brief 不会被覆盖。owner 及其上级链（“line”）可以修改、交付、改派、关闭 Task 和追加 Activity；所有人都能读，worker 不修改 Task。`workerNames` 只是信息，不授予任何权限。supervisor 通过带 taskId 的消息向 worker 派发具体工作，taskId 不限制谁能给谁发消息。Paseo runtime status 与 transcript 是运行事实，不复制为第二个工作对象。
 
-结果只通过 `deliver_task` 记录：一次调用写 delivery Activity、设置 Task 交付后的状态（`taskState`），并发给受众。修正已交付的结论时再交付一次并用 `revises` 指向被修正的 delivery；修正意味着还要继续工作时用 `taskState: open`，同一次调用即重新打开 Task。只有 Task 最新的 Activity 是同一 seat 在 5 分钟内的相同 delivery 时，调用才被当作重试。`resolution`（done、wont-do、duplicate、superseded）是 plugin 唯一读取的关闭语义；done 只来自交付，其余三种通过 `update_task` 并附理由。`taskState: done` 表示约定的结果连同其中仍未满足的条件都已完成；记录 Task 或改写 brief 不会缩小约定，阶段性结果用 `taskState: open` 交付，更小的结果要先得到 requester 同意，再改写 brief 并在 reason 中说明。PWA status 只是项目词汇。retire 一个 seat 时，它未关闭的 Task 交给最近的未退休上级。
+结果只通过 `deliver_task` 记录：一次调用写 delivery Activity、设置 Task 交付后的状态（`taskState`），并发给受众。修正已交付的结论时再交付一次并用 `revises` 指向被修正的 delivery；修正意味着还要继续工作时用 `taskState: open`，同一次调用即重新打开 Task。只有 Task 最新的 Activity 是同一 seat 在 5 分钟内的相同 delivery 时，调用才被当作重试。`resolution`（done、wont-do、duplicate、superseded）是 plugin 唯一读取的关闭语义；done 来自交付，或来自人类的 Close as done（`swarm.tasks.close`：不经交付按现状关闭，记录理由；单个关闭通知 owner，清理旧看板的整列关闭不通知，关闭也不会中断正在运行的回合）；其余三种通过 `update_task` 并附理由。`taskState: done` 表示约定的结果连同其中仍未满足的条件都已完成；记录 Task 或改写 brief 不会缩小约定，阶段性结果用 `taskState: open` 交付，约定与 requester 达成，requester、owner 的上级或人类都可以改变它；更小的结果要先得到这样的同意，再改写 brief 并在 reason 中写明谁同意。改写 brief 会抄送 requester 和 owner 的 manager，让他们知情而不是审批。`assign: false` 的记录在 planner 了解不足时可以不写 brief，由 owner 下次更新或交付时补上。PWA status 只是项目词汇。retire 一个 seat 时，它未关闭的 Task 交给最近的未退休上级。
 
 写入的受众（`server/audience.ts`）由工作中的角色决定；planner 不会因为是协调者而成为缺省接收者：
 
-| 写入                                   | 缺省 To         | 缺省 Cc                  |
-| -------------------------------------- | --------------- | ------------------------ |
-| `deliver_task`                         | requester       | owner 的 manager         |
-| `append_activity`                      | 无              | 无                       |
-| 以 wont-do、duplicate、superseded 关闭 | 无              | requester                |
-| 人在 Task 或 seat 对话中发的消息       | owner 或该 seat | app 缺省 manager，可移除 |
+| 写入                                   | 缺省 To         | 缺省 Cc                     |
+| -------------------------------------- | --------------- | --------------------------- |
+| `deliver_task`                         | requester       | owner 的 manager            |
+| `append_activity`                      | 无              | 无                          |
+| 以 wont-do、duplicate、superseded 关闭 | 无              | requester                   |
+| 改写 brief                             | 无              | requester、owner 的 manager |
+| 人在 Task 或 seat 对话中发的消息       | owner 或该 seat | app 缺省 manager，可移除    |
 
 给出 `to` 或 `cc` 任一个，两个列表就是全部受众，所以 `to: []` 只记录不通知。两种接收者总会被加上：别的 seat 写某个 Task 时的 owner，以及回复所指 Activity 的作者。名字是 seat 或 `human`；human 没有邮箱，它的 seat 对话列出该 seat 发给它的交付。交付、Activity 和 `update_task` 的返回都用 `audience` 列出实际受众；信封的 `addressed` 在有多个读者时说明本份是 to 还是 cc。Cc 只提供上下文：不是新分派，也不要求确认，但仍按今天的方式唤醒接收者。
 

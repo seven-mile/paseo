@@ -161,6 +161,13 @@ export const ar: TranslationResources = {
       supersededBy: "استبدلتها {{id}}",
       closedBy: "أغلقها {{name}}",
       absorbed: "ضمّت {{ids}}",
+      closeAsDone: "إغلاق كمكتملة",
+      closeAllAsDone: "إغلاق الكل كمكتملة",
+      closeReason: "السبب، يبقى في السجل",
+      closeTellsOwner: "سيُبلَّغ {{owner}}. الدورة الجارية تستمر.",
+      closeQuietly_one: "يغلق {{count}} Task مفتوحة دون إبلاغ مالكها.",
+      closeQuietly_other: "يغلق {{count}} Tasks مفتوحة دون إبلاغ مالكيها.",
+      briefPending: "لا يوجد موجز بعد. يكتبه {{owner}}.",
       resolutions: {
         done: "منجزة",
         "wont-do": "لن تُنفَّذ",

@@ -163,6 +163,13 @@ export const ja: TranslationResources = {
       supersededBy: "{{id}} に置き換え",
       closedBy: "{{name}} がクローズ",
       absorbed: "{{ids}} を統合",
+      closeAsDone: "完了として閉じる",
+      closeAllAsDone: "すべて完了として閉じる",
+      closeReason: "理由（履歴に残ります）",
+      closeTellsOwner: "{{owner}} に通知されます。実行中のターンは止まりません。",
+      closeQuietly_one: "開いている Task {{count}} 件を担当者に通知せずに閉じます。",
+      closeQuietly_other: "開いている Task {{count}} 件を担当者に通知せずに閉じます。",
+      briefPending: "概要はまだありません。{{owner}} が書きます。",
       resolutions: {
         done: "完了",
         "wont-do": "対応しない",

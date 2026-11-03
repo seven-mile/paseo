@@ -160,6 +160,13 @@ export const zhCN: TranslationResources = {
       supersededBy: "被 {{id}} 取代",
       closedBy: "由 {{name}} 关闭",
       absorbed: "已并入 {{ids}}",
+      closeAsDone: "标记完成并关闭",
+      closeAllAsDone: "全部标记完成并关闭",
+      closeReason: "原因（记入历史）",
+      closeTellsOwner: "会通知 {{owner}}。正在运行的回合不会被中止。",
+      closeQuietly_one: "关闭 {{count}} 个未关闭的 Task，不通知负责人。",
+      closeQuietly_other: "关闭 {{count}} 个未关闭的 Task，不通知负责人。",
+      briefPending: "尚无简报，由 {{owner}} 撰写。",
       resolutions: {
         done: "已完成",
         "wont-do": "不做",

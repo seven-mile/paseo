@@ -47,6 +47,7 @@ import {
   useWorkspaceStructure,
 } from "@/stores/session-store-hooks";
 import { SwarmCcLine } from "./cc-line";
+import { TaskCloseControl } from "./task-close";
 import { useSwarmRpc } from "./rpc";
 import { PERSON_SENDER } from "./system-envelope";
 import {
@@ -718,6 +719,8 @@ function LoadedTasks({
               board={board}
               statuses={statuses}
               onOpen={openTask}
+              invoke={invoke}
+              onRefresh={onRefresh}
             />
           </RetainedPanel>
           <RetainedPanel active={!showKanban && !showHistory}>
@@ -806,6 +809,8 @@ function TaskKanban({
   board,
   statuses,
   onOpen,
+  invoke,
+  onRefresh,
 }: {
   tasks: readonly SwarmTask[];
   // Closed Tasks the current board still shows, as a last column.
@@ -813,8 +818,12 @@ function TaskKanban({
   board: SwarmTaskBoard;
   statuses: readonly string[];
   onOpen: (id: string) => void;
+  invoke: <T>(method: string, input: unknown) => Promise<T>;
+  onRefresh: () => void;
 }) {
   const { t } = useTranslation();
+  // Closing a whole column as done is how a board from before resolutions is cleared.
+  const closeSupported = board.features?.includes("close") ?? false;
   const columns = swarmTaskColumns(board, tasks).filter(
     (column) => statuses.length === 0 || statuses.includes(column.status),
   );
@@ -846,6 +855,14 @@ function TaskKanban({
               <StatusBadge label={column.status} />
               <Text style={styles.meta}>{column.tasks.length}</Text>
             </View>
+            {closeSupported ? (
+              <TaskCloseControl
+                tasks={column.tasks}
+                invoke={invoke}
+                onClosed={onRefresh}
+                testID={`swarm-column-close-${column.status}`}
+              />
+            ) : null}
             <ScrollView contentContainerStyle={styles.columnCards} nestedScrollEnabled>
               {column.tasks.map((task) => (
                 <SurfaceCard key={task.id}>
@@ -1557,6 +1574,13 @@ function TaskDetail({
           onOpenTask={onOpenTask}
           onLinkPress={openLink}
         />
+        <TaskCloseAction
+          task={task}
+          board={board}
+          invoke={invoke}
+          onRefresh={onRefresh}
+          refetchDetail={refetchDetail}
+        />
         <SettingsSection title={t("swarm.tasks.activity")} flush trailing={actorFilter}>
           <TaskActivityStatus detail={taskDetail} online={online} empty={visible.length === 0} />
           {visible.map((activity) => (
@@ -1796,8 +1820,13 @@ function TaskSummary({
       </View>
       <Text style={styles.meta}>{task.id}</Text>
       <TaskClosure task={task} absorbed={record?.absorbed} onOpenTask={onOpenTask} />
-      {record ? (
+      {record?.brief ? (
         <AuthoredMarkdown text={record.brief} author={task.managerName} onLinkPress={onLinkPress} />
+      ) : null}
+      {record && !record.brief ? (
+        <Text style={styles.meta} testID="swarm-task-brief-pending">
+          {t("swarm.tasks.briefPending", { owner: task.managerName })}
+        </Text>
       ) : null}
       <BriefUnconfirmed author={record?.briefUnconfirmedBy} owner={task.managerName} />
       {unbriefedCount > 0 ? (
@@ -1828,6 +1857,37 @@ function TaskSummary({
         ))}
       </View>
     </>
+  );
+}
+
+// The human's Close as done for an open Task, on hosts that support it. Its owner is told.
+function TaskCloseAction({
+  task,
+  board,
+  invoke,
+  onRefresh,
+  refetchDetail,
+}: {
+  task: SwarmTask;
+  board: SwarmTaskBoard;
+  invoke: <T>(method: string, input: unknown) => Promise<T>;
+  onRefresh: () => void;
+  refetchDetail: () => void;
+}) {
+  const target = useMemo(() => [task], [task]);
+  const afterClose = useCallback(() => {
+    onRefresh();
+    refetchDetail();
+  }, [onRefresh, refetchDetail]);
+  if (task.resolution || !board.features?.includes("close")) return null;
+  return (
+    <TaskCloseControl
+      tasks={target}
+      owner={task.managerName}
+      invoke={invoke}
+      onClosed={afterClose}
+      testID="swarm-task-close"
+    />
   );
 }
 

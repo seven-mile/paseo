@@ -11,7 +11,13 @@ import {
   type SwarmState,
   type Task,
 } from "../shared/models";
-import { appendActivityRpc, createTaskRpc, deliverTaskRpc, updateTaskRpc } from "../shared/swarm";
+import {
+  appendActivityRpc,
+  closeTasksRpc,
+  createTaskRpc,
+  deliverTaskRpc,
+  updateTaskRpc,
+} from "../shared/swarm";
 import { newMessage } from "./mail";
 import { flushMailbox } from "./mailbox";
 import { resolveAudience, type Audience } from "./audience";
@@ -216,10 +222,18 @@ function requesterName(swarmId: string, name: string, actorName: string): string
   return name === HUMAN ? HUMAN : agentQualifiedName(findAgent(swarmId, name, actorName));
 }
 
+// A record may arrive without a brief: its owner writes the account it holds when it next updates
+// or delivers, with no turn of its own for that.
+const NO_BRIEF =
+  "No brief yet. Write the agreement as you hold it when you next update or deliver on this Task.";
+
 function assignment(task: Task, reason?: string): string {
-  return [`# ${task.title}`, "", task.brief, ...(reason ? ["", `Reason: ${reason}`] : [])].join(
-    "\n",
-  );
+  return [
+    `# ${task.title}`,
+    "",
+    task.brief || NO_BRIEF,
+    ...(reason ? ["", `Reason: ${reason}`] : []),
+  ].join("\n");
 }
 
 function activeSeat(state: Readonly<SwarmState>, swarmId: string, name: string | null) {
@@ -492,8 +506,10 @@ function informationalChanges(next: Task, plan: UpdatePlan, input: UpdateInput):
   ];
 }
 
-// Who hears of an update: the owner when another seat made it, and the requester, in cc, when the
-// Task closes without a result, since otherwise the asker never learns the work was dropped.
+// Who hears of an update: the owner when another seat made it; the requester, in cc, when the
+// Task closes without a result, since otherwise the asker never learns the work was dropped; and
+// the requester and the owner's manager, in cc, when the brief changes, since a changed agreement
+// is news to both even when someone else authorized it.
 function changeAudience(input: {
   state: Readonly<SwarmState>;
   current: Task;
@@ -505,6 +521,9 @@ function changeAudience(input: {
   const closed = changed.some(
     (change) => change.field === "resolution" && change.to !== null && change.to !== "done",
   );
+  const briefChanged = changed.some((change) => change.field === "brief");
+  const requester = { name: current.requester ?? current.createdBy, why: "requester" as const };
+  const manager = activeSeat(state, current.swarmId, current.managerName)?.reportsTo;
   return resolveAudience({
     state,
     swarmId: current.swarmId,
@@ -514,7 +533,10 @@ function changeAudience(input: {
         ? [{ name: current.managerName, why: "owner" }]
         : [],
     defaults: {
-      cc: closed ? [{ name: current.requester ?? current.createdBy, why: "requester" }] : [],
+      cc: [
+        ...(closed || briefChanged ? [requester] : []),
+        ...(briefChanged && manager ? [{ name: manager, why: "manager" as const }] : []),
+      ],
     },
   });
 }
@@ -689,6 +711,70 @@ function deliveryAudience(
   });
 }
 
+// The human's close: resolution done without a delivery, one change Activity per Task, and the
+// owner told unless the close is quiet. Tasks already closed are left alone.
+function humanClose(
+  state: Readonly<SwarmState>,
+  input: RpcInput<typeof closeTasksRpc>,
+  timestamp: string,
+): { changes: SwarmChange[]; closed: string[]; skipped: string[] } {
+  const changes: SwarmChange[] = [];
+  const closed: string[] = [];
+  const skipped: string[] = [];
+  for (const id of new Set(input.taskIds)) {
+    const task = state.tasks.find(
+      (candidate) => candidate.swarmId === input.swarmId && candidate.id === id,
+    );
+    if (!task) throw new Error(`Unknown Task: ${id}`);
+    if (task.resolution) {
+      skipped.push(id);
+      continue;
+    }
+    const next: Task = {
+      ...task,
+      resolution: "done",
+      resolvedAt: timestamp,
+      resolvedBy: HUMAN,
+      updatedAt: timestamp,
+    };
+    const changed: FieldChange[] = [{ field: "resolution", from: null, to: "done" }];
+    const owner = input.quiet ? undefined : activeSeat(state, task.swarmId, task.managerName);
+    const audience: AudienceEntry[] = owner
+      ? [{ name: task.managerName, as: "to", why: "owner" }]
+      : [];
+    const body = describeChanges(changed, next, input.reason);
+    changes.push(
+      { op: "put", collection: "tasks", record: next },
+      {
+        op: "put",
+        collection: "activities",
+        record: makeActivity(
+          {
+            swarmId: task.swarmId,
+            taskId: task.id,
+            actorName: HUMAN,
+            actorKind: "human",
+            replyTo: null,
+            responseProfile: null,
+            kind: CHANGE,
+            body,
+            data: { changes: changed, reason: input.reason },
+            audience,
+          },
+          state,
+        ),
+      },
+    );
+    if (owner) {
+      changes.push(
+        taskMail({ taskId: task.id, recipient: owner, sender: HUMAN, kind: "task-change", body }),
+      );
+    }
+    closed.push(id);
+  }
+  return { changes, closed, skipped };
+}
+
 export function registerTasks(server: Pick<PluginServerContext, "handle">): void {
   // Creating a Task for another seat is its assignment: the owner gets the brief in its mailbox.
   // With assign: false it records work the owner already has, and the owner gets a record notice.
@@ -711,6 +797,14 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
       const workerNames = resolveTaskWorkers(input.workerNames, owner);
       const requester = requesterName(swarmId, input.requester ?? actorName, actorName);
       const recording = !input.assign && ownerName !== actorName;
+      // Only a record may wait for its owner's account of the work.
+      if (input.brief === undefined && !recording) {
+        throw refusal(
+          `${actorName} cannot create Task ${input.id} without a brief`,
+          "only work recorded for another seat (assign: false) may wait for its owner's brief",
+          "Write the brief: objective, scope, constraints, acceptance criteria, and conditions still open.",
+        );
+      }
       const timestamp = now();
       let result!: Task;
       let audience: Audience | undefined;
@@ -722,7 +816,7 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
           id: input.id,
           swarmId,
           title: input.title,
-          brief: input.brief,
+          brief: input.brief ?? "",
           status: input.status,
           managerName: ownerName,
           workerNames,
@@ -730,7 +824,7 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
           requester,
           data: input.data,
           briefUpdatedAt: timestamp,
-          ...(recording ? { briefUnconfirmedBy: actorName } : {}),
+          ...(recording && input.brief !== undefined ? { briefUnconfirmedBy: actorName } : {}),
           createdAt: timestamp,
           updatedAt: timestamp,
         };
@@ -798,6 +892,21 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
   // One call records a result: the delivery Activity, the Task state it leaves the Task in, and
   // word to the owner's line. taskState is the state after the delivery, so a correction that
   // invalidates a finished result reopens the Task in the same commit.
+  server.handle(
+    closeTasksRpc,
+    async (input: RpcInput<typeof closeTasksRpc>, context: PluginHandlerContext) => {
+      findSwarm(input.swarmId);
+      let result!: { closed: string[]; skipped: string[] };
+      await store.commit((state) => {
+        const { changes, ...outcome } = humanClose(state, input, now());
+        result = outcome;
+        return changes;
+      });
+      if (!input.quiet && result.closed.length > 0) await deliverMail(context);
+      return result;
+    },
+  );
+
   server.handle(
     deliverTaskRpc,
     async (input: RpcInput<typeof deliverTaskRpc>, context: PluginHandlerContext) => {

@@ -166,6 +166,13 @@ export const fr: TranslationResources = {
       supersededBy: "Remplacée par {{id}}",
       closedBy: "Fermée par {{name}}",
       absorbed: "A absorbé {{ids}}",
+      closeAsDone: "Fermer comme faite",
+      closeAllAsDone: "Tout fermer comme fait",
+      closeReason: "Raison, conservée dans l'historique",
+      closeTellsOwner: "{{owner}} est prévenu. Un tour en cours continue.",
+      closeQuietly_one: "Ferme {{count}} Task ouverte sans prévenir son responsable.",
+      closeQuietly_other: "Ferme {{count}} Tasks ouvertes sans prévenir leurs responsables.",
+      briefPending: "Pas encore de brief. {{owner}} l'écrit.",
       resolutions: {
         done: "Terminée",
         "wont-do": "Abandonnée",

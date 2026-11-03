@@ -162,6 +162,13 @@ export const ko: TranslationResources = {
       supersededBy: "{{id}}(으)로 대체됨",
       closedBy: "{{name}}이(가) 닫음",
       absorbed: "{{ids}} 통합",
+      closeAsDone: "완료로 닫기",
+      closeAllAsDone: "모두 완료로 닫기",
+      closeReason: "이유(기록에 남음)",
+      closeTellsOwner: "{{owner}}에게 알립니다. 실행 중인 턴은 계속됩니다.",
+      closeQuietly_one: "열린 Task {{count}}개를 담당자에게 알리지 않고 닫습니다.",
+      closeQuietly_other: "열린 Task {{count}}개를 담당자에게 알리지 않고 닫습니다.",
+      briefPending: "아직 개요가 없습니다. {{owner}}이(가) 작성합니다.",
       resolutions: {
         done: "완료",
         "wont-do": "진행 안 함",

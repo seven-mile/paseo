@@ -163,6 +163,13 @@ export const ru: TranslationResources = {
       supersededBy: "Заменена {{id}}",
       closedBy: "Закрыл {{name}}",
       absorbed: "Включила {{ids}}",
+      closeAsDone: "Закрыть как выполненную",
+      closeAllAsDone: "Закрыть все как выполненные",
+      closeReason: "Причина, сохраняется в истории",
+      closeTellsOwner: "{{owner}} получит уведомление. Текущий ход продолжится.",
+      closeQuietly_one: "Закрывает {{count}} открытую Task без уведомления владельца.",
+      closeQuietly_other: "Закрывает {{count}} открытых Tasks без уведомления владельцев.",
+      briefPending: "Описания пока нет. Его напишет {{owner}}.",
       resolutions: {
         done: "Готово",
         "wont-do": "Не будет сделано",
