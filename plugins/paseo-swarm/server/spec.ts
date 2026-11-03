@@ -2,7 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isMap, parseDocument, type Document } from "yaml";
-import type { SeatChange, SpecIntent, SwarmRecord, SwarmState } from "../shared/models";
+import type {
+  AgentRecord,
+  SeatChange,
+  SpecIntent,
+  SwarmRecord,
+  SwarmState,
+} from "../shared/models";
+import { handOverTasks } from "./tasks";
 import { agentQualifiedName } from "../shared/models";
 import { SWARM_FILE } from "./pwa";
 import {
@@ -146,6 +153,7 @@ function acceptChanges(
   now: string,
 ): SwarmChange[] {
   const result: SwarmChange[] = [];
+  const retiring: AgentRecord[] = [];
   for (const change of changes) {
     const current = state.agents.find((seat) => seat.id === change.seat.id);
     if (change.kind === "add") {
@@ -179,8 +187,10 @@ function acceptChanges(
       { op: "put", collection: "agents", record: { ...current, retired: true, updatedAt: now } },
       ...failQueuedMail(state, current, change.reason, now),
     );
+    retiring.push(current);
   }
-  return result;
+  // Open Tasks of retiring seats move up their line, so no commitment is left with a retired seat.
+  return [...result, ...handOverTasks(state, retiring, "swarm")];
 }
 
 function isAccepted(state: Readonly<SwarmState>, intent: SpecIntent): boolean {

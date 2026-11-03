@@ -8,6 +8,7 @@ import {
   responseProfileSchema,
   roleClassSchema,
   slugNameSchema,
+  taskResolutionSchema,
   taskSchema,
 } from "./models";
 
@@ -113,6 +114,8 @@ export const boardReadRpc = defineRpc({
     swarms: z
       .array(z.object({ id: z.string(), name: z.string(), projectId: z.string().nullable() }))
       .optional(),
+    // SWARM_FEATURES; absent on hosts from before the list.
+    features: z.array(z.string()).optional(),
   }),
 });
 
@@ -128,6 +131,11 @@ const swarmRefSchema = z.object({
   name: z.string(),
   projectId: z.string().nullable(),
 });
+
+// Swarm features this host supports. A client offers a feature only when its name is listed;
+// absent on hosts from before the list. "cc": messages and human notes take a cc list.
+export const SWARM_FEATURES = ["cc"];
+const featuresSchema = z.array(z.string()).optional();
 
 // What a list or a link needs of a seat: no prompt receipts, occupant history or agent config.
 export const seatSummarySchema = seatSchema.pick({
@@ -156,6 +164,7 @@ export const taskSummarySchema = taskSchema
     workerNames: true,
     createdBy: true,
     updatedAt: true,
+    resolution: true,
   })
   .extend({ attention: z.number().int().nonnegative() });
 
@@ -164,7 +173,11 @@ export const rosterReadRpc = defineRpc({
   name: "swarm.roster.read",
   input: z.object(etagInputSchema),
   output: conditionalOutput(
-    z.object({ agents: z.array(seatSummarySchema), swarms: z.array(swarmRefSchema) }),
+    z.object({
+      agents: z.array(seatSummarySchema),
+      swarms: z.array(swarmRefSchema),
+      features: featuresSchema,
+    }),
   ),
 });
 
@@ -180,6 +193,7 @@ export const tasksReadRpc = defineRpc({
       // The planner role's declared statuses, when the request scopes one swarm.
       statuses: z.array(z.string()),
       swarms: z.array(swarmRefSchema),
+      features: featuresSchema,
     }),
   ),
 });
@@ -296,6 +310,8 @@ export const createTaskRpc = defineRpc({
   output: taskSchema,
 });
 
+// The owner and every seat above it may update a Task. A new managerName reassigns it; a
+// resolution other than done closes it without a result, and null reopens it.
 export const updateTaskRpc = defineRpc({
   name: "swarm.task.update",
   input: z.object({
@@ -307,8 +323,30 @@ export const updateTaskRpc = defineRpc({
     brief: z.string().min(1).optional(),
     workerNames: z.array(z.string()).optional(),
     data: z.record(z.string(), z.unknown()).optional(),
+    managerName: z.string().min(1).optional(),
+    resolution: taskResolutionSchema.nullable().optional(),
+    duplicateOf: slugNameSchema.optional(),
+    reason: z.string().min(1).optional(),
   }),
   output: taskSchema,
+});
+
+// The one way a result is recorded: a delivery Activity, with the Task's status and state changed
+// in the same commit. taskState is the Task's state after the delivery: done closes it, open keeps
+// it open or reopens it. revises names an earlier delivery this one corrects. A retry of the same
+// submission returns the earlier delivery and notifies no one again.
+export const deliverTaskRpc = defineRpc({
+  name: "swarm.task.deliver",
+  input: z.object({
+    swarmId: z.string().min(1).optional(),
+    taskId: slugNameSchema,
+    actorName: z.string().min(1),
+    result: z.string().min(1),
+    taskState: z.enum(["done", "open"]),
+    status: z.string().min(1).optional(),
+    revises: z.string().min(1).nullable().default(null),
+  }),
+  output: z.object({ task: taskSchema, activity: activitySchema, duplicate: z.boolean() }),
 });
 
 export const appendActivityRpc = defineRpc({
@@ -338,6 +376,8 @@ export const appendHumanActivityRpc = defineRpc({
     kind: z.string().min(1),
     body: z.string().min(1),
     data: z.record(z.string(), z.unknown()).default({}),
+    // Seats that get a copy for awareness. The Task's owner is always the recipient.
+    cc: z.array(z.string().min(1)).default([]),
   }),
   output: activitySchema.extend({ notificationWarning: z.string().optional() }),
 });
@@ -350,6 +390,8 @@ export const sendMessageRpc = defineRpc({
     actorName: z.string().nullable().default(null),
     senderName: z.string().min(1),
     recipientName: z.string().min(1),
+    // Seats that get a copy for awareness: the copy names the recipient, so it asks nothing of them.
+    cc: z.array(z.string().min(1)).default([]),
     body: z.string().min(1),
   }),
   output: z.object({
@@ -357,6 +399,12 @@ export const sendMessageRpc = defineRpc({
     messageId: z.string(),
     status: mailboxStatusSchema,
     receipt: z.string(),
+    // Absent from hosts before Cc.
+    cc: z
+      .array(
+        z.object({ recipient: z.string(), messageId: z.string(), status: mailboxStatusSchema }),
+      )
+      .optional(),
   }),
 });
 

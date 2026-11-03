@@ -30,6 +30,7 @@ import {
 } from "./pwa";
 import { assemblePrompt, assertBootable } from "./seats";
 import type { SwarmChange } from "./state";
+import { handOverTasks } from "./tasks";
 import { assertRunnablePwa } from "./swarms";
 
 // swarm.yaml is the roster half of a swarm directory; PWA.md and roles/ are the other half. The
@@ -413,7 +414,8 @@ function planRetirements(
       ...failed,
     );
   }
-  return changes;
+  // Open Tasks of retiring seats move up their line, so no commitment is left with a retired seat.
+  return [...changes, ...handOverTasks(state, retiring, "swarm")];
 }
 
 // The swarm's own record: a new name, and the PWA files that changed with the occupants whose

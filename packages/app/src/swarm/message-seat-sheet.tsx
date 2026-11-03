@@ -10,18 +10,26 @@ import {
 } from "@/components/adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
 import type { EditingTextInputHandle } from "@/components/ui/text-input";
+import { SwarmCcLine } from "./cc-line";
 import { useSwarmRpc } from "./rpc";
 import { PERSON_SENDER } from "./system-envelope";
 
+const statusSchema = z.enum(["queued", "delivered", "consumed", "failed"]);
 const receiptSchema = z.object({
-  status: z.enum(["queued", "delivered", "consumed", "failed"]),
+  status: statusSchema,
   receipt: z.string(),
+  // Absent on hosts from before Cc.
+  cc: z
+    .array(z.object({ recipient: z.string(), messageId: z.string(), status: statusSchema }))
+    .optional(),
 });
+const NO_CC: string[] = [];
 
 export interface SwarmMessageTarget {
   swarmId?: string;
   name: string;
   qualifiedName?: string;
+  reportsTo?: string | null;
 }
 
 // Mail to a seat goes through its Swarm mailbox, so a seat with no agent yet starts its first one
@@ -29,11 +37,14 @@ export interface SwarmMessageTarget {
 export function SwarmMessageSeatSheet({
   serverId,
   seat,
+  ccSupported = false,
   onClose,
   onSent,
 }: {
   serverId: string;
   seat: SwarmMessageTarget | null;
+  // The host takes a Cc list on messages.
+  ccSupported?: boolean;
   onClose: () => void;
   onSent?: () => void;
 }) {
@@ -45,15 +56,27 @@ export function SwarmMessageSeatSheet({
   const inputRef = useRef<EditingTextInputHandle>(null);
   const visible = seat !== null;
   const recipient = seat ? (seat.qualifiedName ?? seat.name) : "";
+  const manager = seat?.reportsTo ?? null;
+  const defaultCc = useMemo(
+    () => (ccSupported && manager ? [manager] : NO_CC),
+    [ccSupported, manager],
+  );
+  const [cc, setCc] = useState<string[]>(NO_CC);
 
   useEffect(() => {
     if (!visible) return;
+    setCc(defaultCc);
     setBody("");
     setError(null);
     setPending(false);
     const timeout = setTimeout(() => inputRef.current?.focus(), 50);
     return () => clearTimeout(timeout);
-  }, [visible, recipient]);
+  }, [visible, recipient, defaultCc]);
+  const removeCc = useCallback(
+    (name: string) => setCc((current) => current.filter((entry) => entry !== name)),
+    [],
+  );
+  const restoreCc = useCallback(() => setCc(defaultCc), [defaultCc]);
 
   const handleChange = useCallback((value: string) => {
     setBody(value);
@@ -74,6 +97,7 @@ export function SwarmMessageSeatSheet({
           senderName: PERSON_SENDER,
           recipientName: recipient,
           body: body.trim(),
+          ...(cc.length > 0 ? { cc } : {}),
         }),
       );
       setPending(false);
@@ -91,7 +115,7 @@ export function SwarmMessageSeatSheet({
           : t("swarm.message.failed"),
       );
     }
-  }, [body, invoke, onClose, onSent, pending, recipient, seat, t]);
+  }, [body, cc, invoke, onClose, onSent, pending, recipient, seat, t]);
   const handleSend = useCallback(() => void send(), [send]);
 
   const header = useMemo<SheetHeader>(
@@ -107,6 +131,16 @@ export function SwarmMessageSeatSheet({
       testID="swarm-message-seat"
     >
       <View style={styles.body}>
+        {ccSupported ? (
+          <SwarmCcLine
+            recipient={recipient}
+            cc={cc}
+            defaultCc={defaultCc}
+            disabled={pending}
+            onRemove={removeCc}
+            onRestore={restoreCc}
+          />
+        ) : null}
         <AdaptiveTextInput
           ref={inputRef}
           resetKey={recipient}

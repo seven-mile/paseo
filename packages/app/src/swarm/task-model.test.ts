@@ -5,6 +5,8 @@ import {
   isSwarmActivitySubmitShortcut,
   filterSwarmTasks,
   defaultSwarmTaskScope,
+  defaultSwarmCc,
+  notesNotInBrief,
   openSwarmReply,
   openSwarmTaskSurfaceState,
   resolveSwarmTaskReference,
@@ -13,6 +15,8 @@ import {
   swarmTaskBoardSchema,
   swarmTaskColumns,
   swarmHumanActivityReceiptSchema,
+  swarmArtifactHref,
+  swarmTaskResult,
   unansweredChoices,
   type HumanActivityInput,
   type SwarmActivity,
@@ -321,6 +325,7 @@ describe("Swarm Activity reply", () => {
         replyTo: "question",
         responseProfile: "steering",
         data: { selectedOption: "yes" },
+        cc: [],
       },
     ]);
     expect(model.getState()).toMatchObject({
@@ -487,6 +492,7 @@ describe("Swarm Activity reply", () => {
         replyTo: null,
         responseProfile: "discussion",
         data: {},
+        cc: [],
       },
     ]);
     expect(model.getState()).toMatchObject({ body: "", replyTo: null, canSubmit: false });
@@ -654,5 +660,81 @@ describe("Tasks responsive shell state", () => {
     ).toBe(false);
     expect(sent).toEqual([]);
     expect(() => session.detail("another-task", [])).toThrow("Tasks tab state is closed");
+  });
+});
+
+describe("Swarm Task results and Cc", () => {
+  const delivery = (id: string, createdAt: string, data: Record<string, unknown> = {}) => ({
+    ...activity(id),
+    kind: "delivery",
+    body: `Result ${id}`,
+    data: { taskState: "done", ...data },
+    createdAt,
+  });
+  it("shows the newest delivery as the result and marks the ones it revises", () => {
+    const first = delivery("first", "2026-10-06T01:00:00Z");
+    const correction = delivery("correction", "2026-10-06T02:00:00Z", { revises: "first" });
+    const result = swarmTaskResult([first, activity("note"), correction]);
+    expect(result.latest?.id).toBe("correction");
+    expect([...result.revised]).toEqual(["first"]);
+    expect(swarmTaskResult([activity()]).latest).toBeNull();
+  });
+  it("marks human notes written after the brief last changed", () => {
+    const before = { ...activity("before"), actorKind: "human" as const };
+    const after = { ...before, id: "after", createdAt: "2026-10-07T00:00:00Z" };
+    const agentNote = { ...activity("agent"), createdAt: "2026-10-07T00:00:00Z" };
+    expect([
+      ...notesNotInBrief({ briefUpdatedAt: "2026-10-06T12:00:00Z" }, [before, after, agentNote]),
+    ]).toEqual(["after"]);
+    expect(notesNotInBrief({}, [after]).size).toBe(0);
+  });
+  it("copies the recipient's manager by default", () => {
+    const agents = board().agents;
+    expect(defaultSwarmCc(agents, "planner.manager")).toEqual(["planner"]);
+    expect(defaultSwarmCc(agents, "planner")).toEqual([]);
+    const retired = agents.filter((seat) => seat.name !== "planner");
+    retired.push({ ...agents[0], retired: true });
+    expect(defaultSwarmCc(retired, "planner.manager")).toEqual([]);
+  });
+  it("sends the Cc the person kept, and offers the default again after a send", async () => {
+    const model = openSwarmReply("task", [], ["planner"]);
+    expect(model.getState().cc).toEqual(["planner"]);
+    model.removeCc("planner");
+    model.applyDefaultCc(["planner.ops"]);
+    expect(model.getState().cc).toEqual([]);
+    model.setBody("Only the owner");
+    const inputs: HumanActivityInput[] = [];
+    await model.submit(async (input) => {
+      inputs.push(input);
+    });
+    expect(inputs[0].cc).toEqual([]);
+    expect(model.getState().cc).toEqual(["planner.ops"]);
+    model.removeCc("planner.ops");
+    model.restoreCc();
+    expect(model.getState().cc).toEqual(["planner.ops"]);
+  });
+});
+
+describe("Swarm artifact paths", () => {
+  const author = { workspaceId: "lab ws", workspaceRoot: "/home/me/lab" };
+  it("links a path the author wrote to that file in the author's workspace", () => {
+    expect(swarmArtifactHref("reports/final.md", author)).toBe(
+      "paseo-swarm://file/lab%20ws/reports/final.md",
+    );
+    expect(swarmArtifactHref("./reports/final.md:12", author)).toBe(
+      "paseo-swarm://file/lab%20ws/reports/final.md",
+    );
+    expect(swarmArtifactHref("/home/me/lab/src/headings.ts", author)).toBe(
+      "paseo-swarm://file/lab%20ws/src/headings.ts",
+    );
+  });
+  it("leaves code, paths outside the workspace, and unknown roots alone", () => {
+    expect(swarmArtifactHref("npm test", author)).toBeNull();
+    expect(swarmArtifactHref("taskState: done", author)).toBeNull();
+    expect(swarmArtifactHref("/etc/hosts.conf", author)).toBeNull();
+    expect(swarmArtifactHref("../outside.md", author)).toBeNull();
+    expect(
+      swarmArtifactHref("/home/me/lab/a.md", { workspaceId: "lab", workspaceRoot: null }),
+    ).toBeNull();
   });
 });

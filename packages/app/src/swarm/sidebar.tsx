@@ -988,6 +988,7 @@ function HostRoster({
       <SwarmMessageSeatSheet
         serverId={plugin.serverId}
         seat={messageTarget}
+        ccSupported={query.data?.features?.includes("cc") ?? false}
         onClose={closeMessage}
         onSent={retry}
       />

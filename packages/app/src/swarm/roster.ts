@@ -55,6 +55,8 @@ export type SwarmSeat = z.infer<typeof swarmSeatSchema>;
 export const rosterSchema = z.object({
   agents: z.array(rosterSeatSchema),
   swarms: z.array(z.object({ id: z.string(), name: z.string(), projectId: z.string().nullable() })),
+  // Swarm features the host supports; absent on older hosts.
+  features: z.array(z.string()).optional(),
 });
 export type Roster = z.infer<typeof rosterSchema>;
 

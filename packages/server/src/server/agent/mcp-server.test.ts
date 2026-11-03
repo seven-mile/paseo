@@ -967,9 +967,12 @@ describe("Swarm MCP coordination", () => {
         items: [],
         total: 0,
       });
+      const { managerName: _owner, ...alpha } = board.tasks[1];
       expect(await read("swarm_task_read", { taskId: "alpha" })).toEqual({
-        ...board.tasks[1],
+        ...alpha,
+        owner: "lead.team",
         activityCount: 2,
+        notesSinceBrief: [],
       });
       expect(await read("swarm_activity_list", { taskId: "alpha", limit: 1 })).toMatchObject({
         items: [{ id: "newer", bodyPreview: activities[1].body.slice(0, 600), truncated: true }],
@@ -1057,9 +1060,23 @@ describe("Swarm MCP coordination", () => {
       try {
         if (roleClass === "worker") {
           expect(lookupTool(server, "swarm_task_update")).toBeUndefined();
+          expect(lookupTool(server, "swarm_task_deliver")).toBeUndefined();
           expect(lookupTool(server, "swarm_seat_create")).toBeUndefined();
           return;
         }
+        await invokeToolWithParsedInput(registeredTool(server, "swarm_task_deliver"), {
+          taskId: "review-api",
+          result: "The API review found no blocking issues.",
+          taskState: "done",
+        });
+        expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.task.deliver", {
+          swarmId: "swarm",
+          taskId: "review-api",
+          result: "The API review found no blocking issues.",
+          taskState: "done",
+          revises: null,
+          actorName: "planner.supervisor",
+        });
         await invokeToolWithParsedInput(registeredTool(server, "swarm_task_update"), {
           taskId: "review-api",
           workerNames: ["reviewer"],
@@ -1272,6 +1289,7 @@ describe("Swarm MCP coordination", () => {
       expect(invokePlugin).toHaveBeenLastCalledWith("paseo-swarm", "swarm.message.send", {
         swarmId: "swarm",
         recipientName: "alpha.team.review",
+        cc: [],
         senderName: "alpha.team.scout",
         actorName: "alpha.team.scout",
         taskId: "survey",

@@ -1,11 +1,14 @@
 import type { PluginHookContext } from "@getpaseo/plugin/server";
-import { randomUUID } from "node:crypto";
-import type { MailboxMessage, MailboxStatus, MessageKind, SwarmState } from "../shared/models";
+import type { MailboxMessage, MailboxStatus, SwarmState } from "../shared/models";
 import { agentQualifiedName, mailboxMessageStatus } from "../shared/models";
 import { turnDigest } from "./prompts";
 import { planSeat } from "./seat-policy";
 import { occupantRunning, reconcileSeat, refreshStalePrompt } from "./seats";
+import { randomUUID } from "node:crypto";
+import { newMessage, type EnqueueInput } from "./mail";
 import { store, type SwarmChange } from "./state";
+
+export { newMessage, type EnqueueInput };
 
 // Send failures before a message stops being retried.
 export const MAX_DELIVERY_ATTEMPTS = 5;
@@ -22,17 +25,6 @@ export const DIGEST_HOLD_LIMIT_MS = 2 * 60_000;
 const OUTCOME_UNKNOWN = "agent_request_outcome_unknown";
 
 type MailboxContext = Pick<PluginHookContext, "paseo">;
-
-export interface EnqueueInput {
-  // The roster member (AgentRecord.id). The Paseo agent behind it is resolved
-  // at delivery, so queued mail follows the member if its agent is replaced.
-  recipientAgentId: string;
-  recipientName: string;
-  senderName: string;
-  taskId: string | null;
-  kind: MessageKind;
-  render: (id: string) => string;
-}
 
 function putMessage(record: MailboxMessage): SwarmChange {
   return { op: "put", collection: "messages", record };
@@ -52,23 +44,7 @@ function pruneSettled(state: Readonly<SwarmState>): SwarmChange[] {
 }
 
 export async function enqueueMessage(input: EnqueueInput): Promise<MailboxMessage> {
-  const id = `message-${randomUUID()}`;
-  const message: MailboxMessage = {
-    id,
-    recipientAgentId: input.recipientAgentId,
-    recipientName: input.recipientName,
-    senderName: input.senderName,
-    taskId: input.taskId,
-    kind: input.kind,
-    prompt: input.render(id),
-    createdAt: new Date().toISOString(),
-    attempts: 0,
-    lastError: null,
-    deliveredAt: null,
-    deliveredToPaseoAgentId: null,
-    consumedAt: null,
-    failedAt: null,
-  };
+  const message = newMessage(input);
   await store.commit((state) => [...pruneSettled(state), putMessage(message)]);
   return message;
 }

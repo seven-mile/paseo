@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { z } from "zod";
-import type { seatSummarySchema, taskSummarySchema } from "../shared/swarm";
+import { SWARM_FEATURES, type seatSummarySchema, type taskSummarySchema } from "../shared/swarm";
 import {
   unansweredChoices,
   type Activity,
@@ -95,6 +95,7 @@ export function rosterView(state: Readonly<SwarmState>) {
   return {
     agents: state.agents.filter((seat) => !seat.retired).map(seatSummary),
     swarms: state.swarms.map(swarmRef),
+    features: SWARM_FEATURES,
   };
 }
 
@@ -127,6 +128,8 @@ export function tasksView(
       workerNames: task.workerNames,
       createdBy: task.createdBy,
       updatedAt: task.updatedAt,
+      // Undefined while the Task is open, so the list's JSON leaves it out.
+      resolution: task.resolution,
       attention: unansweredChoices(activities.get(`${task.swarmId}/${task.id}`) ?? []).length,
     }));
   return {
@@ -135,6 +138,7 @@ export function tasksView(
     tasks,
     statuses: swarms.length === 1 ? plannerStatuses(swarms[0]) : [],
     swarms: swarms.map(swarmRef),
+    features: SWARM_FEATURES,
   };
 }
 
@@ -157,7 +161,10 @@ export function taskView(
   );
   const start = Math.max(0, all.length - input.limit);
   const older = all.slice(0, start);
+  // The Task's result, its newest delivery, stays readable however much history follows it.
+  const result = all.findLast((activity) => activity.kind === "delivery");
   const open = new Set(unansweredChoices(all).map((activity) => activity.id));
+  if (result) open.add(result.id);
   const kept = older.filter((activity) => open.has(activity.id));
   return {
     task,

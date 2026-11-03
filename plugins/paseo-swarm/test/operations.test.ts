@@ -58,6 +58,7 @@ function boardOf({ messages: _messages, intents: _intents, ...board }: Readonly<
     ...board,
     agents: board.agents.filter((agent) => agent.paseoAgentId !== null).map(seatView),
     swarms: board.swarms.map(({ id, name, projectId }) => ({ id, name, projectId })),
+    features: ["cc"],
   };
 }
 
@@ -526,19 +527,16 @@ test("seats are placed when their first agent starts: supervisors in worktrees o
         },
       ],
     });
-    await assert.rejects(
-      async () =>
-        invoke(
-          sendMessageRpc.name,
-          sendMessageRpc.input.parse({
-            senderName: "planner.supervisor.scout",
-            actorName: "planner.supervisor.scout",
-            recipientName: "planner.supervisor.scout",
-            taskId: "survey",
-            body: "Not a task member",
-          }),
-        ),
-      /cannot send a message for Task survey/,
+    // A Task id is context: a worker not listed on the Task still reports about it.
+    await invoke(
+      sendMessageRpc.name,
+      sendMessageRpc.input.parse({
+        senderName: "planner.supervisor.scout",
+        actorName: "planner.supervisor.scout",
+        recipientName: "planner.supervisor",
+        taskId: "survey",
+        body: "Not a listed worker",
+      }),
     );
     await invoke(
       appendHumanActivityRpc.name,
@@ -550,7 +548,7 @@ test("seats are placed when their first agent starts: supervisors in worktrees o
       }),
     );
     const toSupervisor = sends.slice(initialSends);
-    assert.equal(toSupervisor.length, 3);
+    assert.equal(toSupervisor.length, 4);
     for (const delivery of toSupervisor) {
       assert.equal(delivery.agentId, supervisorAgent);
       assert.deepEqual(delivery.options, {
@@ -1052,7 +1050,7 @@ test("manager can replace a Task worker roster with creation-time validation", a
             workerNames: ["manager"],
           }),
         ),
-      /Task worker must have role class worker/,
+      /planner\.manager cannot be listed as a worker/,
     );
     // A worker on another team, though its local name is unique, is not this manager's to assign.
     await assert.rejects(
@@ -1065,7 +1063,7 @@ test("manager can replace a Task worker roster with creation-time validation", a
             workerNames: ["audit"],
           }),
         ),
-      /Task worker planner\.other\.audit does not report to planner\.manager/,
+      /planner\.other\.audit cannot be listed as a worker on a Task owned by planner\.manager/,
     );
     assert.deepEqual(store.read().tasks[0].workerNames, ["planner.manager.second"]);
   } finally {

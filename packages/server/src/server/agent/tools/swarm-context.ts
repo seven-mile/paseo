@@ -33,6 +33,9 @@ export interface SwarmTask {
   workerNames: string[];
   updatedAt: string;
   data?: Record<string, unknown>;
+  // Absent while the Task is open, and on hosts from before resolutions.
+  resolution?: string;
+  briefUpdatedAt?: string;
 }
 
 export interface SwarmActivity {
@@ -211,28 +214,61 @@ export function seatDetail(seat: SwarmSeat, seats: SwarmSeat[], state: SeatState
   };
 }
 
-// Tasks the actor manages, that seats under it manage, or that name it as a worker; most
-// recently updated first.
-export function visibleTasks(board: SwarmBoard, actorName: string, status?: string) {
+// Tasks the actor owns, that seats under it own, or that name it as a worker; for a worker, also
+// its manager's Tasks, which are the work it is asked about. Open Tasks only unless includeClosed.
+// Most recently updated first.
+export function visibleTasks(
+  board: SwarmBoard,
+  actor: Pick<SwarmSeat, "name" | "qualifiedName" | "roleClass" | "reportsTo">,
+  filter: { status?: string; includeClosed?: boolean } = {},
+) {
+  const actorName = seatName(actor);
   const activities = board.activities ?? [];
   return (board.tasks ?? [])
     .filter(
       (task) =>
         (task.managerName === actorName ||
           task.managerName.startsWith(`${actorName}.`) ||
-          task.workerNames.includes(actorName)) &&
-        (!status || task.status === status),
+          task.workerNames.includes(actorName) ||
+          (actor.roleClass === "worker" && task.managerName === actor.reportsTo)) &&
+        (!filter.status || task.status === filter.status) &&
+        (filter.includeClosed || !task.resolution),
     )
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-    .map((task) => ({
-      id: task.id,
-      title: task.title,
-      status: task.status,
-      managerName: task.managerName,
-      workerNames: task.workerNames,
-      updatedAt: task.updatedAt,
-      activityCount: activities.filter((activity) => activity.taskId === task.id).length,
-    }));
+    .map((task) => {
+      const summary: {
+        id: string;
+        title: string;
+        status: string;
+        resolution?: string;
+        owner: string;
+        workerNames: string[];
+        updatedAt: string;
+        activityCount: number;
+      } = {
+        id: task.id,
+        title: task.title,
+        status: task.status,
+        owner: task.managerName,
+        workerNames: task.workerNames,
+        updatedAt: task.updatedAt,
+        activityCount: activities.filter((activity) => activity.taskId === task.id).length,
+      };
+      if (task.resolution) summary.resolution = task.resolution;
+      return summary;
+    });
+}
+
+// Human notes on a Task newer than its brief: instructions its owner has not yet written into it.
+export function notesSinceBrief(board: SwarmBoard, task: SwarmTask): string[] {
+  const since = task.briefUpdatedAt;
+  if (!since) return [];
+  return (board.activities ?? [])
+    .filter(
+      (activity) =>
+        activity.taskId === task.id && activity.actorKind === "human" && activity.createdAt > since,
+    )
+    .map((activity) => activity.id);
 }
 
 // A Task's Activities, newest first, with bodies cut to a preview.

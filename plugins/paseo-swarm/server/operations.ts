@@ -17,11 +17,13 @@ import {
   type SeatView,
 } from "./seats";
 import type { TurnSummary } from "./turns";
-import { flushMailbox, sendThroughMailbox } from "./mailbox";
+import { enqueueMessage, flushMailbox, sendThroughMailbox } from "./mailbox";
+import { makeActivity, registerTasks } from "./tasks";
 import { store } from "./state";
 import { readPwaSource } from "./source";
 import {
   createSwarm,
+  findAgent,
   findSwarm,
   resolveSwarm,
   swarmForProject,
@@ -30,7 +32,6 @@ import {
   swarmSeats,
   swarmTasks,
 } from "./swarms";
-import { resolveActivityRefs } from "./refs";
 import {
   conditionalValue,
   conditionalView,
@@ -49,7 +50,6 @@ import {
   withSwarmLock,
 } from "./spec";
 import {
-  appendActivityRpc,
   appendHumanActivityRpc,
   boardReadRpc,
   rosterReadRpc,
@@ -57,13 +57,11 @@ import {
   taskReadRpc,
   tasksReadRpc,
   createSeatRpc,
-  createTaskRpc,
   directoryRecoverRpc,
   directoryUpRpc,
   statusReadRpc,
   type RosterPlan,
   sendMessageRpc,
-  updateTaskRpc,
   pwaSourceReadRpc,
   pwaSourceSetRpc,
   pwaRolesReadRpc,
@@ -74,8 +72,16 @@ import {
   seatResetRpc,
   seatRetireRpc,
   seatUpdateRpc,
+  SWARM_FEATURES,
 } from "../shared/swarm";
-import type { AgentConfig, AgentRecord, SwarmRecord, SwarmState, Task } from "../shared/models";
+import type {
+  AgentConfig,
+  AgentRecord,
+  MailboxMessage,
+  MessageKind,
+  SwarmRecord,
+  Task,
+} from "../shared/models";
 import { agentQualifiedName, currentOccupant, mailboxMessageStatus } from "../shared/models";
 
 const now = () => new Date().toISOString();
@@ -208,42 +214,6 @@ async function seatWorkspaceId(
   const snapshot = (await context.paseo.agents.ref(seat.paseoAgentId).refresh())?.agent;
   if (!snapshot) throw new Error(`Unknown manager agent: ${seat.paseoAgentId}`);
   return snapshot.workspaceId ?? null;
-}
-
-function findAgent(swarmId: string, reference: string, scopeName?: string): AgentRecord {
-  const agents = swarmSeats(swarmId);
-  const qualified = agents.filter((candidate) => agentQualifiedName(candidate) === reference);
-  if (qualified.length === 1) return qualified[0];
-
-  if (scopeName) {
-    const children = agents.filter((candidate) => candidate.reportsTo === scopeName);
-    const scoped = children.filter(
-      (candidate) => candidate.name === reference || candidate.aliases.includes(reference),
-    );
-    if (scoped.length === 1) return scoped[0];
-  }
-
-  const local = agents.filter(
-    (candidate) => candidate.name === reference || candidate.aliases.includes(reference),
-  );
-  if (local.length === 1) return local[0];
-  if (local.length > 1) throw new Error(`Ambiguous agent reference: ${reference}`);
-  throw new Error(`Unknown active agent: ${reference}`);
-}
-
-function resolveTaskWorkers(workerNames: string[], manager: AgentRecord): string[] {
-  return workerNames.map((workerName) => {
-    const worker = findAgent(swarmOf(manager).id, workerName, agentQualifiedName(manager));
-    if (worker.roleClass !== "worker") {
-      throw new Error(`Task worker must have role class worker: ${worker.name}`);
-    }
-    if (worker.reportsTo !== agentQualifiedName(manager)) {
-      throw new Error(
-        `Task worker ${agentQualifiedName(worker)} does not report to ${agentQualifiedName(manager)}`,
-      );
-    }
-    return agentQualifiedName(worker);
-  });
 }
 
 function ensureUniqueName(
@@ -420,7 +390,62 @@ async function namedWorkspace(
   return input.workspaceId;
 }
 
+// One message to its recipient and the same envelope to each Cc seat. Every copy names the
+// recipient in to, so a Cc reader knows it is informed, not asked.
+async function sendWithCopies(
+  input: {
+    swarmId: string;
+    recipient: AgentRecord;
+    cc: readonly string[];
+    sender: string;
+    taskId: string | null;
+    kind: MessageKind;
+    body: string;
+    attributes?: Record<string, string | null | undefined>;
+  },
+  context: PluginHandlerContext,
+): Promise<{ message: MailboxMessage; copies: MailboxMessage[] }> {
+  const to = agentQualifiedName(input.recipient);
+  const copiedSeats = [
+    ...new Map(
+      input.cc
+        .map((name) => findAgent(input.swarmId, name, input.recipient.reportsTo ?? undefined))
+        .filter(
+          (seat) => agentQualifiedName(seat) !== to && agentQualifiedName(seat) !== input.sender,
+        )
+        .map((seat) => [seat.id, seat]),
+    ).values(),
+  ];
+  const cc = copiedSeats.map(agentQualifiedName);
+  const queue = (seat: AgentRecord) =>
+    enqueueMessage({
+      recipientAgentId: seat.id,
+      recipientName: agentQualifiedName(seat),
+      senderName: input.sender,
+      taskId: input.taskId,
+      kind: input.kind,
+      render: (messageId) =>
+        messagePrompt({
+          id: messageId,
+          sender: input.sender,
+          recipient: to,
+          cc,
+          message: input.body,
+          taskId: input.taskId,
+          attributes: input.attributes,
+        }),
+    });
+  const message = await queue(input.recipient);
+  const copies = [];
+  for (const seat of copiedSeats) copies.push(await queue(seat));
+  await flushMailbox(context);
+  const current = (queued: MailboxMessage) =>
+    store.read().messages.find((candidate) => candidate.id === queued.id) ?? queued;
+  return { message: current(message), copies: copies.map(current) };
+}
+
 export function registerOperations(server: Pick<PluginServerContext, "handle">): void {
+  registerTasks(server);
   // The board of one swarm, or of every swarm when the request names none, as before swarms.
   server.handle(boardReadRpc, async ({ projectId, swarmId, includeReserved }, context) => {
     if (projectId) await projectRoot(projectId, context);
@@ -445,6 +470,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         name: swarm.name,
         projectId: swarm.projectId,
       })),
+      features: SWARM_FEATURES,
     };
     if (!projectId && !swarmId) return board;
     if (swarms.length !== 1) return { ...board, statuses: [] };
@@ -592,6 +618,12 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       });
       return result;
     });
+    if (!dryRun) {
+      // Delivers the handover of retired seats' open Tasks.
+      await flushMailbox(context).catch((error) => {
+        console.warn("[paseo-swarm] Task handover mail stays queued", error);
+      });
+    }
     return { swarm: swarmSummary(findSwarm(swarm.id)), plan };
   });
   server.handle(directoryRecoverRpc, async ({ keep, ...scope }, context) => {
@@ -643,115 +675,20 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     };
   });
 
-  server.handle(createTaskRpc, async (input: RpcInput<typeof createTaskRpc>) => {
-    const swarm = actorSwarm(input, input.createdBy);
-    const actor = findAgent(swarm.id, input.createdBy);
-    const manager = findAgent(swarm.id, input.managerName, agentQualifiedName(actor));
-    if (actor.roleClass === "worker") {
-      throw new Error(`Worker ${actor.name} cannot create a Task`);
-    }
-    if (
-      actor.roleClass !== "planner" &&
-      agentQualifiedName(actor) !== agentQualifiedName(manager)
-    ) {
-      throw new Error(`Agent ${actor.name} cannot create a Task for ${input.managerName}`);
-    }
-    const workerNames = resolveTaskWorkers(input.workerNames, manager);
-    let result!: Task;
-    const timestamp = now();
-    await store.commit((state) => {
-      if (state.tasks.some((task) => task.swarmId === swarm.id && task.id === input.id)) {
-        throw new Error(`Task id already exists: ${input.id}`);
-      }
-      result = {
-        ...input,
-        swarmId: swarm.id,
-        managerName: agentQualifiedName(manager),
-        workerNames,
-        createdBy: agentQualifiedName(actor),
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
-      return [{ op: "put", collection: "tasks", record: result }];
-    });
-    return result;
-  });
-
-  server.handle(updateTaskRpc, async (input: RpcInput<typeof updateTaskRpc>) => {
-    const swarm = actorSwarm(input, input.actorName);
-    const currentTask = findTask(swarm.id, input.taskId);
-    const actor = findAgent(swarm.id, input.actorName);
-    if (
-      actor.roleClass === "worker" ||
-      (actor.roleClass !== "planner" &&
-        currentTask.managerName !== agentQualifiedName(actor) &&
-        currentTask.createdBy !== agentQualifiedName(actor))
-    ) {
-      throw new Error(`Agent ${input.actorName} cannot update Task ${input.taskId}`);
-    }
-    const manager = findAgent(swarm.id, currentTask.managerName);
-    const workerNames =
-      input.workerNames === undefined ? undefined : resolveTaskWorkers(input.workerNames, manager);
-    let result!: Task;
-    await store.commit((state) => {
-      const value = state.tasks.find(
-        (candidate) => candidate.swarmId === swarm.id && candidate.id === input.taskId,
-      );
-      if (!value) throw new Error(`Unknown Task: ${input.taskId}`);
-      result = {
-        ...value,
-        ...(input.status === undefined ? {} : { status: input.status }),
-        ...(input.title === undefined ? {} : { title: input.title }),
-        ...(input.brief === undefined ? {} : { brief: input.brief }),
-        ...(workerNames === undefined ? {} : { workerNames }),
-        ...(input.data === undefined ? {} : { data: input.data }),
-        updatedAt: now(),
-      };
-      return [{ op: "put", collection: "tasks", record: result }];
-    });
-    return result;
-  });
-
-  server.handle(appendActivityRpc, async (input: RpcInput<typeof appendActivityRpc>) => {
-    const swarm = actorSwarm(input, input.actorName);
-    const currentTask = findTask(swarm.id, input.taskId);
-    const actor = findAgent(swarm.id, input.actorName);
-    const actorReference = agentQualifiedName(actor);
-    if (actor.roleClass === "worker") {
-      throw new Error(`Worker ${input.actorName} cannot append Activity`);
-    }
-    if (currentTask.managerName !== actorReference && actor.roleClass !== "planner") {
-      throw new Error(`Agent ${input.actorName} cannot append Activity to Task ${input.taskId}`);
-    }
-    let result!: ReturnType<typeof makeActivity>;
-    await store.commit((state) => {
-      result = makeActivity(
-        {
-          ...input,
-          swarmId: swarm.id,
-          actorKind: "agent",
-          actorOccupant: currentOccupant(actor).number,
-        },
-        state,
-      );
-      return [{ op: "put", collection: "activities", record: result }];
-    });
-    return result;
-  });
-
   server.handle(
     appendHumanActivityRpc,
     async (input: RpcInput<typeof appendHumanActivityRpc>, context: PluginHandlerContext) => {
       const task = findTaskFor(input, input.taskId);
       const swarmId = swarmOf(task).id;
+      const { cc, ...fields } = input;
       let result!: ReturnType<typeof makeActivity>;
       await store.commit((state) => {
-        result = makeActivity({ ...input, swarmId, actorKind: "human" }, state);
+        result = makeActivity({ ...fields, swarmId, actorKind: "human" }, state);
         return [{ op: "put", collection: "activities", record: result }];
       });
-      let manager: AgentRecord;
+      let owner: AgentRecord;
       try {
-        manager = findAgent(swarmId, task.managerName);
+        owner = findAgent(swarmId, task.managerName);
       } catch (error) {
         return {
           ...result,
@@ -759,28 +696,22 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         };
       }
       const activity = result;
-      const message = await sendThroughMailbox(
+      const { message } = await sendWithCopies(
         {
-          recipientAgentId: manager.id,
-          recipientName: agentQualifiedName(manager),
-          senderName: input.actorName,
+          swarmId,
+          recipient: owner,
+          cc,
+          sender: input.actorName,
           taskId: task.id,
           kind: "human_activity",
-          render: (messageId) =>
-            messagePrompt({
-              id: messageId,
-              sender: input.actorName,
-              recipient: agentQualifiedName(manager),
-              message: activity.body,
-              taskId: task.id,
-              attributes: {
-                kind: "human_activity",
-                activity: activity.id,
-                "activity-kind": activity.kind,
-                "reply-to": activity.replyTo,
-                "response-profile": activity.responseProfile,
-              },
-            }),
+          body: activity.body,
+          attributes: {
+            kind: "human_activity",
+            activity: activity.id,
+            "activity-kind": activity.kind,
+            "reply-to": activity.replyTo,
+            "response-profile": activity.responseProfile,
+          },
         },
         context,
       );
@@ -789,6 +720,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     },
   );
 
+  // A Task id on a message is context for the reader. It never decides whether the message goes.
   server.handle(
     sendMessageRpc,
     async (input: RpcInput<typeof sendMessageRpc>, context: PluginHandlerContext) => {
@@ -800,36 +732,16 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       const swarm = actorSwarm(input, input.actorName ?? input.recipientName);
       const recipient = findAgent(swarm.id, input.recipientName);
       const recipientReference = agentQualifiedName(recipient);
-      if (input.taskId) {
-        const task = findTask(swarm.id, input.taskId);
-        const actor = input.actorName ? findAgent(swarm.id, input.actorName) : null;
-        if (!actor) throw new Error("Task-scoped messages require an authenticated agent");
-        const actorReference = agentQualifiedName(actor);
-        const recipientIsMember =
-          task.managerName === recipientReference || task.workerNames.includes(recipientReference);
-        const actorCanSend =
-          actor.roleClass === "planner" ||
-          task.managerName === actorReference ||
-          task.workerNames.includes(actorReference);
-        if (!actorCanSend || !recipientIsMember) {
-          throw new Error(`Agent ${actorReference} cannot send a message for Task ${task.id}`);
-        }
-      }
-      const message = await sendThroughMailbox(
+      if (input.taskId) findTask(swarm.id, input.taskId);
+      const { message, copies } = await sendWithCopies(
         {
-          recipientAgentId: recipient.id,
-          recipientName: recipientReference,
-          senderName: input.senderName,
+          swarmId: swarm.id,
+          recipient,
+          cc: input.cc,
+          sender: input.senderName,
           taskId: input.taskId,
           kind: "team",
-          render: (messageId) =>
-            messagePrompt({
-              id: messageId,
-              sender: input.senderName,
-              recipient: recipientReference,
-              message: input.body,
-              taskId: input.taskId,
-            }),
+          body: input.body,
         },
         context,
       );
@@ -844,6 +756,11 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
           status,
           error: message.lastError,
         }),
+        cc: copies.map((copy) => ({
+          recipient: copy.recipientName,
+          messageId: copy.id,
+          status: mailboxMessageStatus(copy),
+        })),
       };
     },
   );
@@ -864,7 +781,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     const seats = await resetSeats(input, context);
     return { seats: input.dryRun ? seats : await afterFlush(seats, context) };
   });
-  server.handle(seatRetireRpc, async (input) => {
+  server.handle(seatRetireRpc, async (input, context) => {
     const seat = findSeat(input.swarmId, input.seat);
     const name = agentQualifiedName(seat);
     if (input.actorName) {
@@ -887,6 +804,10 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       }
       return [{ kind: "retire", seat: current, reason: `Seat ${name} was retired` }];
     });
+    // Delivers the handover of the seat's open Tasks to the seat above it.
+    await flushMailbox(context).catch((error) => {
+      console.warn("[paseo-swarm] Task handover mail stays queued", error);
+    });
     return { seat: seatView(store.read().agents.find((candidate) => candidate.id === seat.id)!) };
   });
   server.handle(seatHistoryReadRpc, async (input, context) => readSeatHistory(input, context));
@@ -908,38 +829,6 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     }
     return { messages };
   });
-}
-
-function makeActivity(
-  input: {
-    swarmId: string;
-    taskId: string;
-    actorName: string;
-    actorKind: "agent" | "human";
-    actorOccupant?: number;
-    replyTo: string | null;
-    responseProfile: "decision" | "steering" | "discussion" | null;
-    kind: string;
-    body: string;
-    data: Record<string, unknown>;
-  },
-  state: Readonly<SwarmState>,
-) {
-  return {
-    id: id("activity"),
-    swarmId: input.swarmId,
-    taskId: input.taskId,
-    actorName: input.actorName,
-    actorKind: input.actorKind,
-    ...(input.actorOccupant === undefined ? {} : { actorOccupant: input.actorOccupant }),
-    replyTo: input.replyTo,
-    responseProfile: input.responseProfile,
-    kind: input.kind,
-    body: input.body,
-    data: input.data,
-    refs: resolveActivityRefs(input.body, state, input.swarmId),
-    createdAt: now(),
-  };
 }
 
 // The Task a child was last working on: the Task of the last Task-scoped message it received.
