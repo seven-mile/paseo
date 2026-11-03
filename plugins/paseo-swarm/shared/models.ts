@@ -47,6 +47,26 @@ export const pastOccupantSchema = occupantSchema.extend({
 });
 export type PastOccupant = z.infer<typeof pastOccupantSchema>;
 
+// One side of a handover: the occupant and the config Swarm had stamped on it at the time.
+const handoverOccupantSchema = z.object({
+  number: z.number().int().positive(),
+  paseoAgentId: z.string(),
+  config: agentConfigSchema,
+});
+
+// A handover moves a seat from one occupant to the next. The log is only appended to. The
+// occupant fields cannot stand in for it: pastOccupants keeps one entry per agent, so a returning
+// occupant's earlier stint and the order of stints are gone.
+export const handoverSchema = z.object({
+  at: z.string(),
+  from: handoverOccupantSchema,
+  to: handoverOccupantSchema,
+  reason: z.string(),
+  // The incoming occupant held the seat before, so it remembers its own earlier turns.
+  returning: z.boolean(),
+});
+export type Handover = z.infer<typeof handoverSchema>;
+
 // An agent record is a seat: its id, name, role, Tasks and mailbox outlive the Paseo agent
 // in paseoAgentId, which is the current occupant and changes when the occupant goes stale.
 // A reserved seat has no occupant yet; its first mail starts one.
@@ -71,6 +91,8 @@ export const agentRecordSchema = z.object({
   // unknown config.
   occupant: occupantSchema.optional(),
   pastOccupants: z.array(pastOccupantSchema).optional(),
+  // Oldest first. Absent on records made before the log; handoverLog derives what it can.
+  handovers: z.array(handoverSchema).optional(),
   retired: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -83,6 +105,49 @@ export function agentQualifiedName(agent: Pick<AgentRecord, "name" | "qualifiedN
 
 export function currentOccupant(agent: Pick<AgentRecord, "occupant" | "createdAt">): Occupant {
   return agent.occupant ?? { number: 1, config: {}, generation: 0, boundAt: agent.createdAt };
+}
+
+// The seat's handovers, oldest first. A record made before the log gets the handovers its
+// occupant fields still show: Swarm stamps the outgoing occupant's retiredAt with the incoming
+// one's boundAt, so each past occupant pairs with the one that replaced it, unless that one has
+// since been replaced in turn by a return.
+export function handoverLog(
+  seat: Pick<
+    AgentRecord,
+    "handovers" | "paseoAgentId" | "occupant" | "pastOccupants" | "createdAt"
+  >,
+): Handover[] {
+  if (seat.handovers) return seat.handovers;
+  const past = seat.pastOccupants ?? [];
+  const occupants: Array<Occupant & { paseoAgentId: string }> = [
+    ...past,
+    ...(seat.paseoAgentId ? [{ ...currentOccupant(seat), paseoAgentId: seat.paseoAgentId }] : []),
+  ];
+  return past
+    .flatMap((outgoing): Handover[] => {
+      const incoming = occupants.find(
+        (occupant) =>
+          occupant.paseoAgentId !== outgoing.paseoAgentId &&
+          occupant.boundAt === outgoing.retiredAt,
+      );
+      if (!incoming) return [];
+      return [
+        {
+          at: outgoing.retiredAt,
+          from: handoverSide(outgoing),
+          to: handoverSide(incoming),
+          reason: outgoing.reason,
+          returning: incoming.number < outgoing.number,
+        },
+      ];
+    })
+    .sort((a, b) => a.at.localeCompare(b.at));
+}
+
+export function handoverSide(
+  occupant: Pick<Occupant, "number" | "config"> & { paseoAgentId: string },
+): Handover["from"] {
+  return { number: occupant.number, paseoAgentId: occupant.paseoAgentId, config: occupant.config };
 }
 
 // "claude/opus" belongs to provider "claude". Modes, thinking options and feature values are

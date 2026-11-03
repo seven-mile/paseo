@@ -22,6 +22,7 @@ import {
   useImperativeHandle,
   memo,
   type ReactElement,
+  type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -971,6 +972,11 @@ interface ComposerProps {
    * composer's own queue, for a caller whose destination queues it, such as a Swarm seat's mailbox.
    */
   queueWhileAgentRunning?: boolean;
+  /**
+   * Rows on the composer's rail above the input, after its own queue: the caller's outbox when its
+   * destination queues sends itself, such as a Swarm seat's undelivered mail.
+   */
+  aboveInput?: ReactNode;
 }
 
 const EMPTY_ARRAY: readonly QueuedMessage[] = [];
@@ -1240,6 +1246,7 @@ function ComposerContentImpl({
   submitLabel,
   placeholder,
   queueWhileAgentRunning = true,
+  aboveInput,
 }: ComposerContentProps) {
   const mode = resolveComposerInputMode(inputMode);
   const { t } = useTranslation();
@@ -2371,6 +2378,7 @@ function ComposerContentImpl({
         <View style={inputAreaContainerStyle}>
           <View style={styles.inputAreaContent}>
             {queueList}
+            {aboveInput}
             {sendErrorNode}
 
             <View ref={messageInputContainerRef} style={styles.messageInputContainer}>

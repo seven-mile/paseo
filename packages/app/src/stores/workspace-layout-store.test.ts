@@ -3817,6 +3817,81 @@ describe("workspace-layout-store actions", () => {
     ).toEqual(["agent_parent-agent"]);
   });
 
+  it("reconcileTabs opens a Swarm seat's tab once instead of its agents' tabs", () => {
+    const workspaceKey = createWorkspaceKey();
+    const store = workspaceLayoutStore.getState();
+    const seat = { kind: "swarm_seat", seatId: "seat-dev" } as const;
+    const snapshot = {
+      agentsHydrated: true,
+      terminalsHydrated: true,
+      activeAgentIds: ["plain-agent", "dev-occupant", "dev-arriving"],
+      autoOpenAgentIds: ["plain-agent", "dev-occupant", "dev-arriving"],
+      autoOpenTargetByAgentId: new Map([
+        ["dev-occupant", seat],
+        ["dev-arriving", seat],
+      ]),
+      standaloneTerminalIds: [],
+      hasActivePendingDraftCreate: false,
+    };
+
+    store.reconcileTabs(workspaceKey, snapshot);
+    store.reconcileTabs(workspaceKey, snapshot);
+
+    expect(
+      contentTabs(workspaceLayoutStore.getState().getWorkspaceTabs(workspaceKey)).map(
+        (tab) => tab.tabId,
+      ),
+    ).toEqual(["swarm_seat_seat-dev", "agent_plain-agent"]);
+  });
+
+  it("reconcileTabs leaves a Swarm seat closed once its agents are hidden", () => {
+    const workspaceKey = createWorkspaceKey();
+    const store = workspaceLayoutStore.getState();
+    store.hideAgent(workspaceKey, "dev-occupant");
+
+    store.reconcileTabs(workspaceKey, {
+      agentsHydrated: true,
+      terminalsHydrated: true,
+      activeAgentIds: ["dev-occupant"],
+      autoOpenAgentIds: ["dev-occupant"],
+      autoOpenTargetByAgentId: new Map([
+        ["dev-occupant", { kind: "swarm_seat", seatId: "seat-dev" } as const],
+      ]),
+      standaloneTerminalIds: [],
+      hasActivePendingDraftCreate: false,
+    });
+
+    expect(contentTabs(workspaceLayoutStore.getState().getWorkspaceTabs(workspaceKey))).toEqual([]);
+  });
+
+  it("reconcileTabs keeps a Swarm agent's own open tab without adding its seat's", () => {
+    const workspaceKey = createWorkspaceKey();
+    const store = workspaceLayoutStore.getState();
+    store.openTab({
+      workspaceKey,
+      target: { kind: "agent", agentId: "dev-occupant" },
+      intent: "reveal",
+    });
+
+    store.reconcileTabs(workspaceKey, {
+      agentsHydrated: true,
+      terminalsHydrated: true,
+      activeAgentIds: ["dev-occupant"],
+      autoOpenAgentIds: ["dev-occupant"],
+      autoOpenTargetByAgentId: new Map([
+        ["dev-occupant", { kind: "swarm_seat", seatId: "seat-dev" } as const],
+      ]),
+      standaloneTerminalIds: [],
+      hasActivePendingDraftCreate: false,
+    });
+
+    expect(
+      contentTabs(workspaceLayoutStore.getState().getWorkspaceTabs(workspaceKey)).map(
+        (tab) => tab.tabId,
+      ),
+    ).toEqual(["agent_dev-occupant"]);
+  });
+
   it("reconcileTabs keeps manually opened subagent tabs that remain active", () => {
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();

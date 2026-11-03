@@ -3,6 +3,7 @@ import type { PluginHookContext } from "@getpaseo/plugin/server";
 import type {
   AgentConfig,
   AgentRecord,
+  Handover,
   MailboxMessage,
   Occupant,
   PastOccupant,
@@ -10,6 +11,8 @@ import type {
 import {
   agentQualifiedName,
   currentOccupant,
+  handoverLog,
+  handoverSide,
   mailboxMessageStatus,
   providerFamily,
 } from "../shared/models";
@@ -40,6 +43,9 @@ const PARENT_LABEL = "paseo.parent-agent-id";
 // reads it to keep native agent tools from a seat's agent when it cannot reach Swarm to look the
 // seat up.
 const SEAT_LABEL = "paseo-swarm.seat";
+// The seat id, which outlives renames. Clients open an agent with it as the seat's tab, so the
+// person talks to the seat rather than to one of its occupants.
+const SEAT_ID_LABEL = "paseo-swarm.seat-id";
 // Swarm owns its agents' lifecycle, so closing one's tab only changes the layout: the agent and
 // its runtime outlive the tab, and Stop and Archive stay explicit. The label stays when the agent
 // leaves its seat, since Swarm still manages its history. Paseo's TAB_CLOSE_LABEL contract.
@@ -48,21 +54,23 @@ const TAB_CLOSE_LABEL = "paseo.tab-close";
 function seatLabels(seat: AgentRecord): Record<string, string> {
   return {
     [SEAT_LABEL]: `${swarmOf(seat).id}/${agentQualifiedName(seat)}`,
+    [SEAT_ID_LABEL]: seat.id,
     [TAB_CLOSE_LABEL]: "layout-only",
   };
 }
 
-// Gives TAB_CLOSE_LABEL to the agents Swarm started before it declared it: every current and past
-// occupant it records, retired seats included. One listing finds the ones without it; the update
-// leaves an archived agent archived. Agents Swarm does not record are left alone.
-export async function declareTabClose(context: SeatContext): Promise<number> {
-  const occupants = new Set<string>();
+// Gives the labels Swarm declared later, TAB_CLOSE_LABEL and SEAT_ID_LABEL, to the agents it
+// started before: every current and past occupant it records, retired seats included. One listing
+// finds the ones missing either; the update leaves an archived agent archived. Agents Swarm does
+// not record are left alone.
+export async function declareSeatLabels(context: SeatContext): Promise<number> {
+  const seatByAgent = new Map<string, string>();
   for (const seat of store.read().agents) {
-    if (seat.paseoAgentId) occupants.add(seat.paseoAgentId);
-    for (const past of seat.pastOccupants ?? []) occupants.add(past.paseoAgentId);
+    if (seat.paseoAgentId) seatByAgent.set(seat.paseoAgentId, seat.id);
+    for (const past of seat.pastOccupants ?? []) seatByAgent.set(past.paseoAgentId, seat.id);
   }
-  if (occupants.size === 0) return 0;
-  const undeclared: string[] = [];
+  if (seatByAgent.size === 0) return 0;
+  const undeclared: Array<{ agentId: string; seatId: string }> = [];
   let cursor: string | undefined;
   do {
     const page = await context.paseo.agents.list({
@@ -70,16 +78,21 @@ export async function declareTabClose(context: SeatContext): Promise<number> {
       page: { limit: 200, ...(cursor ? { cursor } : {}) },
     });
     for (const { agent } of page.entries) {
-      if (occupants.has(agent.id) && agent.labels?.[TAB_CLOSE_LABEL] !== "layout-only") {
-        undeclared.push(agent.id);
+      const seatId = seatByAgent.get(agent.id);
+      if (!seatId) continue;
+      if (
+        agent.labels?.[TAB_CLOSE_LABEL] !== "layout-only" ||
+        agent.labels?.[SEAT_ID_LABEL] !== seatId
+      ) {
+        undeclared.push({ agentId: agent.id, seatId });
       }
     }
     cursor = page.pageInfo.nextCursor ?? undefined;
   } while (cursor);
-  for (const agentId of undeclared) {
+  for (const { agentId, seatId } of undeclared) {
     await context.paseo.agents
       .ref(agentId)
-      .update({ labels: { [TAB_CLOSE_LABEL]: "layout-only" } });
+      .update({ labels: { [TAB_CLOSE_LABEL]: "layout-only", [SEAT_ID_LABEL]: seatId } });
   }
   return undeclared.length;
 }
@@ -269,14 +282,23 @@ async function rebind(
       reason,
       ...(seat.prompt ? { prompt: seat.prompt } : {}),
     };
+    const pastOccupants = seat.pastOccupants ?? [];
+    const handover: Handover = {
+      at: next.occupant.boundAt,
+      from: handoverSide(retired),
+      to: handoverSide({ ...next.occupant, paseoAgentId: next.paseoAgentId }),
+      reason,
+      returning: pastOccupants.some((past) => past.paseoAgentId === next.paseoAgentId),
+    };
     result = {
       ...seat,
       paseoAgentId: next.paseoAgentId,
       occupant: next.occupant,
       pastOccupants: [
-        ...(seat.pastOccupants ?? []).filter((past) => past.paseoAgentId !== next.paseoAgentId),
+        ...pastOccupants.filter((past) => past.paseoAgentId !== next.paseoAgentId),
         retired,
       ],
+      handovers: [...handoverLog(seat), handover],
       prompt: next.prompt ?? undefined,
       updatedAt: next.occupant.boundAt,
     };
@@ -611,12 +633,18 @@ export function seatView(seat: AgentRecord): SeatView {
   if (plan.kind === "keep") {
     return {
       ...seat,
+      handovers: handoverLog(seat),
       pending: prompt ? { kind: "refresh", reason: prompt } : null,
       arrivingAgentId,
     };
   }
   const reason = prompt ? `${plan.reason}; then ${prompt}` : plan.reason;
-  return { ...seat, pending: { kind: plan.kind, reason }, arrivingAgentId };
+  return {
+    ...seat,
+    handovers: handoverLog(seat),
+    pending: { kind: plan.kind, reason },
+    arrivingAgentId,
+  };
 }
 
 export function listSeats(input: {
