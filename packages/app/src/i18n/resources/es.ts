@@ -49,6 +49,9 @@ export const es: TranslationResources = {
       mailQueued: "En cola: se entrega cuando el ocupante esté libre",
       mailFailed: "No entregado: {{reason}}",
       textOnly: "Los mensajes al puesto solo llevan texto. Quita los adjuntos para enviar.",
+      deliveries: "Resultados para ti",
+      deliveryCopied: "Copia para ti",
+      openTask: "Abrir {{title}}",
       handover: {
         new: "El ocupante {{to}} relevó al ocupante {{from}} {{time}} ({{reason}}).",
         returning: "El ocupante {{to}} volvió al puesto {{time}} ({{reason}}).",
@@ -113,6 +116,7 @@ export const es: TranslationResources = {
       cancelReply: "Cancelar respuesta",
       owner: "Responsable",
       createdBy: "Creado por",
+      requestedBy: "Solicitado por",
       activity: "Actividad",
       emptyActivity: "Aún no hay actividad.",
       loadingActivity: "Cargando actividad…",
@@ -151,6 +155,9 @@ export const es: TranslationResources = {
       notesNotInBrief_one: "{{count}} nota aún no está en el resumen",
       notesNotInBrief_other: "{{count}} notas aún no están en el resumen",
       duplicateOf: "Duplicado de {{id}}",
+      audienceTo: "Para {{names}}",
+      audienceCc: "CC {{names}}",
+      briefUnconfirmed: "Resumen de {{author}}, aún sin confirmar por {{owner}}",
       resolutions: {
         done: "Hecha",
         "wont-do": "No se hará",

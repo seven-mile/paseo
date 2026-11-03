@@ -48,6 +48,9 @@ export const zhCN: TranslationResources = {
       mailQueued: "排队中：占用者空闲时投递",
       mailFailed: "未投递：{{reason}}",
       textOnly: "席位消息只能包含文本。请移除附件后再发送。",
+      deliveries: "给你的结果",
+      deliveryCopied: "抄送给你",
+      openTask: "打开 {{title}}",
       handover: {
         new: "占用者 {{to}} 于{{time}}接替了占用者 {{from}}（{{reason}}）。",
         returning: "占用者 {{to}} 于{{time}}回到席位（{{reason}}）。",
@@ -112,6 +115,7 @@ export const zhCN: TranslationResources = {
       cancelReply: "取消回复",
       owner: "负责人",
       createdBy: "创建者",
+      requestedBy: "请求者",
       activity: "活动",
       emptyActivity: "暂无活动。",
       loadingActivity: "正在加载活动…",
@@ -148,6 +152,9 @@ export const zhCN: TranslationResources = {
       notesNotInBrief_one: "{{count}} 条备注尚未写入简报",
       notesNotInBrief_other: "{{count}} 条备注尚未写入简报",
       duplicateOf: "与 {{id}} 重复",
+      audienceTo: "发给 {{names}}",
+      audienceCc: "抄送 {{names}}",
+      briefUnconfirmed: "简报由 {{author}} 撰写，{{owner}} 尚未确认",
       resolutions: {
         done: "已完成",
         "wont-do": "不做",

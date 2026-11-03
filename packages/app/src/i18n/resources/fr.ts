@@ -52,6 +52,9 @@ export const fr: TranslationResources = {
       mailFailed: "Non remis : {{reason}}",
       textOnly:
         "Les messages au poste ne contiennent que du texte. Retirez les pièces jointes pour envoyer.",
+      deliveries: "Résultats pour vous",
+      deliveryCopied: "Copie pour vous",
+      openTask: "Ouvrir {{title}}",
       handover: {
         new: "L'occupant {{to}} a pris la relève de l'occupant {{from}} {{time}} ({{reason}}).",
         returning: "L'occupant {{to}} est revenu au poste {{time}} ({{reason}}).",
@@ -116,6 +119,7 @@ export const fr: TranslationResources = {
       cancelReply: "Annuler la réponse",
       owner: "Responsable",
       createdBy: "Créé par",
+      requestedBy: "Demandé par",
       activity: "Activité",
       emptyActivity: "Aucune activité.",
       loadingActivity: "Chargement de l’activité…",
@@ -154,6 +158,9 @@ export const fr: TranslationResources = {
       notesNotInBrief_one: "{{count}} note pas encore dans le brief",
       notesNotInBrief_other: "{{count}} notes pas encore dans le brief",
       duplicateOf: "Doublon de {{id}}",
+      audienceTo: "À {{names}}",
+      audienceCc: "Cc {{names}}",
+      briefUnconfirmed: "Brief de {{author}}, pas encore confirmé par {{owner}}",
       resolutions: {
         done: "Terminée",
         "wont-do": "Abandonnée",

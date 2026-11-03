@@ -49,6 +49,9 @@ export const ar: TranslationResources = {
       mailQueued: "في الانتظار: تُسلَّم عندما يتفرغ الشاغل",
       mailFailed: "لم تُسلَّم: {{reason}}",
       textOnly: "رسائل المقعد نصية فقط. أزل المرفقات للإرسال.",
+      deliveries: "نتائج لك",
+      deliveryCopied: "نسخة لك",
+      openTask: "فتح {{title}}",
       handover: {
         new: "تسلّم الشاغل {{to}} من الشاغل {{from}} {{time}} ({{reason}}).",
         returning: "عاد الشاغل {{to}} إلى المقعد {{time}} ({{reason}}).",
@@ -113,6 +116,7 @@ export const ar: TranslationResources = {
       cancelReply: "إلغاء الرد",
       owner: "المسؤول",
       createdBy: "أنشأها",
+      requestedBy: "طلبها",
       activity: "النشاط",
       emptyActivity: "لا يوجد نشاط بعد.",
       loadingActivity: "جارٍ تحميل النشاط…",
@@ -149,6 +153,9 @@ export const ar: TranslationResources = {
       notesNotInBrief_one: "{{count}} ملاحظة ليست في الموجز بعد",
       notesNotInBrief_other: "{{count}} ملاحظات ليست في الموجز بعد",
       duplicateOf: "مكررة من {{id}}",
+      audienceTo: "إلى {{names}}",
+      audienceCc: "نسخة إلى {{names}}",
+      briefUnconfirmed: "موجز كتبه {{author}}، ولم يؤكده {{owner}} بعد",
       resolutions: {
         done: "منجزة",
         "wont-do": "لن تُنفَّذ",

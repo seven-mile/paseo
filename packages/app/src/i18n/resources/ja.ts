@@ -50,6 +50,9 @@ export const ja: TranslationResources = {
       mailQueued: "待機中: 担当者が空いたら届きます",
       mailFailed: "未配信: {{reason}}",
       textOnly: "シートへのメッセージはテキストのみです。送信するには添付を外してください。",
+      deliveries: "あなた宛ての結果",
+      deliveryCopied: "CC で受信",
+      openTask: "{{title}} を開く",
       handover: {
         new: "担当者 {{to}} が{{time}}に担当者 {{from}} から引き継ぎました ({{reason}})。",
         returning: "担当者 {{to}} が{{time}}にシートに戻りました ({{reason}})。",
@@ -114,6 +117,7 @@ export const ja: TranslationResources = {
       cancelReply: "返信をキャンセル",
       owner: "担当者",
       createdBy: "作成者",
+      requestedBy: "依頼者",
       activity: "アクティビティ",
       emptyActivity: "アクティビティはまだありません。",
       loadingActivity: "アクティビティを読み込んでいます…",
@@ -151,6 +155,9 @@ export const ja: TranslationResources = {
       notesNotInBrief_one: "概要に未反映のメモ {{count}} 件",
       notesNotInBrief_other: "概要に未反映のメモ {{count}} 件",
       duplicateOf: "{{id}} の重複",
+      audienceTo: "宛先 {{names}}",
+      audienceCc: "CC {{names}}",
+      briefUnconfirmed: "{{author}} が書いた概要で、{{owner}} はまだ確認していません",
       resolutions: {
         done: "完了",
         "wont-do": "対応しない",

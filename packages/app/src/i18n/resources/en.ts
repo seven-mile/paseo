@@ -46,6 +46,9 @@ export const en = {
       mailQueued: "Queued: delivered when the occupant is free",
       mailFailed: "Not delivered: {{reason}}",
       textOnly: "Seat messages carry text only. Remove the attachments to send.",
+      deliveries: "Results for you",
+      deliveryCopied: "Copied to you",
+      openTask: "Open {{title}}",
       handover: {
         new: "Occupant {{to}} took over from occupant {{from}} {{time}} ({{reason}}).",
         returning: "Occupant {{to}} came back to the seat {{time}} ({{reason}}).",
@@ -110,6 +113,7 @@ export const en = {
       cancelReply: "Cancel reply",
       owner: "Owner",
       createdBy: "Created by",
+      requestedBy: "Requested by",
       activity: "Activity",
       emptyActivity: "No Activity yet.",
       loadingActivity: "Loading Activity…",
@@ -147,6 +151,9 @@ export const en = {
       notesNotInBrief_one: "{{count}} note not yet in the brief",
       notesNotInBrief_other: "{{count}} notes not yet in the brief",
       duplicateOf: "Duplicate of {{id}}",
+      audienceTo: "To {{names}}",
+      audienceCc: "Cc {{names}}",
+      briefUnconfirmed: "Brief by {{author}}, not yet confirmed by {{owner}}",
       resolutions: {
         done: "Done",
         "wont-do": "Won't do",

@@ -49,6 +49,9 @@ export const ru: TranslationResources = {
       mailQueued: "В очереди: доставится, когда агент освободится",
       mailFailed: "Не доставлено: {{reason}}",
       textOnly: "Сообщения месту содержат только текст. Уберите вложения, чтобы отправить.",
+      deliveries: "Результаты для вас",
+      deliveryCopied: "Копия вам",
+      openTask: "Открыть {{title}}",
       handover: {
         new: "Агент {{to}} сменил агента {{from}} {{time}} ({{reason}}).",
         returning: "Агент {{to}} вернулся на место {{time}} ({{reason}}).",
@@ -113,6 +116,7 @@ export const ru: TranslationResources = {
       cancelReply: "Отменить ответ",
       owner: "Ответственный",
       createdBy: "Создатель",
+      requestedBy: "Запросил",
       activity: "Активность",
       emptyActivity: "Активности пока нет.",
       loadingActivity: "Загрузка активности…",
@@ -151,6 +155,9 @@ export const ru: TranslationResources = {
       notesNotInBrief_one: "{{count}} заметка ещё не в описании",
       notesNotInBrief_other: "{{count}} заметок ещё не в описании",
       duplicateOf: "Дубликат {{id}}",
+      audienceTo: "Кому: {{names}}",
+      audienceCc: "Копия: {{names}}",
+      briefUnconfirmed: "Описание написал {{author}}, {{owner}} ещё не подтвердил его",
       resolutions: {
         done: "Готово",
         "wont-do": "Не будет сделано",

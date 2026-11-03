@@ -102,6 +102,10 @@ const activitySchema = z.object({
   body: z.string(),
   data: z.record(z.string(), z.unknown()),
   refs: z.array(referenceSchema),
+  // Who the write reached; absent when it reached no one, and on hosts from before addressing.
+  audience: z
+    .array(z.object({ name: z.string(), as: z.enum(["to", "cc"]), why: z.string() }))
+    .optional(),
   createdAt: z.string(),
 });
 export const swarmHumanActivityReceiptSchema = activitySchema.extend({
@@ -128,6 +132,10 @@ export const swarmTaskDetailSchema = z.object({
     duplicateOf: z.string().optional(),
     // When the brief last changed; absent on hosts from before it was recorded.
     briefUpdatedAt: z.string().optional(),
+    // Who asked for the work; absent on older Tasks, which read as createdBy.
+    requester: z.string().optional(),
+    // The seat whose brief the owner has not confirmed yet.
+    briefUnconfirmedBy: z.string().optional(),
   }),
   activities: z.array(activitySchema),
   // Earlier Activities the read left out; unanswered choices are always included.
@@ -651,3 +659,14 @@ export function openSwarmTaskSurfaceState() {
   };
 }
 export type SwarmTaskSurfaceState = ReturnType<typeof openSwarmTaskSurfaceState>;
+
+// The To and Cc names of an Activity, or null when it reached no one.
+export function swarmAudience(
+  activity: Pick<SwarmActivity, "audience">,
+): { to: string[]; cc: string[] } | null {
+  if (!activity.audience?.length) return null;
+  return {
+    to: activity.audience.filter((entry) => entry.as === "to").map((entry) => entry.name),
+    cc: activity.audience.filter((entry) => entry.as === "cc").map((entry) => entry.name),
+  };
+}

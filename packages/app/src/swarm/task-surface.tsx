@@ -48,6 +48,7 @@ import {
 } from "@/stores/session-store-hooks";
 import { SwarmCcLine } from "./cc-line";
 import { useSwarmRpc } from "./rpc";
+import { PERSON_SENDER } from "./system-envelope";
 import {
   SWARM_POLL_MS,
   SWARM_TASK_ACTIVITY_MAX,
@@ -73,6 +74,7 @@ import {
   swarmTaskScopeOptions,
   swarmTaskColumns,
   swarmArtifactHref,
+  swarmAudience,
   swarmTaskResult,
   unansweredChoices,
   type SwarmActivity,
@@ -1429,6 +1431,7 @@ function ActivityRow({
         <Text style={styles.meta}>
           {activity.actorName} · {new Date(activity.createdAt).toLocaleString()}
         </Text>
+        <AudienceLine activity={activity} />
         <AuthoredMarkdown
           text={activity.body}
           author={activity.actorName}
@@ -1468,6 +1471,7 @@ function ActivityRow({
         {activity.replyTo ? ` · ${t("swarm.tasks.replyToActivity", { id: activity.replyTo })}` : ""}
         {revises ? ` · ${t("swarm.tasks.revises", { id: revises })}` : ""}
       </Text>
+      <AudienceLine activity={activity} />
       <AuthoredMarkdown
         text={activity.body}
         author={activity.actorName}
@@ -1539,6 +1543,7 @@ function TaskSummary({
       {record ? (
         <AuthoredMarkdown text={record.brief} author={task.managerName} onLinkPress={onLinkPress} />
       ) : null}
+      <BriefUnconfirmed author={record?.briefUnconfirmedBy} owner={task.managerName} />
       {unbriefedCount > 0 ? (
         <Text style={styles.meta} testID="swarm-task-notes-not-in-brief">
           {t("swarm.tasks.notesNotInBrief", { count: unbriefedCount })}
@@ -1557,11 +1562,72 @@ function TaskSummary({
         <PersonButton name={task.managerName} onOpen={onOpenActor} />
         <Text style={styles.meta}>{t("swarm.tasks.createdBy")}</Text>
         <PersonButton name={task.createdBy} onOpen={onOpenActor} />
+        <Requester
+          requester={record?.requester}
+          createdBy={task.createdBy}
+          onOpenActor={onOpenActor}
+        />
         {task.workerNames.map((name) => (
           <PersonButton key={name} name={name} onOpen={onOpenActor} />
         ))}
       </View>
     </>
+  );
+}
+
+// A brief another seat wrote, such as one recorded for work already underway, until its owner
+// writes it or delivers.
+function BriefUnconfirmed({ author, owner }: { author: string | undefined; owner: string }) {
+  const { t } = useTranslation();
+  if (!author || author === owner) return null;
+  return (
+    <View style={styles.rowMeta} testID="swarm-task-brief-unconfirmed">
+      <StatusBadge
+        size="xs"
+        variant="warning"
+        label={t("swarm.tasks.briefUnconfirmed", { author, owner })}
+      />
+    </View>
+  );
+}
+
+// Who asked for the work, when that is not whoever recorded it.
+function Requester({
+  requester,
+  createdBy,
+  onOpenActor,
+}: {
+  requester: string | undefined;
+  createdBy: string;
+  onOpenActor: (name: string) => void;
+}) {
+  const { t } = useTranslation();
+  if (!requester || requester === createdBy) return null;
+  return (
+    <>
+      <Text style={styles.meta}>{t("swarm.tasks.requestedBy")}</Text>
+      {requester === PERSON_SENDER ? (
+        <Text style={styles.primary}>{requester}</Text>
+      ) : (
+        <PersonButton name={requester} onOpen={onOpenActor} />
+      )}
+    </>
+  );
+}
+
+// Who an Activity reached: To, then Cc, including recipients Swarm added.
+function AudienceLine({ activity }: { activity: Pick<SwarmActivity, "audience"> }) {
+  const { t } = useTranslation();
+  const audience = swarmAudience(activity);
+  if (!audience) return null;
+  const parts = [
+    ...(audience.to.length ? [t("swarm.tasks.audienceTo", { names: audience.to.join(", ") })] : []),
+    ...(audience.cc.length ? [t("swarm.tasks.audienceCc", { names: audience.cc.join(", ") })] : []),
+  ];
+  return (
+    <Text style={styles.meta} testID="swarm-activity-audience">
+      {parts.join(" · ")}
+    </Text>
   );
 }
 
@@ -1626,6 +1692,7 @@ function TaskResult({
         <PersonButton name={delivery.actorName} onOpen={onOpenActor} />
         <Text style={styles.meta}>{new Date(delivery.createdAt).toLocaleString()}</Text>
       </View>
+      <AudienceLine activity={delivery} />
       <AuthoredMarkdown
         text={delivery.body}
         author={delivery.actorName}

@@ -6,6 +6,7 @@ import {
   filterSwarmTasks,
   defaultSwarmTaskScope,
   defaultSwarmCc,
+  swarmAudience,
   notesNotInBrief,
   openSwarmReply,
   openSwarmTaskSurfaceState,
@@ -736,5 +737,20 @@ describe("Swarm artifact paths", () => {
     expect(
       swarmArtifactHref("/home/me/lab/a.md", { workspaceId: "lab", workspaceRoot: null }),
     ).toBeNull();
+  });
+});
+
+describe("Swarm audience", () => {
+  it("splits who a write reached into To and Cc, and is empty when it reached no one", () => {
+    expect(
+      swarmAudience({
+        audience: [
+          { name: "human", as: "to", why: "requester" },
+          { name: "planner", as: "cc", why: "manager" },
+        ],
+      }),
+    ).toEqual({ to: ["human"], cc: ["planner"] });
+    expect(swarmAudience({ audience: [] })).toBeNull();
+    expect(swarmAudience({})).toBeNull();
   });
 });

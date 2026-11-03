@@ -49,6 +49,9 @@ export const ko: TranslationResources = {
       mailQueued: "대기 중: 담당자가 비면 전달됩니다",
       mailFailed: "전달되지 않음: {{reason}}",
       textOnly: "자리 메시지는 텍스트만 보낼 수 있습니다. 보내려면 첨부를 제거하세요.",
+      deliveries: "나에게 온 결과",
+      deliveryCopied: "참조로 받음",
+      openTask: "{{title}} 열기",
       handover: {
         new: "담당자 {{to}}이(가) {{time}} 담당자 {{from}}에게서 이어받았습니다 ({{reason}}).",
         returning: "담당자 {{to}}이(가) {{time}} 자리로 돌아왔습니다 ({{reason}}).",
@@ -113,6 +116,7 @@ export const ko: TranslationResources = {
       cancelReply: "답변 취소",
       owner: "담당자",
       createdBy: "생성자",
+      requestedBy: "요청자",
       activity: "활동",
       emptyActivity: "아직 활동이 없습니다.",
       loadingActivity: "활동을 불러오는 중…",
@@ -150,6 +154,9 @@ export const ko: TranslationResources = {
       notesNotInBrief_one: "개요에 아직 없는 메모 {{count}}개",
       notesNotInBrief_other: "개요에 아직 없는 메모 {{count}}개",
       duplicateOf: "{{id}}의 중복",
+      audienceTo: "받는 사람 {{names}}",
+      audienceCc: "참조 {{names}}",
+      briefUnconfirmed: "{{author}}이(가) 쓴 개요로, {{owner}}이(가) 아직 확인하지 않았습니다",
       resolutions: {
         done: "완료",
         "wont-do": "진행 안 함",

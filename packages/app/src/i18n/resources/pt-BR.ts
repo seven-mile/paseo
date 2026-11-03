@@ -50,6 +50,9 @@ export const ptBR: TranslationResources = {
       mailQueued: "Na fila: entregue quando o ocupante estiver livre",
       mailFailed: "Não entregue: {{reason}}",
       textOnly: "Mensagens ao posto levam apenas texto. Remova os anexos para enviar.",
+      deliveries: "Resultados para você",
+      deliveryCopied: "Cópia para você",
+      openTask: "Abrir {{title}}",
       handover: {
         new: "O ocupante {{to}} assumiu no lugar do ocupante {{from}} {{time}} ({{reason}}).",
         returning: "O ocupante {{to}} voltou ao posto {{time}} ({{reason}}).",
@@ -114,6 +117,7 @@ export const ptBR: TranslationResources = {
       cancelReply: "Cancelar resposta",
       owner: "Responsável",
       createdBy: "Criado por",
+      requestedBy: "Solicitado por",
       activity: "Atividade",
       emptyActivity: "Ainda não há atividade.",
       loadingActivity: "Carregando atividade…",
@@ -152,6 +156,9 @@ export const ptBR: TranslationResources = {
       notesNotInBrief_one: "{{count}} nota ainda não está no resumo",
       notesNotInBrief_other: "{{count}} notas ainda não estão no resumo",
       duplicateOf: "Duplicata de {{id}}",
+      audienceTo: "Para {{names}}",
+      audienceCc: "Cc {{names}}",
+      briefUnconfirmed: "Resumo de {{author}}, ainda não confirmado por {{owner}}",
       resolutions: {
         done: "Concluída",
         "wont-do": "Não será feita",
