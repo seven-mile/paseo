@@ -11,7 +11,7 @@ import type {
 import contribute from "../index.server";
 import { flushMailbox, forgetRunningTurns, MAX_DELIVERY_ATTEMPTS } from "../server/mailbox";
 import { registerOperations } from "../server/operations";
-import { declareTabClose, seatOfAgent } from "../server/seats";
+import { declareTabClose, seatOfAgent, seatView } from "../server/seats";
 import { store } from "../server/state";
 import { seed as seedRecords, type Seeded } from "./fixtures";
 import { mailboxMessageStatus, type AgentRecord } from "../shared/models";
@@ -91,6 +91,8 @@ function fakePaseo() {
   // send that resumes an archived agent.
   const openedIn: Array<[string, string | undefined]> = [];
   let failCreate: string | null = null;
+  // Runs while Paseo creates an agent, before the seat binds it.
+  let duringCreate: (agentId: string) => void = () => {};
   let failLookup: string | null = null;
   const context = {
     signal: new AbortController().signal,
@@ -174,6 +176,7 @@ function fakePaseo() {
               }) {
                 if (failCreate) throw new Error(failCreate);
                 const id = creation.agentId;
+                duringCreate(id);
                 createdIds.push(id);
                 openedIn.push([id, seatOfAgent(id)?.name]);
                 creations.push({ workspaceId, config: creation.config, labels: creation.labels });
@@ -211,6 +214,9 @@ function fakePaseo() {
     },
     failCreate(message: string | null) {
       failCreate = message;
+    },
+    duringCreate(run: (agentId: string) => void) {
+      duringCreate = run;
     },
     failLookup(message: string | null) {
       failLookup = message;
@@ -529,6 +535,31 @@ test("agents from before the tab-close declaration get it once, and stay archive
   assert.equal(fake.runtime.get("first-lead")?.archived, true, "a past occupant stays archived");
   assert.equal(fake.runtime.get("someone-else")?.labels, undefined, "not Swarm's agent");
   assert.equal(await declareTabClose(fake.context), 0, "nothing left to declare");
+});
+
+test("a seat shows the agent it is bringing in before it binds it", async (t) => {
+  const { call } = setup(t);
+  const fake = fakePaseo();
+  const { occupant: _occupant, ...reserved } = supervisor;
+  await seedRecords({ agents: [{ ...reserved, paseoAgentId: null }] });
+  let arriving: string | null | undefined;
+  fake.duringCreate(() => {
+    arriving = seatView(seat(supervisor.id)).arrivingAgentId;
+  });
+
+  await call(
+    sendMessageRpc,
+    { recipientName: "lead", senderName: "human", body: "Start" },
+    fake.context,
+  );
+
+  assert.equal(arriving, fake.created(1), "the new agent shows while Paseo creates it");
+  assert.equal(seatView(seat(supervisor.id)).paseoAgentId, fake.created(1));
+  assert.equal(
+    seatView(seat(supervisor.id)).arrivingAgentId,
+    null,
+    "bound, it is no longer arriving",
+  );
 });
 
 test("an in-place change keeps the agent and its context", async (t) => {

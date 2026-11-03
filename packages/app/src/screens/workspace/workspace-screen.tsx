@@ -343,6 +343,9 @@ function getFallbackTabOptionLabel(
   if (tab.target.kind === "swarm_tasks") {
     return i18n.t("swarm.tasks.title");
   }
+  if (tab.target.kind === "swarm_seat") {
+    return i18n.t("swarm.seat.tabLabel");
+  }
   if (tab.target.kind === "pull_request") {
     return labels.pullRequest;
   }
@@ -404,6 +407,9 @@ function getFallbackTabOptionDescription(
   }
   if (tab.target.kind === "swarm_tasks") {
     return i18n.t("swarm.tasks.description");
+  }
+  if (tab.target.kind === "swarm_seat") {
+    return i18n.t("swarm.seat.tabLabel");
   }
   return tab.target.path;
 }

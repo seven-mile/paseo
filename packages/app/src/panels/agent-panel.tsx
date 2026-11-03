@@ -26,6 +26,7 @@ import { ComposerDock } from "@/composer/dock";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { RetainedChatContent } from "./retained-chat-content";
+import { useAgentChatRoute } from "./agent-chat-route";
 import { Composer } from "@/composer";
 import { useWorkspaceHasDiffStat } from "@/composer/workspace-diff-stat";
 import {
@@ -500,7 +501,7 @@ type AgentLookupState =
   | { tag: "not_found"; message: string }
   | { tag: "error"; message: string };
 
-function AgentPanelContent({
+export function AgentPanelContent({
   serverId,
   workspaceId,
   agentId,
@@ -1489,10 +1490,15 @@ const AgentComposerSection = memo(function AgentComposerSection({
   onComposerHeightChange: (height: number) => void;
   onMessageSent: () => void;
 }) {
+  const route = useAgentChatRoute();
   if (!agentId) {
     return null;
   }
-  if (archivedAt) {
+  if (route?.composerReplacement) {
+    return route.composerReplacement;
+  }
+  // A routed chat sends to its owner, which can wake an archived agent or replace it.
+  if (archivedAt && !route) {
     return <ArchivedAgentCallout serverId={serverId} agentId={agentId} />;
   }
   if (isArchivingCurrentAgent) {
@@ -1544,6 +1550,7 @@ function ActiveAgentComposer({
     { initialIsBelow: isCompactFormFactor },
   );
   const paneContext = usePaneContext();
+  const route = useAgentChatRoute();
   const openInSidePane = useSettings((settings) => settings.openInSidePane);
   const { workspaceId, tabId, retargetCurrentTab } = paneContext;
   const { archiveAgent } = useArchiveAgent();
@@ -1614,6 +1621,7 @@ function ActiveAgentComposer({
 
   return (
     <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
+      {route?.aboveComposer}
       <Composer
         agentId={agentId}
         serverId={serverId}
@@ -1636,7 +1644,10 @@ function ActiveAgentComposer({
         onAttentionPromptSend={onAttentionPromptSend}
         onComposerHeightChange={onComposerHeightChange}
         onMessageSent={onMessageSent}
-        onClientSlashCommand={handleClientSlashCommand}
+        onClientSlashCommand={route ? undefined : handleClientSlashCommand}
+        onSubmitMessage={route?.submit}
+        queueWhileAgentRunning={!route}
+        placeholder={route?.placeholder}
         isCompactLayout={isCompactComposerLayout}
       />
     </View>

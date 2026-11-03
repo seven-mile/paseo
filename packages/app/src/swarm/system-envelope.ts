@@ -172,3 +172,23 @@ export function parseSwarmEnvelope(text: string): SwarmEnvelope | null {
   }
   return null;
 }
+
+// The name a person's mail carries; Swarm's own sender name for the human.
+export const PERSON_SENDER = "human";
+
+// The words of a team message a person sent, which render as the person's own message rather than
+// a team card. Null for any other text.
+export function personMailWords(text: string): string | null {
+  const tag = "paseo-swarm-team-message";
+  const opening = readOpening(text, tag);
+  if (!opening || opening.selfClosing || opening.attributes.get("from") !== PERSON_SENDER) {
+    return null;
+  }
+  const newline = text.startsWith("\r\n", opening.length) ? "\r\n" : "\n";
+  if (!text.startsWith(newline, opening.length)) return null;
+  const delimiter = `${newline}</${tag}>`;
+  if (!text.endsWith(delimiter)) return null;
+  const start = opening.length + newline.length;
+  const end = text.length - delimiter.length;
+  return end >= start ? text.slice(start, end) : "";
+}

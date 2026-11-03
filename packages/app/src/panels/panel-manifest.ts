@@ -78,6 +78,13 @@ const manifests = {
     singleton: true,
     resourceKey: (target) => target.instance ?? "main",
   },
+  swarm_seat: {
+    kind: "swarm_seat",
+    supportedHosts: ["main", "explorer"],
+    showCloseButton: true,
+    singleton: false,
+    resourceKey: (target) => target.seatId,
+  },
   pull_request: {
     kind: "pull_request",
     supportedHosts: ["main", "explorer"],
