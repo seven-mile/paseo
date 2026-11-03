@@ -8,8 +8,9 @@ import { forgetRunningTurns } from "../server/mailbox";
 import { registerOperations } from "../server/operations";
 import { store } from "../server/state";
 import { handOverTasks } from "../server/tasks";
+import { seatReadView } from "../server/views";
 import { seed } from "./fixtures";
-import type { AgentRecord, Task } from "../shared/models";
+import type { Activity, AgentRecord, AudienceEntry, Task } from "../shared/models";
 import {
   appendActivityRpc,
   appendHumanActivityRpc,
@@ -141,6 +142,7 @@ test("the owner's line changes a Task and the owner hears of it; anyone else is 
     taskId: "fix-login",
     actorName: "planner",
     brief: "Make login work again, without a schema change.",
+    briefBasedOn: taskOf("fix-login").briefUpdatedAt,
     status: "review",
     reason: "The human ruled out migrations",
   });
@@ -464,4 +466,192 @@ test("a retiring owner's open Tasks move to the nearest seat above it that stays
     activities.map((activity) => [activity.taskId, activity.body]),
     [["open", "Owner: planner.lead → planner\nReason: planner.lead retired"]],
   );
+});
+
+test("recording work underway notifies its owner without assigning it, and its delivery goes to the requester", async (t) => {
+  const { call, mailTo } = setup(t);
+  await seed({ agents: [planner, lead, ops, dev] });
+
+  const recorded = await call<Task & { audience: AudienceEntry[] }>(
+    createTaskRpc,
+    create({ requester: "human", assign: false }),
+  );
+  assert.equal(recorded.requester, "human");
+  assert.equal(recorded.briefUnconfirmedBy, "planner");
+  assert.deepEqual(recorded.audience, [{ name: "planner.lead", as: "to", why: "owner" }]);
+  const [notice] = mailTo(lead);
+  assert.match(notice, /kind="task-recorded"/);
+  assert.match(notice, /requester="human"/);
+  assert.doesNotMatch(notice, /task-assigned/);
+
+  // Defaults: To whoever asked, Cc the owner's manager. The owner's delivery confirms the brief.
+  const first = await call<{ activity: Activity; task: Task }>(deliverTaskRpc, {
+    taskId: "fix-login",
+    actorName: "planner.lead",
+    result: "Login works again.",
+    taskState: "done",
+  });
+  assert.deepEqual(first.activity.audience, [
+    { name: "human", as: "to", why: "requester" },
+    { name: "planner", as: "cc", why: "manager" },
+  ]);
+  assert.equal(first.task.briefUnconfirmedBy, undefined);
+  const copy = mailTo(planner).at(-1)!;
+  assert.match(copy, /to="human" cc="planner" addressed="cc"/);
+  assert.match(copy, /kind="delivery"/);
+
+  // Either list replaces both defaults, so to: [] records without telling anyone.
+  const before = mailTo(planner).length;
+  const quiet = await call<{ activity: Activity }>(deliverTaskRpc, {
+    taskId: "fix-login",
+    actorName: "planner.lead",
+    result: "Also checked the mobile login.",
+    taskState: "done",
+    to: [],
+  });
+  assert.equal(quiet.activity.audience, undefined);
+  assert.equal(mailTo(planner).length, before);
+
+  // The seat's conversation lists the deliveries it addressed to the human.
+  const { deliveries } = seatReadView(store.read(), lead.id);
+  assert.deepEqual(
+    deliveries.map((delivery) => [delivery.taskTitle, delivery.as, delivery.body]),
+    [["Fix login", "to", "Login works again."]],
+  );
+
+  // A seat above the owner that delivers still tells the owner, whatever its lists say.
+  await call(deliverTaskRpc, {
+    taskId: "fix-login",
+    actorName: "planner",
+    result: "Reopened: the fix broke SSO.",
+    taskState: "open",
+    to: [],
+  });
+  assert.match(mailTo(lead).at(-1)!, /Reopened: the fix broke SSO\./);
+
+  await assert.rejects(
+    call(deliverTaskRpc, {
+      taskId: "fix-login",
+      actorName: "planner.lead",
+      result: "Fixed SSO.",
+      taskState: "done",
+      cc: ["nobody"],
+    }),
+    /Unknown active agent: nobody/,
+  );
+});
+
+test("a brief rewrite from an older read is refused, and the owner confirms a brief by writing it", async (t) => {
+  const { call, mailTo } = setup(t);
+  await seed({ agents: [planner, lead, ops, dev] });
+  await call(createTaskRpc, create({ assign: false, requester: "human" }));
+  const stale = taskOf("fix-login").briefUpdatedAt!;
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await call(updateTaskRpc, {
+    taskId: "fix-login",
+    actorName: "planner.lead",
+    brief: "Make login work again; keep the old session cookies valid.",
+  });
+  assert.equal(taskOf("fix-login").briefUnconfirmedBy, undefined);
+
+  await assert.rejects(
+    call(updateTaskRpc, {
+      taskId: "fix-login",
+      actorName: "planner",
+      brief: "Make login work again.",
+      briefBasedOn: stale,
+    }),
+    /planner cannot rewrite the brief of Task fix-login: the brief was rewritten at .*retry once/,
+  );
+  await assert.rejects(
+    call(updateTaskRpc, { taskId: "fix-login", actorName: "planner", brief: "Something else." }),
+    /pass its briefUpdatedAt as briefBasedOn/,
+  );
+  assert.equal(
+    taskOf("fix-login").brief,
+    "Make login work again; keep the old session cookies valid.",
+  );
+
+  await call(updateTaskRpc, {
+    taskId: "fix-login",
+    actorName: "planner",
+    brief: "Make login work again; old cookies may expire.",
+    briefBasedOn: taskOf("fix-login").briefUpdatedAt,
+    reason: "The human accepted expiring sessions",
+  });
+  assert.equal(taskOf("fix-login").briefUnconfirmedBy, "planner");
+  assert.match(mailTo(lead).at(-1)!, /kind="task-change"/);
+
+  // Writing the brief unchanged confirms it.
+  await call(updateTaskRpc, {
+    taskId: "fix-login",
+    actorName: "planner.lead",
+    brief: taskOf("fix-login").brief,
+  });
+  assert.equal(taskOf("fix-login").briefUnconfirmedBy, undefined);
+});
+
+test("an Activity reaches only whom it addresses, its asker and its owner; closing without a result copies the requester", async (t) => {
+  const { call, mailTo } = setup(t);
+  await seed({ agents: [planner, lead, ops, dev] });
+  await call(createTaskRpc, create({ requester: "ops" }));
+  const opsBefore = mailTo(ops).length;
+  const plannerBefore = mailTo(planner).length;
+
+  const note = await call<Activity>(appendActivityRpc, {
+    taskId: "fix-login",
+    actorName: "planner.lead",
+    kind: "decision",
+    body: "Keep the cookie domain.",
+  });
+  assert.equal(note.audience, undefined);
+  assert.equal(mailTo(planner).length, plannerBefore);
+
+  const addressed = await call<Activity>(appendActivityRpc, {
+    taskId: "fix-login",
+    actorName: "planner.lead",
+    kind: "blocker",
+    body: "Staging is down.",
+    to: ["dev"],
+    cc: ["planner"],
+  });
+  assert.deepEqual(addressed.audience, [
+    { name: "planner.lead.dev", as: "to", why: "named" },
+    { name: "planner", as: "cc", why: "named" },
+  ]);
+  assert.match(mailTo(dev).at(-1)!, /addressed="to"/);
+  assert.match(mailTo(planner).at(-1)!, /addressed="cc"/);
+
+  // A seat above the owner reaches the owner; a reply reaches its asker.
+  const question = await call<Activity>(appendActivityRpc, {
+    taskId: "fix-login",
+    actorName: "planner",
+    kind: "question",
+    body: "Does this touch SSO?",
+  });
+  assert.deepEqual(question.audience, [{ name: "planner.lead", as: "to", why: "owner" }]);
+  const answer = await call<Activity>(appendActivityRpc, {
+    taskId: "fix-login",
+    actorName: "planner.lead",
+    kind: "answer",
+    body: "No.",
+    replyTo: question.id,
+  });
+  assert.deepEqual(answer.audience, [{ name: "planner", as: "to", why: "asker" }]);
+
+  await call(updateTaskRpc, {
+    taskId: "fix-login",
+    actorName: "planner.lead",
+    resolution: "wont-do",
+    reason: "The login page is being replaced",
+  });
+  const closing = mailTo(ops).slice(opsBefore);
+  assert.equal(closing.length, 1);
+  assert.match(closing[0], /cc="planner\.ops" addressed="cc"/);
+  assert.doesNotMatch(closing[0], / to="/);
+  assert.match(closing[0], /Closed as wont-do/);
+  assert.deepEqual(activitiesOf("fix-login").at(-1)!.audience, [
+    { name: "planner.ops", as: "cc", why: "requester" },
+  ]);
 });

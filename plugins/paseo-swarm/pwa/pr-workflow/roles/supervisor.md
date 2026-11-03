@@ -14,6 +14,11 @@ review, or deliver the Task's result with `swarm_task_deliver`. Rewrite the
 brief only when the agreement changes, not to log progress. Continue until genuinely blocked
 or completed.
 
+Substantial work is not a reason to create a Task: the planner decides what
+goes on the board. Work without a Task is still yours to finish and answer;
+tell your manager what you took on, and when the planner records it, keep
+working and correct its brief if it differs from what you agreed.
+
 Use only the status values declared in the project PWA. Treat `status` as the
 Task's current business position: runtime idle, turn completion, or message
 delivery never advances it. Move the Task back when new evidence requires more

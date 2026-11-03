@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   activitySchema,
   agentRecordSchema,
+  audienceEntrySchema,
   mailboxMessageSchema,
   mailboxStatusSchema,
   responseProfileSchema,
@@ -134,7 +135,8 @@ const swarmRefSchema = z.object({
 
 // Swarm features this host supports. A client offers a feature only when its name is listed;
 // absent on hosts from before the list. "cc": messages and human notes take a cc list.
-export const SWARM_FEATURES = ["cc"];
+// "addressing": writes report their audience, and the seat read lists deliveries to the human.
+export const SWARM_FEATURES = ["cc", "addressing"];
 const featuresSchema = z.array(z.string()).optional();
 
 // What a list or a link needs of a seat: no prompt receipts, occupant history or agent config.
@@ -200,10 +202,28 @@ export const tasksReadRpc = defineRpc({
 
 // One seat with its occupants, retired seats included: a seat tab. Data is a null seat when no
 // seat has this id.
+// A delivery the seat addressed to the human, as its conversation lists it.
+export const seatDeliverySchema = z.object({
+  activityId: z.string(),
+  swarmId: z.string(),
+  taskId: z.string(),
+  taskTitle: z.string(),
+  as: z.enum(["to", "cc"]),
+  taskState: z.string().optional(),
+  body: z.string(),
+  createdAt: z.string(),
+});
+
 export const seatReadRpc = defineRpc({
   name: "swarm.seat.read",
   input: z.object({ seatId: z.string().min(1), ...etagInputSchema }),
-  output: conditionalOutput(z.object({ seat: seatSchema.nullable() })),
+  output: conditionalOutput(
+    z.object({
+      seat: seatSchema.nullable(),
+      // The newest deliveries this seat addressed to the human. Absent from older hosts.
+      deliveries: z.array(seatDeliverySchema).optional(),
+    }),
+  ),
 });
 
 export const TASK_ACTIVITY_PAGE = 100;
@@ -306,8 +326,12 @@ export const createTaskRpc = defineRpc({
     workerNames: z.array(z.string()).default([]),
     createdBy: z.string().min(1),
     data: z.record(z.string(), z.unknown()).default({}),
+    // Who asked for the work: "human" or a seat. Defaults to createdBy.
+    requester: z.string().min(1).optional(),
+    // false records work the owner already has: it gets a record notice, not an assignment.
+    assign: z.boolean().default(true),
   }),
-  output: taskSchema,
+  output: taskSchema.extend({ audience: z.array(audienceEntrySchema).optional() }),
 });
 
 // The owner and every seat above it may update a Task. A new managerName reassigns it; a
@@ -327,9 +351,19 @@ export const updateTaskRpc = defineRpc({
     resolution: taskResolutionSchema.nullable().optional(),
     duplicateOf: slugNameSchema.optional(),
     reason: z.string().min(1).optional(),
+    // The briefUpdatedAt the writer read. A brief rewrite by anyone but the owner needs it, and a
+    // rewrite is refused when the brief changed after it.
+    briefBasedOn: z.string().min(1).optional(),
   }),
   output: taskSchema,
 });
+
+// Who a write goes to. Omit both for the defaults; give either and the two lists are the whole
+// audience, so to: [] records without telling anyone. Names are seats, or "human".
+const audienceInputSchema = {
+  to: z.array(z.string().min(1)).optional(),
+  cc: z.array(z.string().min(1)).optional(),
+};
 
 // The one way a result is recorded: a delivery Activity, with the Task's status and state changed
 // in the same commit. taskState is the Task's state after the delivery: done closes it, open keeps
@@ -345,6 +379,7 @@ export const deliverTaskRpc = defineRpc({
     taskState: z.enum(["done", "open"]),
     status: z.string().min(1).optional(),
     revises: z.string().min(1).nullable().default(null),
+    ...audienceInputSchema,
   }),
   output: z.object({ task: taskSchema, activity: activitySchema, duplicate: z.boolean() }),
 });
@@ -360,6 +395,7 @@ export const appendActivityRpc = defineRpc({
     kind: z.string().min(1),
     body: z.string().min(1),
     data: z.record(z.string(), z.unknown()).default({}),
+    ...audienceInputSchema,
   }),
   output: activitySchema,
 });
@@ -405,6 +441,8 @@ export const sendMessageRpc = defineRpc({
         z.object({ recipient: z.string(), messageId: z.string(), status: mailboxStatusSchema }),
       )
       .optional(),
+    // Absent from hosts before addressing.
+    audience: z.array(audienceEntrySchema).optional(),
   }),
 });
 

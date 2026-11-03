@@ -116,10 +116,29 @@ export const taskSchema = z.object({
   // When the brief was last written. Human notes after it are instructions the owner has not yet
   // folded into the brief. Absent on Tasks from before it was recorded.
   briefUpdatedAt: z.string().optional(),
+  // Who asked for the work: "human" or a seat. createdBy is who wrote the record, which differs
+  // when work already underway is recorded later. Absent on older Tasks, which read as createdBy.
+  requester: z.string().optional(),
+  // The seat whose brief the owner has not confirmed yet: set when a seat other than the owner
+  // records the Task without assigning it or rewrites its brief, and cleared when the owner writes
+  // the brief or delivers.
+  briefUnconfirmedBy: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type Task = z.infer<typeof taskSchema>;
+
+// The name a person goes by in an audience. It has no mailbox: the app shows what reaches it.
+export const HUMAN = "human";
+
+// Who a write reached, and why: requester, owner, manager (the owner's manager) and asker are
+// defaults and system-added recipients; named is the sender's own list.
+export const audienceEntrySchema = z.object({
+  name: z.string(),
+  as: z.enum(["to", "cc"]),
+  why: z.enum(["requester", "owner", "manager", "asker", "named"]),
+});
+export type AudienceEntry = z.infer<typeof audienceEntrySchema>;
 
 export const activitySchema = z.object({
   id: z.string(),
@@ -135,6 +154,8 @@ export const activitySchema = z.object({
   body: z.string(),
   data: metadataSchema,
   refs: z.array(activityRefSchema).default([]),
+  // Who the write reached. Absent when it reached no one, and on Activities from before addressing.
+  audience: z.array(audienceEntrySchema).optional(),
   createdAt: z.string(),
 });
 export type Activity = z.infer<typeof activitySchema>;

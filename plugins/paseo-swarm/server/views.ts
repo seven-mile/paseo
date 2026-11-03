@@ -1,9 +1,17 @@
 import { createHash } from "node:crypto";
 import type { z } from "zod";
-import { SWARM_FEATURES, type seatSummarySchema, type taskSummarySchema } from "../shared/swarm";
 import {
+  SWARM_FEATURES,
+  type seatDeliverySchema,
+  type seatSummarySchema,
+  type taskSummarySchema,
+} from "../shared/swarm";
+import {
+  agentQualifiedName,
+  HUMAN,
   unansweredChoices,
   type Activity,
+  type AgentRecord,
   type SwarmRecord,
   type SwarmState,
   type Task,
@@ -14,6 +22,7 @@ import { store } from "./state";
 
 type SeatSummary = z.input<typeof seatSummarySchema>;
 type TaskSummary = z.input<typeof taskSummarySchema>;
+type SeatDelivery = z.input<typeof seatDeliverySchema>;
 
 // A conditional read's answer: data is null when the caller already holds this etag.
 export interface Conditional<T> {
@@ -86,9 +95,44 @@ function swarmRef(swarm: SwarmRecord) {
   return { id: swarm.id, name: swarm.name, projectId: swarm.projectId };
 }
 
+// How many deliveries to the human a seat's conversation lists.
+const SEAT_DELIVERIES = 5;
+
 export function seatReadView(state: Readonly<SwarmState>, seatId: string) {
   const seat = state.agents.find((candidate) => candidate.id === seatId);
-  return { seat: seat ? seatView(seat) : null };
+  if (!seat) return { seat: null, deliveries: [] };
+  return { seat: seatView(seat), deliveries: seatDeliveries(state, seat) };
+}
+
+// The newest deliveries the seat addressed to the human, so its conversation shows results the
+// seat did not repeat in its own words.
+function seatDeliveries(state: Readonly<SwarmState>, seat: AgentRecord): SeatDelivery[] {
+  const name = agentQualifiedName(seat);
+  const deliveries: SeatDelivery[] = [];
+  for (let index = state.activities.length - 1; index >= 0; index -= 1) {
+    if (deliveries.length === SEAT_DELIVERIES) break;
+    const activity = state.activities[index];
+    if (activity.swarmId !== seat.swarmId || activity.kind !== "delivery") continue;
+    if (activity.actorName !== name) continue;
+    const human = activity.audience?.find((entry) => entry.name === HUMAN);
+    if (!human) continue;
+    const task = state.tasks.find(
+      (candidate) => candidate.swarmId === activity.swarmId && candidate.id === activity.taskId,
+    );
+    deliveries.push({
+      activityId: activity.id,
+      swarmId: activity.swarmId,
+      taskId: activity.taskId,
+      taskTitle: task?.title ?? activity.taskId,
+      as: human.as,
+      ...(typeof activity.data.taskState === "string"
+        ? { taskState: activity.data.taskState }
+        : {}),
+      body: activity.body,
+      createdAt: activity.createdAt,
+    });
+  }
+  return deliveries;
 }
 
 export function rosterView(state: Readonly<SwarmState>) {

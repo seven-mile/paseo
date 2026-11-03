@@ -77,6 +77,7 @@ import {
 import type {
   AgentConfig,
   AgentRecord,
+  AudienceEntry,
   MailboxMessage,
   MessageKind,
   SwarmRecord,
@@ -402,9 +403,10 @@ async function sendWithCopies(
     kind: MessageKind;
     body: string;
     attributes?: Record<string, string | null | undefined>;
+    recipientWhy?: AudienceEntry["why"];
   },
   context: PluginHandlerContext,
-): Promise<{ message: MailboxMessage; copies: MailboxMessage[] }> {
+): Promise<{ message: MailboxMessage; copies: MailboxMessage[]; audience: AudienceEntry[] }> {
   const to = agentQualifiedName(input.recipient);
   const copiedSeats = [
     ...new Map(
@@ -430,6 +432,7 @@ async function sendWithCopies(
           sender: input.sender,
           recipient: to,
           cc,
+          addressed: seat.id === input.recipient.id ? "to" : "cc",
           message: input.body,
           taskId: input.taskId,
           attributes: input.attributes,
@@ -441,7 +444,11 @@ async function sendWithCopies(
   await flushMailbox(context);
   const current = (queued: MailboxMessage) =>
     store.read().messages.find((candidate) => candidate.id === queued.id) ?? queued;
-  return { message: current(message), copies: copies.map(current) };
+  const audience: AudienceEntry[] = [
+    { name: to, as: "to", why: input.recipientWhy ?? "named" },
+    ...cc.map((name) => ({ name, as: "cc" as const, why: "named" as const })),
+  ];
+  return { message: current(message), copies: copies.map(current), audience };
 }
 
 export function registerOperations(server: Pick<PluginServerContext, "handle">): void {
@@ -681,29 +688,49 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       const task = findTaskFor(input, input.taskId);
       const swarmId = swarmOf(task).id;
       const { cc, ...fields } = input;
-      let result!: ReturnType<typeof makeActivity>;
-      await store.commit((state) => {
-        result = makeActivity({ ...fields, swarmId, actorKind: "human" }, state);
-        return [{ op: "put", collection: "activities", record: result }];
-      });
-      let owner: AgentRecord;
+      let owner: AgentRecord | undefined;
+      let ownerError: string | undefined;
       try {
         owner = findAgent(swarmId, task.managerName);
       } catch (error) {
-        return {
-          ...result,
-          notificationWarning: error instanceof Error ? error.message : String(error),
-        };
+        ownerError = error instanceof Error ? error.message : String(error);
       }
+      // The note goes To the owner and Cc the seats the person kept, which the app defaults to
+      // the owner's manager. The Activity records who it reached.
+      const ownerName = owner ? agentQualifiedName(owner) : null;
+      const copied = owner
+        ? [
+            ...new Set(
+              cc
+                .map((name) =>
+                  agentQualifiedName(findAgent(swarmId, name, owner.reportsTo ?? undefined)),
+                )
+                .filter((name) => name !== ownerName),
+            ),
+          ]
+        : [];
+      const audience: AudienceEntry[] = ownerName
+        ? [
+            { name: ownerName, as: "to", why: "owner" },
+            ...copied.map((name) => ({ name, as: "cc" as const, why: "named" as const })),
+          ]
+        : [];
+      let result!: ReturnType<typeof makeActivity>;
+      await store.commit((state) => {
+        result = makeActivity({ ...fields, swarmId, actorKind: "human", audience }, state);
+        return [{ op: "put", collection: "activities", record: result }];
+      });
+      if (!owner) return { ...result, notificationWarning: ownerError };
       const activity = result;
       const { message } = await sendWithCopies(
         {
           swarmId,
           recipient: owner,
-          cc,
+          cc: copied,
           sender: input.actorName,
           taskId: task.id,
           kind: "human_activity",
+          recipientWhy: "owner",
           body: activity.body,
           attributes: {
             kind: "human_activity",
@@ -733,7 +760,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       const recipient = findAgent(swarm.id, input.recipientName);
       const recipientReference = agentQualifiedName(recipient);
       if (input.taskId) findTask(swarm.id, input.taskId);
-      const { message, copies } = await sendWithCopies(
+      const { message, copies, audience } = await sendWithCopies(
         {
           swarmId: swarm.id,
           recipient,
@@ -761,6 +788,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
           messageId: copy.id,
           status: mailboxMessageStatus(copy),
         })),
+        audience,
       };
     },
   );

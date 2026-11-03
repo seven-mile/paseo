@@ -123,7 +123,7 @@ test("the seat read carries one seat's occupants, retired seats included", async
     assert.equal(first.data?.seat?.name, "gone");
     assert.equal(first.data?.seat?.occupant?.number, 2);
     assert.deepEqual(await read("gone-record", first.etag), { etag: first.etag, data: null });
-    assert.deepEqual((await read("missing")).data, { seat: null });
+    assert.deepEqual((await read("missing")).data, { seat: null, deliveries: [] });
   });
 });
 
