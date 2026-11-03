@@ -30,6 +30,7 @@ const WorkspaceTabTargetStorageSchema = z.discriminatedUnion("kind", [
     kind: z.literal("swarm_tasks"),
     instance: z.enum(["main", "explorer"]).optional(),
   }),
+  z.strictObject({ kind: z.literal("swarm_seat"), seatId: z.string() }),
   z.strictObject({ kind: z.literal("pull_request") }),
   z.strictObject({
     kind: z.literal("file"),

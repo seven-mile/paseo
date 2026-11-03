@@ -60,11 +60,8 @@ function normalizeSimpleWorkspaceTabTarget(value: WorkspaceTabTarget): Workspace
     case "pull_request":
       return { kind: value.kind };
     case "swarm_tasks":
-      return value.instance === undefined ||
-        value.instance === "main" ||
-        value.instance === "explorer"
-        ? { kind: "swarm_tasks", instance: value.instance ?? "main" }
-        : null;
+    case "swarm_seat":
+      return normalizeSwarmTabTarget(value);
     case "setup": {
       const workspaceId = trimNonEmpty(value.workspaceId);
       return workspaceId ? { kind: "setup", workspaceId } : null;
@@ -76,6 +73,18 @@ function normalizeSimpleWorkspaceTabTarget(value: WorkspaceTabTarget): Workspace
     default:
       return null;
   }
+}
+
+function normalizeSwarmTabTarget(
+  value: Extract<WorkspaceTabTarget, { kind: "swarm_tasks" | "swarm_seat" }>,
+): WorkspaceTabTarget | null {
+  if (value.kind === "swarm_seat") {
+    const seatId = trimNonEmpty(value.seatId);
+    return seatId ? { kind: "swarm_seat", seatId } : null;
+  }
+  return value.instance === undefined || value.instance === "main" || value.instance === "explorer"
+    ? { kind: "swarm_tasks", instance: value.instance ?? "main" }
+    : null;
 }
 
 export function normalizeWorkspaceDraftTabSetup(
@@ -163,6 +172,8 @@ function secondaryWorkspaceTabTargetsEqual(
         (left.instance ?? "main") ===
         ((right as Extract<WorkspaceTabTarget, { kind: "swarm_tasks" }>).instance ?? "main")
       );
+    case "swarm_seat":
+      return left.seatId === (right as Extract<WorkspaceTabTarget, { kind: "swarm_seat" }>).seatId;
     case "setup":
       return (
         left.workspaceId === (right as Extract<WorkspaceTabTarget, { kind: "setup" }>).workspaceId
@@ -239,6 +250,7 @@ export function buildDeterministicWorkspaceTabId(target: WorkspaceTabTarget): st
     return target.kind;
   }
   if (target.kind === "swarm_tasks") return `swarm_tasks_${target.instance ?? "main"}`;
+  if (target.kind === "swarm_seat") return `swarm_seat_${target.seatId}`;
   if (target.kind === "plugin") {
     const identity = `${target.pluginId.length}_${target.pluginId}_${target.panelId.length}_${target.panelId}`;
     return target.context === "workspace"

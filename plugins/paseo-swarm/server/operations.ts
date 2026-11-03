@@ -32,7 +32,14 @@ import {
   swarmSeats,
   swarmTasks,
 } from "./swarms";
-import { conditionalView, rosterView, taskView, tasksView } from "./views";
+import {
+  conditionalValue,
+  conditionalView,
+  rosterView,
+  seatReadView,
+  taskView,
+  tasksView,
+} from "./views";
 import { planRoster, readDesired } from "./roster";
 import {
   assertNoConflict,
@@ -46,6 +53,7 @@ import {
   appendHumanActivityRpc,
   boardReadRpc,
   rosterReadRpc,
+  seatReadRpc,
   taskReadRpc,
   tasksReadRpc,
   createSeatRpc,
@@ -472,6 +480,9 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     return { ...board, statuses: readPwa(files, planner.role).statuses };
   });
   server.handle(rosterReadRpc, ({ etag }) => conditionalView("roster", etag, rosterView));
+  server.handle(seatReadRpc, ({ seatId, etag }) =>
+    conditionalValue(seatReadView(store.read(), seatId), etag),
+  );
   server.handle(tasksReadRpc, async ({ projectId, swarmId, etag }, context) => {
     if (projectId) await projectRoot(projectId, context);
     return conditionalView(`tasks:${projectId ?? ""}:${swarmId ?? ""}`, etag, (state) =>

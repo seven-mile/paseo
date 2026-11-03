@@ -32,6 +32,17 @@ interface CachedView {
 const MAX_CACHED_VIEWS = 128;
 const cache = new Map<string, CachedView>();
 
+function digestOf(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("base64url");
+}
+
+// A conditional answer built fresh on every read, for a view that also depends on state outside
+// the store, such as the agent a seat is bringing in before it commits the binding.
+export function conditionalValue<T>(value: T, etag: string | undefined): Conditional<T> {
+  const digest = digestOf(value);
+  return { etag: digest, data: etag === digest ? null : value };
+}
+
 export function conditionalView<T>(
   key: string,
   etag: string | undefined,
@@ -43,8 +54,7 @@ export function conditionalView<T>(
     const value = build(store.read());
     // The etag hashes the content, not the revision: commits that leave this view unchanged, such
     // as mailbox deliveries, keep its etag, so clients that hold it are not sent it again.
-    const digest = createHash("sha256").update(JSON.stringify(value)).digest("base64url");
-    view = { revision, etag: digest, value };
+    view = { revision, etag: digestOf(value), value };
   }
   // Refreshing the entry's position keeps the views in use; the least recently read go first.
   cache.delete(key);
@@ -74,6 +84,11 @@ export function seatSummary(seat: SwarmState["agents"][number]): SeatSummary {
 
 function swarmRef(swarm: SwarmRecord) {
   return { id: swarm.id, name: swarm.name, projectId: swarm.projectId };
+}
+
+export function seatReadView(state: Readonly<SwarmState>, seatId: string) {
+  const seat = state.agents.find((candidate) => candidate.id === seatId);
+  return { seat: seat ? seatView(seat) : null };
 }
 
 export function rosterView(state: Readonly<SwarmState>) {

@@ -577,9 +577,20 @@ export async function reconcileSeat(seat: AgentRecord, context: SeatContext): Pr
 // What a seat's next mail does first: the plan for its agent, and whether that agent still has to
 // receive the standing prompt assembled from the swarm's accepted PWA. A first or a new agent boots
 // with that prompt, so only a kept, adjusted or revived one can be behind.
+// arrivingAgentId is the agent a seat is bringing in before it binds it: a new agent while Paseo
+// creates it, or an earlier occupant while its session resumes. It is already running then, so a
+// view of the seat can show it before the seat names it.
 export type SeatView = AgentRecord & {
   pending: { kind: Exclude<SeatPlan["kind"], "keep"> | "refresh"; reason: string } | null;
+  arrivingAgentId: string | null;
 };
+
+function arrivingAgentOf(seatId: string): string | null {
+  for (const [paseoAgentId, arrivingIn] of arriving) {
+    if (arrivingIn === seatId) return paseoAgentId;
+  }
+  return null;
+}
 
 function promptBehind(seat: AgentRecord, plan: SeatPlan): string | null {
   if (seat.paseoAgentId === null || plan.kind === "start" || plan.kind === "replace") return null;
@@ -596,11 +607,16 @@ function promptBehind(seat: AgentRecord, plan: SeatPlan): string | null {
 export function seatView(seat: AgentRecord): SeatView {
   const plan = planSeat(seat);
   const prompt = promptBehind(seat, plan);
+  const arrivingAgentId = arrivingAgentOf(seat.id);
   if (plan.kind === "keep") {
-    return { ...seat, pending: prompt ? { kind: "refresh", reason: prompt } : null };
+    return {
+      ...seat,
+      pending: prompt ? { kind: "refresh", reason: prompt } : null,
+      arrivingAgentId,
+    };
   }
   const reason = prompt ? `${plan.reason}; then ${prompt}` : plan.reason;
-  return { ...seat, pending: { kind: plan.kind, reason } };
+  return { ...seat, pending: { kind: plan.kind, reason }, arrivingAgentId };
 }
 
 export function listSeats(input: {

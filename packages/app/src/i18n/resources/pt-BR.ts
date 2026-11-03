@@ -27,6 +27,40 @@ export const ptBR: TranslationResources = {
       notStarted: "Não iniciado",
       connectHost: "Conecte-se a um host com Swarm ativado.",
     },
+    seat: {
+      tabLabel: "Posto",
+      loading: "Carregando posto…",
+      missing: "Este posto não está mais na equipe.",
+      noAgent: "Ainda sem agente",
+      occupants: "Ocupantes",
+      occupant: "Ocupante {{number}}",
+      occupantWithProvider: "Ocupante {{number}} · {{provider}}",
+      inSeat: "No posto agora",
+      arriving: "Iniciando agora",
+      left: "Saiu {{time}}: {{reason}}",
+      openAgentTab: "Abrir {{occupant}} na aba do agente",
+      viewingPast:
+        "O ocupante {{number}} deixou o posto {{time}}. Mensagens ao posto vão para o ocupante atual.",
+      backToCurrent: "Voltar ao ocupante atual",
+      startsSeat: "Sua mensagem inicia {{name}}.",
+      startsHint:
+        "O Swarm a entrega pela caixa de correio do posto, e o novo agente começa com ela.",
+      placeholder: "Mensagem para {{name}}",
+      pending: "Aplica-se na sua próxima mensagem: {{reason}}",
+      mailQueued: "Na fila: entregue quando o ocupante estiver livre",
+      mailFailed: "Não entregue: {{reason}}",
+      textOnly: "Mensagens ao posto levam apenas texto. Remova os anexos para enviar.",
+      handover: {
+        new: "O ocupante {{to}} assumiu no lugar do ocupante {{from}} {{time}} ({{reason}}).",
+        returning: "O ocupante {{to}} voltou ao posto {{time}} ({{reason}}).",
+        given: "O que ele recebeu",
+        givenNew:
+          "O prompt permanente do posto, um resumo de passagem e a mensagem que o acordou. A conversa do ocupante {{from}} não foi dada a ele; ele pode paginar essa transcrição com swarm_transcript_list.",
+        givenReturning:
+          "A própria sessão, retomada, então ele lembra dos turnos de antes de sair, mais um resumo de retorno e a mensagem que o acordou. A conversa do ocupante {{from}} não foi dada a ele.",
+        showPrevious: "Mostrar ocupante {{from}}",
+      },
+    },
     message: {
       title: "Enviar mensagem para {{name}}",
       placeholder: "Escreva uma mensagem",

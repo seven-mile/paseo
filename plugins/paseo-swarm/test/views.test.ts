@@ -7,7 +7,7 @@ import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { registerOperations } from "../server/operations";
 import { store } from "../server/state";
 import type { Activity, AgentRecord, MailboxMessage, Task } from "../shared/models";
-import { rosterReadRpc, taskReadRpc, tasksReadRpc } from "../shared/swarm";
+import { rosterReadRpc, seatReadRpc, taskReadRpc, tasksReadRpc } from "../shared/swarm";
 import { seed } from "./fixtures";
 
 const timestamp = "2026-11-02T00:00:00Z";
@@ -103,6 +103,29 @@ async function withHandlers(
     rmSync(home, { recursive: true, force: true });
   }
 }
+
+test("the seat read carries one seat's occupants, retired seats included", async () => {
+  await withHandlers(async (invoke) => {
+    await seed({
+      agents: [
+        seat("manager"),
+        seat("gone", {
+          retired: true,
+          occupant: { number: 2, generation: 1, config: {}, boundAt: timestamp },
+        }),
+      ],
+    });
+    const read = async (seatId: string, etag?: string) =>
+      seatReadRpc.output.parse(
+        await invoke(seatReadRpc.name, etag ? { seatId, etag } : { seatId }),
+      );
+    const first = await read("gone-record");
+    assert.equal(first.data?.seat?.name, "gone");
+    assert.equal(first.data?.seat?.occupant?.number, 2);
+    assert.deepEqual(await read("gone-record", first.etag), { etag: first.etag, data: null });
+    assert.deepEqual((await read("missing")).data, { seat: null });
+  });
+});
 
 test("the roster read is lean, leaves out retired seats, and answers a held etag with no data", async () => {
   await withHandlers(async (invoke) => {

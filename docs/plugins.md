@@ -118,7 +118,8 @@ naming the file until it is repaired or moved aside; nothing is written meanwhil
 log line, left by a crash mid-append, is dropped automatically.
 
 Swarm surfaces poll conditional reads (`server/views.ts`): `swarm.roster.read` for the sidebar,
-`swarm.tasks.read` for a Task list with each Task's count of unanswered choices, and
+`swarm.seat.read` for a seat tab's seat and its occupants, `swarm.tasks.read` for a Task list
+with each Task's count of unanswered choices, and
 `swarm.task.read` for one Task's brief and latest Activities, a page at a time, plus any older
 unanswered choice and the newest delivery, which the Task view shows as its result. The roster and
 Task list also carry `features`, the Swarm capabilities the app gates on (`SWARM_FEATURES` in

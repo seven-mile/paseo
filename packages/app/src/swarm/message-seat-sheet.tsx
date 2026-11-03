@@ -12,9 +12,7 @@ import { Button } from "@/components/ui/button";
 import type { EditingTextInputHandle } from "@/components/ui/text-input";
 import { SwarmCcLine } from "./cc-line";
 import { useSwarmRpc } from "./rpc";
-
-// The name a person's mail carries, as a person's Activities do.
-const HUMAN_SENDER = "human";
+import { PERSON_SENDER } from "./system-envelope";
 
 const statusSchema = z.enum(["queued", "delivered", "consumed", "failed"]);
 const receiptSchema = z.object({
@@ -96,7 +94,7 @@ export function SwarmMessageSeatSheet({
       const result = receiptSchema.parse(
         await invoke("swarm.message.send", {
           ...(seat.swarmId ? { swarmId: seat.swarmId } : {}),
-          senderName: HUMAN_SENDER,
+          senderName: PERSON_SENDER,
           recipientName: recipient,
           body: body.trim(),
           ...(cc.length > 0 ? { cc } : {}),

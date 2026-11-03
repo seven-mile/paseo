@@ -16,6 +16,7 @@ import { pullRequestPanelRegistration } from "@/panels/pull-request-panel";
 import { pluginPanelRegistration } from "@/plugins/workspace-panels/panel";
 import { newTabPanelRegistration } from "@/panels/new-tab-panel";
 import { swarmTasksPanelRegistration } from "@/swarm/tasks-panel";
+import { swarmSeatPanelRegistration } from "@/swarm/seat-panel";
 
 let panelsRegistered = false;
 
@@ -38,5 +39,6 @@ export function ensurePanelsRegistered(): void {
   registerPanel(changesTreePanelRegistration);
   registerPanel(pluginPanelRegistration);
   registerPanel(swarmTasksPanelRegistration);
+  registerPanel(swarmSeatPanelRegistration);
   panelsRegistered = true;
 }

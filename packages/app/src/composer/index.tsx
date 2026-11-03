@@ -966,6 +966,11 @@ interface ComposerProps {
   submitLabel?: string;
   /** Overrides the mode's default placeholder, for text only the caller can build. */
   placeholder?: string;
+  /**
+   * When false, a send during a running turn goes straight to onSubmitMessage instead of the
+   * composer's own queue, for a caller whose destination queues it, such as a Swarm seat's mailbox.
+   */
+  queueWhileAgentRunning?: boolean;
 }
 
 const EMPTY_ARRAY: readonly QueuedMessage[] = [];
@@ -1234,6 +1239,7 @@ function ComposerContentImpl({
   readOnly = false,
   submitLabel,
   placeholder,
+  queueWhileAgentRunning = true,
 }: ComposerContentProps) {
   const mode = resolveComposerInputMode(inputMode);
   const { t } = useTranslation();
@@ -1619,7 +1625,7 @@ function ComposerContentImpl({
         allowEmptySubmit,
         forceSend,
         submitBehavior,
-        isAgentRunning,
+        isAgentRunning: queueWhileAgentRunning && isAgentRunning,
         // Parent-managed submits are still valid submit paths even when the
         // transport is disconnected, because the parent decides the failure mode.
         canSubmit: Boolean(sendAgentMessageRef.current || onSubmitMessageRef.current),
@@ -1657,6 +1663,7 @@ function ComposerContentImpl({
       hasExternalContent,
       isAgentRunning,
       queueMessage,
+      queueWhileAgentRunning,
       setSelectedAttachments,
       replaceUserInput,
       submitBehavior,

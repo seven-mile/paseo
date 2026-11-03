@@ -42,6 +42,7 @@ export type WorkspaceTabTarget =
   | { kind: "changes_tree" }
   | { kind: "files" }
   | { kind: "swarm_tasks"; instance?: "main" | "explorer" }
+  | { kind: "swarm_seat"; seatId: string }
   | { kind: "pull_request" }
   | WorkspaceFileTabTarget
   | WorkspaceWorkingDiffTabTarget

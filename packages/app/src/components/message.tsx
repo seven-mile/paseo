@@ -87,7 +87,7 @@ import {
   swarmEnvelopeTitleKeys,
   type SwarmEnvelopeCardProps,
 } from "./swarm-envelope-card";
-import { parseSwarmEnvelope } from "@/swarm/system-envelope";
+import { parseSwarmEnvelope, personMailWords } from "@/swarm/system-envelope";
 import { useSettings } from "@/hooks/use-settings";
 import { useToolCallSheet } from "./tool-call-sheet";
 import { ToolCallDetailsContent } from "./tool-call-details";
@@ -487,12 +487,21 @@ function SwarmEnvelopeMessage({ envelope, original }: SwarmEnvelopeCardProps) {
   );
 }
 
+// A person's own Swarm mail reads as their message; other Swarm envelopes render as cards.
+function useUserMessageText(rawMessage: string, sourceMessage: string) {
+  return useMemo(() => {
+    const personMail = personMailWords(sourceMessage);
+    if (personMail !== null) return { message: personMail, envelope: null };
+    return { message: rawMessage, envelope: parseSwarmEnvelope(sourceMessage) };
+  }, [rawMessage, sourceMessage]);
+}
+
 export const UserMessage = memo(function UserMessage({
   serverId,
   agentId,
   messageId,
-  message,
-  sourceMessage = message,
+  message: rawMessage,
+  sourceMessage = rawMessage,
   images = [],
   attachments = [],
   timestamp,
@@ -513,7 +522,7 @@ export const UserMessage = memo(function UserMessage({
     [lightboxMetadata],
   );
   const resolvedDisableOuterSpacing = useDisableOuterSpacing(disableOuterSpacing);
-  const envelope = useMemo(() => parseSwarmEnvelope(sourceMessage), [sourceMessage]);
+  const { message, envelope } = useUserMessageText(rawMessage, sourceMessage);
   const hasText = message.trim().length > 0;
   const hasImages = images.length > 0;
   const hasAttachments = attachments.length > 0;
