@@ -1045,11 +1045,11 @@ export async function createPaseoToolCatalog(
           "swarm_task_deliver",
           {
             description:
-              "Deliver a result on a Swarm Task you own. One call records it, sets the Task's state, and sends it to the Task's requester with a copy to your manager, so don't also append an Activity, update the status first, or message the same summary to them. to and cc choose the audience instead: either one replaces both defaults, names are seats or human, and to: [] records without telling anyone, for a result you already gave its requester. The result lists the audience. A seat above the owner delivers only to escalate, when the owner cannot; a delivery it received from below is already recorded. result is your synthesis for a reader who did not follow the work: the outcome, the decisions that shaped it and why, what is still uncertain, and how to use it, with Markdown links to documents (files, PRs) only for detail the reader may need. No execution diary and no forwarded worker reports. taskState is the Task's state after this delivery: done when the result fulfills the agreed outcome, including its required conditions; open for a useful intermediate result while that commitment remains unfinished. status optionally moves the Task to a PWA status in the same call. To correct an earlier delivery whose conclusions, confidence or completion claim changed, deliver again with revises set to that delivery's id and say what changed; if the correction means more work is needed, set taskState: open, which reopens a done Task in the same call. Typos and formatting need no revision. Retrying a call that may have failed returns the first delivery.",
+              "Deliver a result. On a Swarm Task you own, one call records it, sets the Task's state, and sends it to the Task's requester with a copy to your manager, so don't also append an Activity, update the status first, or message the same summary to them. to and cc choose the audience instead: either one replaces both defaults, names are seats or human, and to: [] records without telling anyone, for a result you already gave its requester. Without taskId, the delivery is a result for whoever asked you directly, such as the human: to names its readers, your manager gets a copy unless you pass cc, and it stays off the board; taskState and status apply only to a Task. The result lists the audience. A seat above the owner delivers only to escalate, when the owner cannot; a delivery it received from below is already recorded. result is your synthesis for a reader who did not follow the work: the outcome, the decisions that shaped it and why, what is still uncertain, and how to use it, with Markdown links to documents (artifacts, files, PRs) only for detail the reader may need. No execution diary and no forwarded worker reports. Link an artifact with the link swarm_artifact_publish returned; the delivery records the version it carried, so readers see when it changes later. taskState is the Task's state after this delivery: done when the result fulfills the agreed outcome, including its required conditions; open for a useful intermediate result while that commitment remains unfinished. status optionally moves the Task to a PWA status in the same call. To correct an earlier delivery whose conclusions, confidence or completion claim changed, deliver again with revises set to that delivery's id and say what changed; if the correction means more work is needed, set taskState: open, which reopens a done Task in the same call. Typos and formatting need no revision. Retrying a call that may have failed returns the first delivery.",
             inputSchema: {
-              taskId: z.string(),
+              taskId: z.string().optional(),
               result: z.string().min(1),
-              taskState: z.enum(["done", "open"]),
+              taskState: z.enum(["done", "open"]).optional(),
               status: z.string().min(1).optional(),
               revises: z.string().min(1).optional(),
               to: z.array(z.string().min(1)).optional(),
@@ -1063,6 +1063,36 @@ export async function createPaseoToolCatalog(
                 revises: input.revises ?? null,
               }),
             ),
+        );
+        registerTool(
+          "swarm_artifact_publish",
+          {
+            description:
+              "Publish a file in your workspace as an artifact: a result you maintain and readers come back to, such as a report a delivery can only summarize. A short complete answer needs no artifact; deliver it as text. path is relative to your workspace root; attachments are the files or directories the result can't be used without, such as a dataset or a script it explains, not your working notes or worker reports. Swarm keeps a copy of the file and its attachments that stays after your workspace is retired, and refreshes it at the end of each of your turns, so keep editing the file where it is. Publishing tells no one: link the returned location.link from a delivery to give it to readers. Publishing the same path again updates the artifact; pass artifactId to move it to another path. When an edit changes what a reader concluded or should do, deliver again with revises; readers see that an artifact changed since their delivery either way. Write it to stand alone: the conclusion, the reasons that matter, what is uncertain, and how to use it.",
+            inputSchema: {
+              path: z.string().min(1),
+              title: z.string().min(1),
+              attachments: z.array(z.string().min(1)).max(100).optional(),
+              taskId: z.string().nullable().optional(),
+              artifactId: z.string().optional(),
+            },
+          },
+          async (input) =>
+            swarmResult(
+              await invokeSwarm("swarm.artifact.publish", {
+                ...input,
+                attachments: input.attachments ?? [],
+              }),
+            ),
+        );
+        registerTool(
+          "swarm_artifact_read",
+          {
+            description:
+              "Read a Swarm artifact: its author, Task, where readers open it, and each delivery that carried it with who it reached and whether the artifact changed since. Use it to decide whom a correction concerns.",
+            inputSchema: { artifactId: z.string() },
+          },
+          async (input) => swarmResult(await invokeSwarm("swarm.artifact.read", input)),
         );
         registerTool(
           "swarm_activity_append",

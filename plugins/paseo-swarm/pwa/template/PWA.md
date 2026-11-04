@@ -24,7 +24,9 @@ message is not by itself a completion signal.
 A report leads with the result and what it means for its reader, then the
 evidence behind it: changed scope, validation, remaining risks, and the
 recommended next step. A manager reporting upward writes its own synthesis
-of what its workers found instead of forwarding their reports. Distinguish
+of what its workers found instead of forwarding their reports. A result
+readers will come back to is published as an artifact that stands on its own:
+the conclusion, the reasons, the uncertainty, and how to use it. Distinguish
 facts from inferences and unresolved questions. Keep project records focused
 on decisions and useful evidence rather than a transcript of every turn.
 

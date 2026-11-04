@@ -97,11 +97,16 @@ Project
 │   └── Paseo agent reference
 ├── Paseo Workspace view
 │   └── derived from agent affiliation and hierarchy
-└── Tasks
-    ├── supervisor reference
-    ├── configurable state and data
-    ├── manager + worker names
-    └── Activities
+├── Tasks
+│   ├── supervisor reference
+│   ├── configurable state and data
+│   ├── manager + worker names
+│   └── Activities
+├── Deliveries without a Task (Activities with taskId null)
+└── Artifacts
+    ├── author + optional Task
+    ├── source: workspace, path, attachments
+    └── copy in the swarm directory, with its content hash
 ```
 
 Task 的 workset 是动态查询：`managerName = current agent name`。Supervisor 的 Workspace 视图也是动态查询：读取自己和直接 workers 的 Paseo Workspace affiliation 并求并。一个 supervisor 可以管理多个 Task、使用多个 Workspace；Task 直接保存可读的 worker names。
@@ -152,13 +157,14 @@ UI 侧直接使用 Paseo 提供的 client hooks 和 navigation；server 侧才�
 
 写入的受众（`server/audience.ts`）由工作中的角色决定；planner 不会因为是协调者而成为缺省接收者：
 
-| 写入                                   | 缺省 To         | 缺省 Cc                     |
-| -------------------------------------- | --------------- | --------------------------- |
-| `deliver_task`                         | requester       | owner 的 manager            |
-| `append_activity`                      | 无              | 无                          |
-| 以 wont-do、duplicate、superseded 关闭 | 无              | requester                   |
-| 改写 brief                             | 无              | requester、owner 的 manager |
-| 人在 Task 或 seat 对话中发的消息       | owner 或该 seat | app 缺省 manager，可移除    |
+| 写入                                   | 缺省 To         | 缺省 Cc                      |
+| -------------------------------------- | --------------- | ---------------------------- |
+| `deliver_task`                         | requester       | owner 的 manager             |
+| 不带 Task 的 `deliver_task`            | 必须给出 `to`   | 作者的 manager（未给 cc 时） |
+| `append_activity`                      | 无              | 无                           |
+| 以 wont-do、duplicate、superseded 关闭 | 无              | requester                    |
+| 改写 brief                             | 无              | requester、owner 的 manager  |
+| 人在 Task 或 seat 对话中发的消息       | owner 或该 seat | app 缺省 manager，可移除     |
 
 给出 `to` 或 `cc` 任一个，两个列表就是全部受众，所以 `to: []` 只记录不通知。两种接收者总会被加上：别的 seat 写某个 Task 时的 owner，以及回复所指 Activity 的作者。名字是 seat 或 `human`；human 没有邮箱，它的 seat 对话列出该 seat 发给它的交付。交付、Activity 和 `update_task` 的返回都用 `audience` 列出实际受众；信封的 `addressed` 在有多个读者时说明本份是 to 还是 cc。Cc 只提供上下文：不是新分派，也不要求确认，但仍按今天的方式唤醒接收者。
 
@@ -185,6 +191,18 @@ sequenceDiagram
 ```
 
 并行工作和重试都由 supervisor 通过消息表达，不产生新的 plugin 工作实体。
+
+## 交付与 artifact
+
+交付是一次呈现，artifact 是作者持续维护、读者会回来看的结果。两者分开记录，关系从引用推出，不另建登记。
+
+- **不带 Task 的交付。** `deliver_task` 省略 `taskId` 时，结果发给 `to` 列出的读者（必须给出），未给 `cc` 时抄送作者的 manager。它存为 `taskId: null` 的 delivery Activity，不进看板和 board 读取；seat 读取在 `directDeliveries` 中单独列出，旧客户端读到的 `deliveries` 形状不变。修正用 `revises` 指向作者自己之前的无 Task 交付。`taskState` 和 `status` 只属于 Task。
+- **发布。** `swarm_artifact_publish` 记录 Swarm 推不出来的一件事：作者把自己 workspace 中的这个文件当作维护中的结果。它不通知任何人，也不进 Needs you。同一作者再次发布同一路径就是同一个 artifact；`artifactId` 用来改指路径。attachments 是结果离不开的文件或目录（数据集、脚本），不是工作笔记或 worker 报告。
+- **存放位置。** 作者继续在自己的 workspace 里写。Swarm 把文件和 attachments 复制到 swarm 目录的 `artifacts/<id>/`，保留 workspace 内的相对路径，所以它们之间的相对链接仍然有效。复制发生在发布时、交付引用它时、以及作者每个回合结束时（内容 hash 不变就跳过）。来源 workspace 被归档或文件被删时，副本保持最后的样子。worktree 合并后被删除也不影响读者：读者总是打开副本。只保留当前结果，不保留历史版本。
+- **展示。** swarm 的 `artifacts/` 目录登记为项目中的一个 directory workspace（`<swarm> artifacts`），首次发布时创建，被人归档后下次复制时重建。读者用普通文件面板打开副本，链接形如 `paseo-swarm://file/<artifacts workspace>/<id>/<path>`。
+- **交付引用。** 交付正文链接到副本或作者的源文件时，Activity 的 `artifacts` 记录 artifact id 和交付时的内容 hash（交付前先同步一次）。读者看到的“交付后已更改”就是这个 hash 与当前 hash 不同；它不区分错别字修改，也不意味着通知。要不要再次交付由作者判断，`swarm_artifact_read` 列出每次交付到达了谁。
+
+链接到 artifact 以外的文件只在其 workspace 存在时有效，这是有意的：只有作者声明过的结果才承诺长期可读。
 
 ## Activity 与人工交互
 
