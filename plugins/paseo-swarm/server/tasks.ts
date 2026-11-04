@@ -4,14 +4,23 @@ import { randomUUID } from "node:crypto";
 import {
   agentQualifiedName,
   currentOccupant,
+  HUMAN,
   type Activity,
   type AgentRecord,
+  type AudienceEntry,
   type SwarmState,
   type Task,
 } from "../shared/models";
-import { appendActivityRpc, createTaskRpc, deliverTaskRpc, updateTaskRpc } from "../shared/swarm";
+import {
+  appendActivityRpc,
+  closeTasksRpc,
+  createTaskRpc,
+  deliverTaskRpc,
+  updateTaskRpc,
+} from "../shared/swarm";
 import { newMessage } from "./mail";
 import { flushMailbox } from "./mailbox";
+import { resolveAudience, type Audience } from "./audience";
 import { messagePrompt } from "./prompts";
 import { resolveActivityRefs } from "./refs";
 import { store, type SwarmChange } from "./state";
@@ -131,6 +140,7 @@ interface ActivityInput {
   kind: string;
   body: string;
   data: Record<string, unknown>;
+  audience?: AudienceEntry[];
 }
 
 export function makeActivity(input: ActivityInput, state: Readonly<SwarmState>): Activity {
@@ -147,6 +157,7 @@ export function makeActivity(input: ActivityInput, state: Readonly<SwarmState>):
     body: input.body,
     data: input.data,
     refs: resolveActivityRefs(input.body, state, input.swarmId),
+    ...(input.audience?.length ? { audience: input.audience } : {}),
     createdAt: now(),
   };
 }
@@ -159,6 +170,9 @@ function taskMail(input: {
   kind: string;
   body: string;
   attributes?: Record<string, string | null | undefined>;
+  // The write's audience, when the mail is one copy of an addressed write.
+  audience?: Audience;
+  addressed?: "to" | "cc";
 }): SwarmChange {
   const recipientName = agentQualifiedName(input.recipient);
   return {
@@ -175,6 +189,9 @@ function taskMail(input: {
           id: messageId,
           sender: input.sender,
           recipient: recipientName,
+          to: input.audience?.to,
+          cc: input.audience?.cc,
+          addressed: input.addressed,
           message: input.body,
           taskId: input.taskId,
           attributes: { kind: input.kind, ...input.attributes },
@@ -183,10 +200,40 @@ function taskMail(input: {
   };
 }
 
-function assignment(task: Task, reason?: string): string {
-  return [`# ${task.title}`, "", task.brief, ...(reason ? ["", `Reason: ${reason}`] : [])].join(
-    "\n",
+// One copy of an addressed write to each seat in its audience, each saying whether its reader is
+// in to or cc.
+function addressedMail(
+  audience: Audience,
+  mail: {
+    taskId: string;
+    sender: string;
+    kind: string;
+    body: string;
+    attributes?: Record<string, string | null | undefined>;
+  },
+): SwarmChange[] {
+  return audience.seats.map(({ seat, as }) =>
+    taskMail({ ...mail, recipient: seat, audience, addressed: as }),
   );
+}
+
+// "human" or a seat of the swarm, by its qualified name.
+function requesterName(swarmId: string, name: string, actorName: string): string {
+  return name === HUMAN ? HUMAN : agentQualifiedName(findAgent(swarmId, name, actorName));
+}
+
+// A record may arrive without a brief: its owner writes the account it holds when it next updates
+// or delivers, with no turn of its own for that.
+const NO_BRIEF =
+  "No brief yet. Write the agreement as you hold it when you next update or deliver on this Task.";
+
+function assignment(task: Task, reason?: string): string {
+  return [
+    `# ${task.title}`,
+    "",
+    task.brief || NO_BRIEF,
+    ...(reason ? ["", `Reason: ${reason}`] : []),
+  ].join("\n");
 }
 
 function activeSeat(state: Readonly<SwarmState>, swarmId: string, name: string | null) {
@@ -224,9 +271,11 @@ function describeChanges(changes: FieldChange[], task: Task, reason?: string): s
         return "Brief revised";
       case "resolution":
         if (change.to === null) return "Reopened";
-        return change.to === "duplicate"
-          ? `Closed as a duplicate of ${task.duplicateOf}`
-          : `Closed as ${change.to}`;
+        if (change.to === "duplicate") return `Closed as a duplicate of ${task.duplicateOf}`;
+        if (change.to === "superseded" && task.supersededBy) {
+          return `Closed as superseded by ${task.supersededBy}`;
+        }
+        return `Closed as ${change.to}`;
     }
   });
   return [...lines, ...(reason ? [`Reason: ${reason}`] : [])].join("\n");
@@ -360,6 +409,15 @@ function planUpdate(input: UpdateInput, task: Task, actor: AgentRecord): UpdateP
   } else if (input.duplicateOf) {
     throw refuse("duplicateOf goes with resolution duplicate", "Pass both, or neither.");
   }
+  if (input.supersededBy !== undefined) {
+    if (input.resolution !== "superseded" || input.supersededBy === task.id) {
+      throw refuse(
+        "supersededBy goes with resolution superseded and names another Task",
+        "Pass resolution superseded with the replacing Task's id, or leave supersededBy out.",
+      );
+    }
+    findTask(task.swarmId, input.supersededBy);
+  }
   const owner = newOwner ?? activeSeat(store.read(), task.swarmId, task.managerName);
   if (input.workerNames !== undefined) {
     if (!owner) {
@@ -374,7 +432,30 @@ function planUpdate(input: UpdateInput, task: Task, actor: AgentRecord): UpdateP
   return { newOwner, workerNames };
 }
 
-function applyUpdate(current: Task, input: UpdateInput, plan: UpdatePlan, timestamp: string) {
+// The owner confirms a brief by writing it, even unchanged; a brief another seat wrote waits for
+// that. A new owner takes the Task as an assignment, brief included.
+function confirmBrief(
+  next: Task,
+  input: UpdateInput,
+  changed: FieldChange[],
+  actorName: string,
+  reassigned: boolean,
+): void {
+  if (input.brief !== undefined && actorName === next.managerName) {
+    delete next.briefUnconfirmedBy;
+  } else if (changed.some((change) => change.field === "brief")) {
+    next.briefUnconfirmedBy = actorName;
+  }
+  if (reassigned && next.managerName !== actorName) delete next.briefUnconfirmedBy;
+}
+
+function applyUpdate(
+  current: Task,
+  input: UpdateInput,
+  plan: UpdatePlan,
+  timestamp: string,
+  actorName: string,
+) {
   const changed: FieldChange[] = [];
   const next: Task = { ...current, updatedAt: timestamp };
   if (plan.newOwner) {
@@ -398,20 +479,70 @@ function applyUpdate(current: Task, input: UpdateInput, plan: UpdatePlan, timest
     changed.push({ field: "resolution", from: current.resolution ?? null, to: input.resolution });
     delete next.resolution;
     delete next.resolvedAt;
+    delete next.resolvedBy;
     delete next.duplicateOf;
+    delete next.supersededBy;
     if (input.resolution) {
       next.resolution = input.resolution;
       next.resolvedAt = timestamp;
+      next.resolvedBy = actorName;
       if (input.duplicateOf) next.duplicateOf = input.duplicateOf;
+      if (input.supersededBy) next.supersededBy = input.supersededBy;
     }
   }
   if (plan.workerNames !== undefined) next.workerNames = plan.workerNames;
   if (input.data !== undefined) next.data = input.data;
+  confirmBrief(next, input, changed, actorName, plan.newOwner !== null);
   return { next, changed };
 }
 
-// The change Activity for formal changes, the new owner's assignment, and word to an owner that
-// did not make the change.
+// Changes the change Activity does not record, which the owner still hears of.
+function informationalChanges(next: Task, plan: UpdatePlan, input: UpdateInput): string[] {
+  return [
+    ...(plan.workerNames !== undefined
+      ? [`Workers: ${next.workerNames.join(", ") || "none"}`]
+      : []),
+    ...(input.data !== undefined ? ["Data replaced"] : []),
+  ];
+}
+
+// Who hears of an update: the owner when another seat made it; the requester, in cc, when the
+// Task closes without a result, since otherwise the asker never learns the work was dropped; and
+// the requester and the owner's manager, in cc, when the brief changes, since a changed agreement
+// is news to both even when someone else authorized it.
+function changeAudience(input: {
+  state: Readonly<SwarmState>;
+  current: Task;
+  changed: FieldChange[];
+  actorName: string;
+  ownerTold: boolean;
+}): Audience {
+  const { state, current, changed, actorName, ownerTold } = input;
+  const closed = changed.some(
+    (change) => change.field === "resolution" && change.to !== null && change.to !== "done",
+  );
+  const briefChanged = changed.some((change) => change.field === "brief");
+  const requester = { name: current.requester ?? current.createdBy, why: "requester" as const };
+  const manager = activeSeat(state, current.swarmId, current.managerName)?.reportsTo;
+  return resolveAudience({
+    state,
+    swarmId: current.swarmId,
+    actorName,
+    always:
+      current.managerName !== actorName && ownerTold
+        ? [{ name: current.managerName, why: "owner" }]
+        : [],
+    defaults: {
+      cc: [
+        ...(closed || briefChanged ? [requester] : []),
+        ...(briefChanged && manager ? [{ name: manager, why: "manager" as const }] : []),
+      ],
+    },
+  });
+}
+
+// The change Activity for formal changes, the new owner's assignment, word to an owner that did
+// not make the change, and a copy to the requester when the Task closes without a result.
 function updateRecords(input: {
   state: Readonly<SwarmState>;
   current: Task;
@@ -420,19 +551,40 @@ function updateRecords(input: {
   input: UpdateInput;
   actor: AgentRecord;
   plan: UpdatePlan;
-}): SwarmChange[] {
+}): { records: SwarmChange[]; reached: AudienceEntry[] } {
   const { state, current, next, changed, actor, plan } = input;
   const { reason } = input.input;
   const actorName = agentQualifiedName(actor);
+  const swarmId = next.swarmId;
   const records: SwarmChange[] = [];
   const summary = changed.length > 0 ? describeChanges(changed, next, reason) : null;
+  const informational = informationalChanges(next, plan, input.input);
+  const assigned =
+    plan.newOwner && agentQualifiedName(plan.newOwner) !== actorName
+      ? resolveAudience({
+          state,
+          swarmId,
+          actorName,
+          always: [{ name: agentQualifiedName(plan.newOwner), why: "owner" }],
+        })
+      : null;
+  const told = changeAudience({
+    state,
+    current,
+    changed,
+    actorName,
+    ownerTold: Boolean(summary) || informational.length > 0,
+  });
+  const reached = [...(assigned?.entries ?? []), ...told.entries].filter(
+    (entry, index, all) => all.findIndex((other) => other.name === entry.name) === index,
+  );
   if (summary) {
     records.push({
       op: "put",
       collection: "activities",
       record: makeActivity(
         {
-          swarmId: next.swarmId,
+          swarmId,
           taskId: next.id,
           actorName,
           actorKind: "agent",
@@ -450,16 +602,16 @@ function updateRecords(input: {
               ? { previousBrief: current.brief }
               : {}),
           },
+          audience: reached,
         },
         state,
       ),
     });
   }
-  if (plan.newOwner && agentQualifiedName(plan.newOwner) !== actorName) {
+  if (assigned) {
     records.push(
-      taskMail({
+      ...addressedMail(assigned, {
         taskId: next.id,
-        recipient: plan.newOwner,
         sender: actorName,
         kind: "task-assigned",
         body: assignment(next, reason),
@@ -467,25 +619,44 @@ function updateRecords(input: {
       }),
     );
   }
-  const previousOwner = activeSeat(state, next.swarmId, current.managerName);
-  const informational = [
-    ...(plan.workerNames !== undefined
-      ? [`Workers: ${next.workerNames.join(", ") || "none"}`]
-      : []),
-    ...(input.input.data !== undefined ? ["Data replaced"] : []),
-  ];
-  if (previousOwner && current.managerName !== actorName && (summary || informational.length)) {
-    records.push(
-      taskMail({
-        taskId: next.id,
-        recipient: previousOwner,
-        sender: actorName,
-        kind: "task-change",
-        body: summary ?? [...informational, ...(reason ? [`Reason: ${reason}`] : [])].join("\n"),
-      }),
+  const newOwnerName = assigned?.to[0];
+  const change = {
+    ...told,
+    seats: told.seats.filter(({ seat }) => agentQualifiedName(seat) !== newOwnerName),
+  };
+  records.push(
+    ...addressedMail(change, {
+      taskId: next.id,
+      sender: actorName,
+      kind: "task-change",
+      body: summary ?? [...informational, ...(reason ? [`Reason: ${reason}`] : [])].join("\n"),
+    }),
+  );
+  return { records, reached };
+}
+
+// A brief rewrite by anyone but the owner names the version it was based on, and any rewrite that
+// names one is refused when the brief changed after it. A late brief never replaces a newer one.
+function assertBriefBase(current: Task, input: UpdateInput, actorName: string): void {
+  if (input.brief === undefined || input.brief === current.brief) return;
+  const base = current.briefUpdatedAt;
+  if (!base) return;
+  const refused = `${actorName} cannot rewrite the brief of Task ${current.id}`;
+  if (input.briefBasedOn === undefined) {
+    if (actorName === current.managerName) return;
+    throw refusal(
+      refused,
+      `a seat other than its owner ${current.managerName} rewrites a brief only from the version it read`,
+      "Read the Task with swarm_task_read and pass its briefUpdatedAt as briefBasedOn.",
     );
   }
-  return records;
+  if (input.briefBasedOn !== base) {
+    throw refusal(
+      refused,
+      `the brief was rewritten at ${base}, after the version you read (${input.briefBasedOn})`,
+      "Read the Task again with swarm_task_read, fold your change into the current brief, and retry once with its briefUpdatedAt as briefBasedOn.",
+    );
+  }
 }
 
 // How long a repeated call counts as a retry of the same submission.
@@ -517,8 +688,96 @@ function retriedDelivery(
   return undefined;
 }
 
+// A delivery goes To whoever asked for the work and Cc the owner's manager, who decides what comes
+// next. The owner always hears of a delivery another seat makes on its Task.
+function deliveryAudience(
+  state: Readonly<SwarmState>,
+  task: Task,
+  actorName: string,
+  input: RpcInput<typeof deliverTaskRpc>,
+): Audience {
+  const manager = activeSeat(state, task.swarmId, task.managerName)?.reportsTo;
+  return resolveAudience({
+    state,
+    swarmId: task.swarmId,
+    actorName,
+    to: input.to,
+    cc: input.cc,
+    defaults: {
+      to: [{ name: task.requester ?? task.createdBy, why: "requester" }],
+      cc: manager ? [{ name: manager, why: "manager" }] : [],
+    },
+    always: [{ name: task.managerName, why: "owner" }],
+  });
+}
+
+// The human's close: resolution done without a delivery, one change Activity per Task, and the
+// owner told unless the close is quiet. Tasks already closed are left alone.
+function humanClose(
+  state: Readonly<SwarmState>,
+  input: RpcInput<typeof closeTasksRpc>,
+  timestamp: string,
+): { changes: SwarmChange[]; closed: string[]; skipped: string[] } {
+  const changes: SwarmChange[] = [];
+  const closed: string[] = [];
+  const skipped: string[] = [];
+  for (const id of new Set(input.taskIds)) {
+    const task = state.tasks.find(
+      (candidate) => candidate.swarmId === input.swarmId && candidate.id === id,
+    );
+    if (!task) throw new Error(`Unknown Task: ${id}`);
+    if (task.resolution) {
+      skipped.push(id);
+      continue;
+    }
+    const next: Task = {
+      ...task,
+      resolution: "done",
+      resolvedAt: timestamp,
+      resolvedBy: HUMAN,
+      updatedAt: timestamp,
+    };
+    const changed: FieldChange[] = [{ field: "resolution", from: null, to: "done" }];
+    const owner = input.quiet ? undefined : activeSeat(state, task.swarmId, task.managerName);
+    const audience: AudienceEntry[] = owner
+      ? [{ name: task.managerName, as: "to", why: "owner" }]
+      : [];
+    const body = describeChanges(changed, next, input.reason);
+    changes.push(
+      { op: "put", collection: "tasks", record: next },
+      {
+        op: "put",
+        collection: "activities",
+        record: makeActivity(
+          {
+            swarmId: task.swarmId,
+            taskId: task.id,
+            actorName: HUMAN,
+            actorKind: "human",
+            replyTo: null,
+            responseProfile: null,
+            kind: CHANGE,
+            body,
+            data: { changes: changed, reason: input.reason },
+            audience,
+          },
+          state,
+        ),
+      },
+    );
+    if (owner) {
+      changes.push(
+        taskMail({ taskId: task.id, recipient: owner, sender: HUMAN, kind: "task-change", body }),
+      );
+    }
+    closed.push(id);
+  }
+  return { changes, closed, skipped };
+}
+
 export function registerTasks(server: Pick<PluginServerContext, "handle">): void {
   // Creating a Task for another seat is its assignment: the owner gets the brief in its mailbox.
+  // With assign: false it records work the owner already has, and the owner gets a record notice.
   server.handle(
     createTaskRpc,
     async (input: RpcInput<typeof createTaskRpc>, context: PluginHandlerContext) => {
@@ -536,8 +795,19 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
       const ownerName = agentQualifiedName(owner);
       assertOwnable(owner, actor, input.id, store.read());
       const workerNames = resolveTaskWorkers(input.workerNames, owner);
+      const requester = requesterName(swarmId, input.requester ?? actorName, actorName);
+      const recording = !input.assign && ownerName !== actorName;
+      // Only a record may wait for its owner's account of the work.
+      if (input.brief === undefined && !recording) {
+        throw refusal(
+          `${actorName} cannot create Task ${input.id} without a brief`,
+          "only work recorded for another seat (assign: false) may wait for its owner's brief",
+          "Write the brief: objective, scope, constraints, acceptance criteria, and conditions still open.",
+        );
+      }
       const timestamp = now();
       let result!: Task;
+      let audience: Audience | undefined;
       await store.commit((state) => {
         if (state.tasks.some((task) => task.swarmId === swarmId && task.id === input.id)) {
           throw new Error(`Task id already exists: ${input.id}`);
@@ -546,33 +816,43 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
           id: input.id,
           swarmId,
           title: input.title,
-          brief: input.brief,
+          brief: input.brief ?? "",
           status: input.status,
           managerName: ownerName,
           workerNames,
           createdBy: actorName,
+          requester,
           data: input.data,
           briefUpdatedAt: timestamp,
+          ...(recording && input.brief !== undefined ? { briefUnconfirmedBy: actorName } : {}),
           createdAt: timestamp,
           updatedAt: timestamp,
         };
         const changes: SwarmChange[] = [{ op: "put", collection: "tasks", record: result }];
         if (ownerName !== actorName) {
+          audience = resolveAudience({
+            state,
+            swarmId,
+            actorName,
+            always: [{ name: ownerName, why: "owner" }],
+          });
           changes.push(
-            taskMail({
+            ...addressedMail(audience, {
               taskId: result.id,
-              recipient: owner,
               sender: actorName,
-              kind: "task-assigned",
+              kind: recording ? "task-recorded" : "task-assigned",
               body: assignment(result),
-              attributes: { status: result.status },
+              attributes: {
+                status: result.status,
+                requester: requester === actorName ? undefined : requester,
+              },
             }),
           );
         }
         return changes;
       });
-      if (ownerName !== actorName) await deliverMail(context);
-      return result;
+      if (audience) await deliverMail(context);
+      return { ...result, ...(audience ? { audience: audience.entries } : {}) };
     },
   );
 
@@ -585,26 +865,48 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
       assertOnLine(task, actor, "update");
       const plan = planUpdate(input, task, actor);
       let result!: Task;
+      let reached: AudienceEntry[] = [];
       await store.commit((state) => {
         const current = state.tasks.find(
           (candidate) => candidate.swarmId === swarmId && candidate.id === task.id,
         );
         if (!current) throw new Error(`Unknown Task: ${task.id}`);
-        const { next, changed } = applyUpdate(current, input, plan, now());
+        assertBriefBase(current, input, agentQualifiedName(actor));
+        const { next, changed } = applyUpdate(
+          current,
+          input,
+          plan,
+          now(),
+          agentQualifiedName(actor),
+        );
         result = next;
-        return [
-          { op: "put", collection: "tasks", record: next },
-          ...updateRecords({ state, current, next, changed, input, actor, plan }),
-        ];
+        const written = updateRecords({ state, current, next, changed, input, actor, plan });
+        reached = written.reached;
+        return [{ op: "put", collection: "tasks", record: next }, ...written.records];
       });
       await deliverMail(context);
-      return result;
+      return { ...result, audience: reached };
     },
   );
 
   // One call records a result: the delivery Activity, the Task state it leaves the Task in, and
   // word to the owner's line. taskState is the state after the delivery, so a correction that
   // invalidates a finished result reopens the Task in the same commit.
+  server.handle(
+    closeTasksRpc,
+    async (input: RpcInput<typeof closeTasksRpc>, context: PluginHandlerContext) => {
+      findSwarm(input.swarmId);
+      let result!: { closed: string[]; skipped: string[] };
+      await store.commit((state) => {
+        const { changes, ...outcome } = humanClose(state, input, now());
+        result = outcome;
+        return changes;
+      });
+      if (!input.quiet && result.closed.length > 0) await deliverMail(context);
+      return result;
+    },
+  );
+
   server.handle(
     deliverTaskRpc,
     async (input: RpcInput<typeof deliverTaskRpc>, context: PluginHandlerContext) => {
@@ -640,13 +942,20 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
         const timestamp = now();
         const next: Task = { ...current, updatedAt: timestamp };
         if (input.status !== undefined) next.status = input.status;
+        // A delivery by the owner confirms the brief it worked from.
+        if (actorName === current.managerName) delete next.briefUnconfirmedBy;
+        const audience = deliveryAudience(state, current, actorName, input);
         const reopened = input.taskState === "open" && current.resolution !== undefined;
         delete next.resolution;
         delete next.resolvedAt;
+        delete next.resolvedBy;
         delete next.duplicateOf;
+        delete next.supersededBy;
         if (input.taskState === "done") {
+          const already = current.resolution === "done";
           next.resolution = "done";
-          next.resolvedAt = current.resolution === "done" ? current.resolvedAt : timestamp;
+          next.resolvedAt = already ? current.resolvedAt : timestamp;
+          next.resolvedBy = already ? (current.resolvedBy ?? actorName) : actorName;
         }
         const activity = makeActivity(
           {
@@ -668,6 +977,7 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
                 : {}),
               ...(input.revises ? { revises: input.revises } : {}),
             },
+            audience: audience.entries,
           },
           state,
         );
@@ -676,30 +986,21 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
           { op: "put", collection: "tasks", record: next },
           { op: "put", collection: "activities", record: activity },
         ];
-        // The owner, when someone above it delivers, and the owner's manager.
-        const owner = activeSeat(state, swarmId, current.managerName);
-        const recipients = [owner, activeSeat(state, swarmId, owner?.reportsTo ?? null)].filter(
-          (seat): seat is AgentRecord =>
-            seat !== undefined && agentQualifiedName(seat) !== actorName,
+        changes.push(
+          ...addressedMail(audience, {
+            taskId: next.id,
+            sender: actorName,
+            kind: DELIVERY,
+            body: input.result,
+            attributes: {
+              activity: activity.id,
+              "task-state": input.taskState,
+              reopened: reopened ? current.resolution : undefined,
+              status: next.status,
+              revises: input.revises,
+            },
+          }),
         );
-        for (const recipient of new Set(recipients)) {
-          changes.push(
-            taskMail({
-              taskId: next.id,
-              recipient,
-              sender: actorName,
-              kind: DELIVERY,
-              body: input.result,
-              attributes: {
-                activity: activity.id,
-                "task-state": input.taskState,
-                reopened: reopened ? current.resolution : undefined,
-                status: next.status,
-                revises: input.revises,
-              },
-            }),
-          );
-        }
         return changes;
       });
       await deliverMail(context);
@@ -707,40 +1008,85 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
     },
   );
 
-  server.handle(appendActivityRpc, async (input: RpcInput<typeof appendActivityRpc>) => {
-    const swarmId = actorSwarmId(input, input.actorName);
-    const task = findTask(swarmId, input.taskId);
-    const actor = findAgent(swarmId, input.actorName);
-    const actorName = agentQualifiedName(actor);
-    assertOnLine(task, actor, "append an Activity to");
-    if (input.kind === DELIVERY) {
-      throw refusal(
-        `${actorName} cannot append a delivery Activity`,
-        "results are recorded by swarm_task_deliver, which also sets the Task's state",
-        "Call swarm_task_deliver with the result.",
-      );
-    }
-    if (input.kind === CHANGE) {
-      throw refusal(
-        `${actorName} cannot append a change Activity`,
-        "Swarm writes change Activities when owner, status, resolution, title or brief change",
-        "Make the change with swarm_task_update; append a decision only to explain what the change doesn't.",
-      );
-    }
-    let result!: Activity;
-    await store.commit((state) => {
-      result = makeActivity(
-        {
-          ...input,
+  // An Activity is on the record; it reaches someone only when addressed, when it answers an
+  // asker, or when a seat above the owner writes it.
+  server.handle(
+    appendActivityRpc,
+    async (input: RpcInput<typeof appendActivityRpc>, context: PluginHandlerContext) => {
+      const swarmId = actorSwarmId(input, input.actorName);
+      const task = findTask(swarmId, input.taskId);
+      const actor = findAgent(swarmId, input.actorName);
+      const actorName = agentQualifiedName(actor);
+      assertOnLine(task, actor, "append an Activity to");
+      if (input.kind === DELIVERY) {
+        throw refusal(
+          `${actorName} cannot append a delivery Activity`,
+          "results are recorded by swarm_task_deliver, which also sets the Task's state",
+          "Call swarm_task_deliver with the result.",
+        );
+      }
+      if (input.kind === CHANGE) {
+        throw refusal(
+          `${actorName} cannot append a change Activity`,
+          "Swarm writes change Activities when owner, status, resolution, title or brief change",
+          "Make the change with swarm_task_update; append a decision only to explain what the change doesn't.",
+        );
+      }
+      const { to, cc, ...fields } = input;
+      let result!: Activity;
+      let audience!: Audience;
+      await store.commit((state) => {
+        const asked = input.replyTo
+          ? state.activities.find(
+              (activity) => activity.swarmId === swarmId && activity.id === input.replyTo,
+            )
+          : undefined;
+        audience = resolveAudience({
+          state,
           swarmId,
           actorName,
-          actorKind: "agent",
-          actorOccupant: currentOccupant(actor).number,
-        },
-        state,
-      );
-      return [{ op: "put", collection: "activities", record: result }];
-    });
-    return result;
-  });
+          to,
+          cc,
+          always: [
+            { name: task.managerName, why: "owner" },
+            ...(asked
+              ? [
+                  {
+                    name: asked.actorKind === "human" ? HUMAN : asked.actorName,
+                    why: "asker" as const,
+                  },
+                ]
+              : []),
+          ],
+        });
+        result = makeActivity(
+          {
+            ...fields,
+            swarmId,
+            actorName,
+            actorKind: "agent",
+            actorOccupant: currentOccupant(actor).number,
+            audience: audience.entries,
+          },
+          state,
+        );
+        return [
+          { op: "put", collection: "activities", record: result },
+          ...addressedMail(audience, {
+            taskId: task.id,
+            sender: actorName,
+            kind: "activity",
+            body: result.body,
+            attributes: {
+              activity: result.id,
+              "activity-kind": result.kind,
+              "reply-to": result.replyTo,
+            },
+          }),
+        ];
+      });
+      if (audience.seats.length > 0) await deliverMail(context);
+      return result;
+    },
+  );
 }

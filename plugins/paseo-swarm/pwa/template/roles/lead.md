@@ -15,6 +15,10 @@ refine, request a decision, or deliver the result with `swarm_task_deliver`.
 Rewrite the brief only when the agreement changes. Escalate blockers, scope changes,
 and policy questions with concrete options and a recommendation.
 
+Owning work does not call for a Task; the coordinator decides what goes on the
+board. Tell your manager what you took on, and when it is recorded, keep
+working and correct its brief if it differs from what you agreed.
+
 Use only the status values declared in the project PWA. Runtime idle, turn
 completion, and message delivery do not advance a Task; update its status from
 the evidence you have understood. A regression that invalidates a delivered

@@ -90,6 +90,11 @@ const taskSchema = z.object({
   attention: z.number(),
   // Absent while the Task is open, and on hosts from before resolutions.
   resolution: z.string().optional(),
+  // Absent while the Task is open, and on hosts from before the board views.
+  resolvedAt: z.string().optional(),
+  resolvedBy: z.string().optional(),
+  duplicateOf: z.string().optional(),
+  supersededBy: z.string().optional(),
 });
 const activitySchema = z.object({
   id: z.string(),
@@ -102,6 +107,10 @@ const activitySchema = z.object({
   body: z.string(),
   data: z.record(z.string(), z.unknown()),
   refs: z.array(referenceSchema),
+  // Who the write reached; absent when it reached no one, and on hosts from before addressing.
+  audience: z
+    .array(z.object({ name: z.string(), as: z.enum(["to", "cc"]), why: z.string() }))
+    .optional(),
   createdAt: z.string(),
 });
 export const swarmHumanActivityReceiptSchema = activitySchema.extend({
@@ -126,12 +135,21 @@ export const swarmTaskDetailSchema = z.object({
     // Absent while the Task is open, and on hosts from before resolutions.
     resolution: z.string().optional(),
     duplicateOf: z.string().optional(),
+    supersededBy: z.string().optional(),
     // When the brief last changed; absent on hosts from before it was recorded.
     briefUpdatedAt: z.string().optional(),
+    // Who asked for the work; absent on older Tasks, which read as createdBy.
+    requester: z.string().optional(),
+    // The seat whose brief the owner has not confirmed yet.
+    briefUnconfirmedBy: z.string().optional(),
   }),
   activities: z.array(activitySchema),
   // Earlier Activities the read left out; unanswered choices are always included.
   olderCount: z.number(),
+  // Tasks closed as a duplicate of this one or superseded by it; absent on older hosts.
+  absorbed: z
+    .array(z.object({ id: z.string(), title: z.string(), resolution: z.string() }))
+    .optional(),
 });
 export type SwarmTaskDetail = z.infer<typeof swarmTaskDetailSchema>;
 export type SwarmActivity = SwarmTaskDetail["activities"][number];
@@ -651,3 +669,33 @@ export function openSwarmTaskSurfaceState() {
   };
 }
 export type SwarmTaskSurfaceState = ReturnType<typeof openSwarmTaskSurfaceState>;
+
+// The To and Cc names of an Activity, or null when it reached no one.
+export function swarmAudience(
+  activity: Pick<SwarmActivity, "audience">,
+): { to: string[]; cc: string[] } | null {
+  if (!activity.audience?.length) return null;
+  return {
+    to: activity.audience.filter((entry) => entry.as === "to").map((entry) => entry.name),
+    cc: activity.audience.filter((entry) => entry.as === "cc").map((entry) => entry.name),
+  };
+}
+
+// The current board's two lanes: open Tasks in their status columns, and closed ones (done
+// recently, or still waiting on a human choice), newest closure first.
+export function partitionSwarmTasks(tasks: readonly SwarmTask[]): {
+  open: SwarmTask[];
+  closed: SwarmTask[];
+} {
+  return {
+    open: tasks.filter((task) => !task.resolution),
+    closed: tasks
+      .filter((task) => task.resolution)
+      .sort((left, right) => (right.resolvedAt ?? "").localeCompare(left.resolvedAt ?? "")),
+  };
+}
+
+// How many choices on these Tasks wait for the human.
+export function swarmAttentionTotal(tasks: readonly Pick<SwarmTask, "attention">[]): number {
+  return tasks.reduce((total, task) => total + task.attention, 0);
+}

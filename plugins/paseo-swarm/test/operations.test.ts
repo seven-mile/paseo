@@ -35,6 +35,7 @@ import {
   pwaSourceReadRpc,
   pwaRolesReadRpc,
   refreshPromptRpc,
+  SWARM_FEATURES,
 } from "../shared/swarm";
 
 async function seed(seeded: Seeded, options?: { stamp: boolean }): Promise<void> {
@@ -58,7 +59,7 @@ function boardOf({ messages: _messages, intents: _intents, ...board }: Readonly<
     ...board,
     agents: board.agents.filter((agent) => agent.paseoAgentId !== null).map(seatView),
     swarms: board.swarms.map(({ id, name, projectId }) => ({ id, name, projectId })),
-    features: ["cc"],
+    features: SWARM_FEATURES,
   };
 }
 

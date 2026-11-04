@@ -123,7 +123,7 @@ test("the seat read carries one seat's occupants, retired seats included", async
     assert.equal(first.data?.seat?.name, "gone");
     assert.equal(first.data?.seat?.occupant?.number, 2);
     assert.deepEqual(await read("gone-record", first.etag), { etag: first.etag, data: null });
-    assert.deepEqual((await read("missing")).data, { seat: null });
+    assert.deepEqual((await read("missing")).data, { seat: null, deliveries: [] });
   });
 });
 
@@ -271,5 +271,51 @@ test("a Task read returns its latest Activities and every unanswered choice and 
     assert.equal(all.data?.olderCount, 0);
     assert.deepEqual(await read({ etag: all.etag }), { etag: all.etag, data: null });
     await assert.rejects(async () => read({ taskId: "missing" }), /Unknown Task/);
+  });
+});
+
+test("the current board keeps open, recently done and waiting Tasks; history pages the rest", async () => {
+  await withHandlers(async (invoke) => {
+    const now = Date.now();
+    const ago = (days: number) => new Date(now - days * 24 * 60 * 60_000).toISOString();
+    const closed = (id: string, resolution: Task["resolution"], days: number): Task => ({
+      ...task(id),
+      resolution,
+      resolvedAt: ago(days),
+      resolvedBy: "manager",
+    });
+    await seed({
+      agents: [seat("manager")],
+      tasks: [
+        task("open"),
+        closed("fresh", "done", 1),
+        closed("stale", "done", 10),
+        closed("dropped", "wont-do", 1),
+        { ...closed("merged", "duplicate", 2), duplicateOf: "open" },
+        closed("asking", "done", 30),
+      ],
+      activities: [activity("question", "asking", { data: choice })],
+    });
+    const read = async (input: Record<string, unknown>) =>
+      tasksReadRpc.output
+        .parse(await invoke(tasksReadRpc.name, { projectId: "project", ...input }))
+        .data!.tasks.map((summary) => summary.id);
+
+    assert.deepEqual(await read({ view: "current" }), ["open", "fresh", "asking"]);
+    assert.deepEqual(await read({ view: "history" }), ["dropped", "merged", "stale"]);
+    assert.deepEqual(await read({ view: "history", query: "stale" }), ["stale"]);
+    assert.deepEqual(await read({ view: "history", limit: 1 }), ["dropped"]);
+    // COMPAT: a read without a view lists every Task, as older apps expect.
+    assert.equal((await read({})).length, 6);
+
+    const detail = taskReadRpc.output.parse(
+      await invoke(taskReadRpc.name, {
+        swarmId: store.read().tasks[0].swarmId,
+        taskId: "open",
+      }),
+    );
+    assert.deepEqual(detail.data?.absorbed, [
+      { id: "merged", title: "Task merged", resolution: "duplicate" },
+    ]);
   });
 });

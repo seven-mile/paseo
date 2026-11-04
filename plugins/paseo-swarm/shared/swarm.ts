@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   activitySchema,
   agentRecordSchema,
+  audienceEntrySchema,
   mailboxMessageSchema,
   mailboxStatusSchema,
   responseProfileSchema,
@@ -134,7 +135,10 @@ const swarmRefSchema = z.object({
 
 // Swarm features this host supports. A client offers a feature only when its name is listed;
 // absent on hosts from before the list. "cc": messages and human notes take a cc list.
-export const SWARM_FEATURES = ["cc"];
+// "addressing": writes report their audience, and the seat read lists deliveries to the human.
+// "board": the Task list reads its current view and a searchable history.
+// "close": the human closes open Tasks as done without a delivery (swarm.tasks.close).
+export const SWARM_FEATURES = ["cc", "addressing", "board", "close"];
 const featuresSchema = z.array(z.string()).optional();
 
 // What a list or a link needs of a seat: no prompt receipts, occupant history or agent config.
@@ -165,6 +169,10 @@ export const taskSummarySchema = taskSchema
     createdBy: true,
     updatedAt: true,
     resolution: true,
+    resolvedAt: true,
+    resolvedBy: true,
+    duplicateOf: true,
+    supersededBy: true,
   })
   .extend({ attention: z.number().int().nonnegative() });
 
@@ -183,9 +191,21 @@ export const rosterReadRpc = defineRpc({
 
 // The Task list of one swarm, or of every swarm when the request names none. Activities are read
 // per Task.
+// The board's views. current: open Tasks, Tasks done in the last few days, and any Task with a
+// choice waiting for a human, whatever its age or resolution. history: every other closed Task,
+// newest first, matching query. Without a view the list has every Task, as older clients expect.
+export const DELIVERED_WINDOW_MS = 3 * 24 * 60 * 60_000;
+export const TASK_HISTORY_PAGE = 50;
+
 export const tasksReadRpc = defineRpc({
   name: "swarm.tasks.read",
-  input: z.object({ ...swarmScopeSchema, ...etagInputSchema }),
+  input: z.object({
+    ...swarmScopeSchema,
+    ...etagInputSchema,
+    view: z.enum(["current", "history"]).optional(),
+    query: z.string().optional(),
+    limit: z.number().int().positive().max(200).optional(),
+  }),
   output: conditionalOutput(
     z.object({
       agents: z.array(seatSummarySchema),
@@ -198,12 +218,30 @@ export const tasksReadRpc = defineRpc({
   ),
 });
 
+// A delivery the seat addressed to the human, as its conversation lists it.
+export const seatDeliverySchema = z.object({
+  activityId: z.string(),
+  swarmId: z.string(),
+  taskId: z.string(),
+  taskTitle: z.string(),
+  as: z.enum(["to", "cc"]),
+  taskState: z.string().optional(),
+  body: z.string(),
+  createdAt: z.string(),
+});
+
 // One seat with its occupants, retired seats included: a seat tab. Data is a null seat when no
 // seat has this id.
 export const seatReadRpc = defineRpc({
   name: "swarm.seat.read",
   input: z.object({ seatId: z.string().min(1), ...etagInputSchema }),
-  output: conditionalOutput(z.object({ seat: seatSchema.nullable() })),
+  output: conditionalOutput(
+    z.object({
+      seat: seatSchema.nullable(),
+      // The newest deliveries this seat addressed to the human. Absent from older hosts.
+      deliveries: z.array(seatDeliverySchema).optional(),
+    }),
+  ),
 });
 
 export const TASK_ACTIVITY_PAGE = 100;
@@ -225,6 +263,10 @@ export const taskReadRpc = defineRpc({
       activities: z.array(activitySchema),
       // Activities before the oldest one returned, other than unanswered choices.
       olderCount: z.number().int().nonnegative(),
+      // Tasks closed as a duplicate of this one or superseded by it. Absent from older hosts.
+      absorbed: z
+        .array(z.object({ id: z.string(), title: z.string(), resolution: z.string() }))
+        .optional(),
     }),
   ),
 });
@@ -300,14 +342,20 @@ export const createTaskRpc = defineRpc({
     swarmId: z.string().min(1).optional(),
     id: slugNameSchema,
     title: z.string().min(1),
-    brief: z.string().min(1),
+    // Required, except on a record (assign: false), which may leave it to the owner. The Task then
+    // stores an empty brief until the owner writes one.
+    brief: z.string().min(1).optional(),
     status: z.string().min(1),
     managerName: z.string().min(1),
     workerNames: z.array(z.string()).default([]),
     createdBy: z.string().min(1),
     data: z.record(z.string(), z.unknown()).default({}),
+    // Who asked for the work: "human" or a seat. Defaults to createdBy.
+    requester: z.string().min(1).optional(),
+    // false records work the owner already has: it gets a record notice, not an assignment.
+    assign: z.boolean().default(true),
   }),
-  output: taskSchema,
+  output: taskSchema.extend({ audience: z.array(audienceEntrySchema).optional() }),
 });
 
 // The owner and every seat above it may update a Task. A new managerName reassigns it; a
@@ -326,10 +374,24 @@ export const updateTaskRpc = defineRpc({
     managerName: z.string().min(1).optional(),
     resolution: taskResolutionSchema.nullable().optional(),
     duplicateOf: slugNameSchema.optional(),
+    // With resolution superseded: the Task that replaces this one.
+    supersededBy: slugNameSchema.optional(),
     reason: z.string().min(1).optional(),
+    // The briefUpdatedAt the writer read. A brief rewrite by anyone but the owner needs it, and a
+    // rewrite is refused when the brief changed after it.
+    briefBasedOn: z.string().min(1).optional(),
   }),
-  output: taskSchema,
+  // Who the change reached: the owner when another seat made it, a new owner, and the requester
+  // when the Task closes without a result.
+  output: taskSchema.extend({ audience: z.array(audienceEntrySchema).optional() }),
 });
+
+// Who a write goes to. Omit both for the defaults; give either and the two lists are the whole
+// audience, so to: [] records without telling anyone. Names are seats, or "human".
+const audienceInputSchema = {
+  to: z.array(z.string().min(1)).optional(),
+  cc: z.array(z.string().min(1)).optional(),
+};
 
 // The one way a result is recorded: a delivery Activity, with the Task's status and state changed
 // in the same commit. taskState is the Task's state after the delivery: done closes it, open keeps
@@ -345,6 +407,7 @@ export const deliverTaskRpc = defineRpc({
     taskState: z.enum(["done", "open"]),
     status: z.string().min(1).optional(),
     revises: z.string().min(1).nullable().default(null),
+    ...audienceInputSchema,
   }),
   output: z.object({ task: taskSchema, activity: activitySchema, duplicate: z.boolean() }),
 });
@@ -360,8 +423,27 @@ export const appendActivityRpc = defineRpc({
     kind: z.string().min(1),
     body: z.string().min(1),
     data: z.record(z.string(), z.unknown()).default({}),
+    ...audienceInputSchema,
   }),
   output: activitySchema,
+});
+
+// The human closes open Tasks as done without a delivery: accepting work as it stands, or clearing
+// Tasks finished before Swarm recorded results. Each gets a change Activity with the reason. Owners
+// hear of it unless quiet, which is for clearing old Tasks. Closing never interrupts a turn.
+export const closeTasksRpc = defineRpc({
+  name: "swarm.tasks.close",
+  input: z.object({
+    swarmId: z.string().min(1),
+    taskIds: z.array(slugNameSchema).min(1).max(500),
+    reason: z.string().min(1),
+    quiet: z.boolean().default(false),
+  }),
+  output: z.object({
+    closed: z.array(slugNameSchema),
+    // Tasks that were already closed, left as they are.
+    skipped: z.array(slugNameSchema),
+  }),
 });
 
 export const appendHumanActivityRpc = defineRpc({
@@ -405,6 +487,8 @@ export const sendMessageRpc = defineRpc({
         z.object({ recipient: z.string(), messageId: z.string(), status: mailboxStatusSchema }),
       )
       .optional(),
+    // Absent from hosts before addressing.
+    audience: z.array(audienceEntrySchema).optional(),
   }),
 });
 

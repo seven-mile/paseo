@@ -38,9 +38,12 @@ import { deriveSidebarStateBucket } from "@/utils/sidebar-agent-state";
 import { formatTimeAgo } from "@/utils/time";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
-import { useSwarmSeat, type SwarmSeat } from "./roster";
+import { SwarmCcLine } from "./cc-line";
+import { openSwarmTasks } from "./navigation";
+import { useSwarmRoster, useSwarmSeat, type SeatDelivery, type SwarmSeat } from "./roster";
 import { useSeatAgentTimeline } from "./seat-agent-timeline";
 import { sendSeatMail, seatRecipient, useUndeliveredSeatMail } from "./seat-mail";
+import { defaultSwarmCc } from "./task-model";
 import {
   latestHandover,
   seatConversationAgentId,
@@ -74,7 +77,7 @@ export function SeatConversation({
 }) {
   const { t } = useTranslation();
   const plugin = useInstalledPlugin(serverId, "paseo-swarm");
-  const { seat, isPending, error } = useSwarmSeat(plugin, seatId);
+  const { seat, deliveries, isPending, error } = useSwarmSeat(plugin, seatId);
   if (!plugin) return <SeatMessage text={t("swarm.tasks.swarmUnavailable")} />;
   if (!seat) {
     if (isPending) return <SeatMessage text={t("swarm.seat.loading")} />;
@@ -84,6 +87,7 @@ export function SeatConversation({
     <SeatConversationContent
       plugin={plugin}
       seat={seat}
+      deliveries={deliveries}
       workspaceId={workspaceId}
       isPaneFocused={isPaneFocused}
       onOpenWorkspaceFile={onOpenWorkspaceFile}
@@ -91,15 +95,40 @@ export function SeatConversation({
   );
 }
 
+const NO_CC: string[] = [];
+
+// Who the person's messages to the seat are copied to: the seat's manager by default, so steering
+// a seat directly does not leave its manager out. Removing it holds for this conversation until
+// the default is offered again.
+function useSeatCc(plugin: InstalledPlugin, seat: SwarmSeat) {
+  const roster = useSwarmRoster(plugin).data;
+  const recipient = seatRecipient(seat);
+  const supported = roster?.features?.includes("cc") ?? false;
+  const defaultCc = useMemo(
+    () => (supported && roster ? defaultSwarmCc(roster.agents, recipient) : NO_CC),
+    [recipient, roster, supported],
+  );
+  const [chosen, setChosen] = useState<{ seatId: string; cc: string[] } | null>(null);
+  const cc = chosen?.seatId === seat.id ? chosen.cc : defaultCc;
+  const remove = useCallback(
+    (name: string) => setChosen({ seatId: seat.id, cc: cc.filter((entry) => entry !== name) }),
+    [cc, seat.id],
+  );
+  const restore = useCallback(() => setChosen(null), []);
+  return { supported, cc, defaultCc, remove, restore };
+}
+
 function SeatConversationContent({
   plugin,
   seat,
+  deliveries,
   workspaceId,
   isPaneFocused,
   onOpenWorkspaceFile,
 }: {
   plugin: InstalledPlugin;
   seat: SwarmSeat;
+  deliveries: SeatDelivery[];
   workspaceId: string | null;
   isPaneFocused: boolean;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
@@ -120,19 +149,37 @@ function SeatConversationContent({
   const mail = useUndeliveredSeatMail(plugin, seat, active);
   const name = seatRecipient(seat);
 
+  const copies = useSeatCc(plugin, seat);
   const seatRef = useRef(seat);
   seatRef.current = seat;
+  const ccRef = useRef(copies.cc);
+  ccRef.current = copies.cc;
   const submit = useCallback(
     async ({ text, attachments }: MessagePayload) => {
       if (attachments.length > 0) throw new Error(t("swarm.seat.textOnly"));
-      await sendSeatMail(plugin, seatRef.current, text);
+      await sendSeatMail(plugin, seatRef.current, text, ccRef.current);
     },
     [plugin, t],
   );
   const showCurrent = useCallback(() => setViewedAgentId(null), []);
   const aboveInput = useMemo(
-    () => <SeatComposerNotices pending={seat.pending ?? null} mail={mail} />,
-    [mail, seat.pending],
+    () => (
+      <>
+        <SeatComposerNotices pending={seat.pending ?? null} mail={mail} />
+        {copies.supported ? (
+          <View style={styles.ccLine}>
+            <SwarmCcLine
+              recipient={name}
+              cc={copies.cc}
+              defaultCc={copies.defaultCc}
+              onRemove={copies.remove}
+              onRestore={copies.restore}
+            />
+          </View>
+        ) : null}
+      </>
+    ),
+    [copies, mail, name, seat.pending],
   );
   const route = useMemo<AgentChatRoute>(
     () => ({
@@ -158,6 +205,11 @@ function SeatConversationContent({
       {handover && !viewedPast ? (
         <HandoverRow handover={handover} onShow={setViewedAgentId} />
       ) : null}
+      <SeatDeliveries
+        serverId={plugin.serverId}
+        workspaceId={seat.workspaceId ?? workspaceId}
+        deliveries={deliveries}
+      />
       {shownAgentId && workspaceId ? (
         <AgentChatRouteProvider value={route}>
           <RetainedChatContent>
@@ -181,6 +233,90 @@ function SeatConversationContent({
           aboveInput={aboveInput}
         />
       )}
+    </View>
+  );
+}
+
+// Results the seat delivered to the person, newest first, so a reply the seat did not repeat in
+// its own words is still in reach of its conversation. Each opens its Task, which shows it in full.
+function SeatDeliveries({
+  serverId,
+  workspaceId,
+  deliveries,
+}: {
+  serverId: string;
+  workspaceId: string | null;
+  deliveries: SeatDelivery[];
+}) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const toggle = useCallback(() => setExpanded((value) => !value), []);
+  if (deliveries.length === 0) return null;
+  const shown = expanded ? deliveries : deliveries.slice(0, 1);
+  return (
+    <View style={styles.deliveries} testID="swarm-seat-deliveries">
+      <View style={styles.deliveriesHeader}>
+        <Text style={styles.deliveriesTitle}>{t("swarm.seat.deliveries")}</Text>
+        {deliveries.length > 1 ? (
+          <Button
+            variant="ghost"
+            size="xs"
+            leftIcon={expanded ? ChevronDown : ChevronRight}
+            onPress={toggle}
+          >
+            {String(deliveries.length)}
+          </Button>
+        ) : null}
+      </View>
+      {shown.map((delivery) => (
+        <SeatDeliveryRow
+          key={delivery.activityId}
+          serverId={serverId}
+          workspaceId={workspaceId}
+          delivery={delivery}
+        />
+      ))}
+    </View>
+  );
+}
+
+function SeatDeliveryRow({
+  serverId,
+  workspaceId,
+  delivery,
+}: {
+  serverId: string;
+  workspaceId: string | null;
+  delivery: SeatDelivery;
+}) {
+  const { t } = useTranslation();
+  const open = useCallback(() => {
+    if (!workspaceId) return;
+    openSwarmTasks({ serverId, workspaceId, agentName: "", taskId: delivery.taskId });
+  }, [delivery.taskId, serverId, workspaceId]);
+  return (
+    <View style={styles.delivery} testID={`swarm-seat-delivery-${delivery.activityId}`}>
+      <View style={styles.deliveriesHeader}>
+        <Text style={styles.deliveryLabel}>
+          {delivery.taskState === "open" ? t("swarm.tasks.stageResult") : t("swarm.tasks.result")}
+          {delivery.as === "cc" ? ` · ${t("swarm.seat.deliveryCopied")}` : ""}
+          {` · ${formatTimeAgo(new Date(delivery.createdAt))}`}
+        </Text>
+        {workspaceId ? (
+          <Button
+            variant="ghost"
+            size="xs"
+            leftIcon={SquareArrowOutUpRight}
+            onPress={open}
+            testID={`swarm-seat-delivery-open-${delivery.activityId}`}
+          >
+            {t("swarm.seat.openTask", { title: delivery.taskTitle })}
+          </Button>
+        ) : null}
+      </View>
+      <Text style={styles.deliveryBody} numberOfLines={4}>
+        {delivery.body}
+      </Text>
     </View>
   );
 }
@@ -657,6 +793,39 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
+  },
+  ccLine: {
+    paddingHorizontal: theme.spacing[3],
+    paddingBottom: theme.spacing[2],
+  },
+  deliveries: {
+    gap: theme.spacing[2],
+    paddingHorizontal: theme.spacing[4],
+    paddingVertical: theme.spacing[2],
+    borderBottomWidth: theme.borderWidth[1],
+    borderBottomColor: theme.colors.border,
+  },
+  deliveriesHeader: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  deliveriesTitle: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+  },
+  delivery: {
+    gap: theme.spacing[1],
+  },
+  deliveryLabel: {
+    flexShrink: 1,
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
+  deliveryBody: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
   },
   notices: {
     gap: theme.spacing[2],

@@ -71,12 +71,14 @@ export function useUndeliveredSeatMail(plugin: InstalledPlugin, seat: SwarmSeat,
 
 const EMPTY_MAIL: SeatMail[] = [];
 
-// Sends the person's words to the seat through its mailbox: a seat with no agent starts one, and
-// a seat with a pending change applies it first. A refused delivery throws its receipt.
+// Sends the person's words to the seat through its mailbox, with a copy to each Cc seat: a seat
+// with no agent starts one, and a seat with a pending change applies it first. A refused delivery
+// throws its receipt.
 export async function sendSeatMail(
   plugin: InstalledPlugin,
   seat: SwarmSeat,
   body: string,
+  cc: readonly string[] = [],
 ): Promise<void> {
   const result = receiptSchema.parse(
     await plugin.invoke("swarm.message.send", {
@@ -84,6 +86,7 @@ export async function sendSeatMail(
       senderName: PERSON_SENDER,
       recipientName: seatRecipient(seat),
       body,
+      ...(cc.length > 0 ? { cc } : {}),
     }),
   );
   await Promise.all([

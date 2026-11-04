@@ -779,7 +779,7 @@ export async function createPaseoToolCatalog(
         "swarm_task_read",
         {
           description:
-            "Read one Swarm Task: its brief (the current agreement), status, owner, resolution when closed, workers, data, and activityCount. notesSinceBrief lists human notes newer than the brief: instructions its owner has not yet written into it.",
+            "Read one Swarm Task: its brief (the current agreement) and briefUpdatedAt, status, owner, requester (who asked for the work), resolution when closed, workers, data, and activityCount. briefUnconfirmedBy names the seat whose brief the owner has not confirmed yet. notesSinceBrief lists human notes newer than the brief: instructions its owner has not yet written into it.",
           inputSchema: { taskId: z.string() },
         },
         async (input) => {
@@ -874,7 +874,7 @@ export async function createPaseoToolCatalog(
         "swarm_message_send",
         {
           description:
-            "Send a message to a Swarm seat: your manager, one of your reports, or a seat on your team by its local name, or any seat by its qualified name. A seat with no agent yet starts one, and the message is its first instruction. Pass taskId when the message is about a Task; it is context for the reader and never stops a message. cc sends the same message to other seats for awareness: it asks nothing of them. The receipt says whether the message was delivered, queued for automatic retry, or failed.",
+            "Send a message to a Swarm seat: your manager, one of your reports, or a seat on your team by its local name, or any seat by its qualified name. A seat with no agent yet starts one, and the message is its first instruction. Pass taskId when the message is about a Task; it is context for the reader and never stops a message. cc sends the same message to other seats for context: it is not an assignment and needs no reply. The result lists the audience, and the receipt says whether the message was delivered, queued for automatic retry, or failed.",
           inputSchema: {
             to: z.string().min(1),
             body: z.string().min(1),
@@ -982,13 +982,15 @@ export async function createPaseoToolCatalog(
           "swarm_task_create",
           {
             description:
-              "Create a Swarm Task: a commitment worth tracking, with one owner and an understood outcome. owner defaults to you; name a seat below you to give it the Task, and that is its assignment: the owner receives the brief, so don't send it again. Delegating part of your own work to a worker needs no Task of its own; message the worker with your taskId. The brief is the agreement: objective, scope, constraints, acceptance criteria. workerNames optionally records workers on the owner's team; it grants nothing.",
+              "Create a Swarm Task: a project-level commitment on the board, with one owner and an understood outcome. The planner decides what goes on the board; owning work is no reason to create a Task for it. owner defaults to you; name a seat below you to give it the Task, and that is its assignment: the owner receives the brief, so don't send it again. To record work the owner already started, pass assign: false: the owner gets a record notice, not an assignment, and brief may be left out when you know too little, for the owner to write. Recording preserves the existing agreement, including conditions still open; it does not authorize a smaller outcome. requester is whoever asked for the work (human, or a seat) and defaults to you; deliveries go to it. Delegating part of your own work to a worker needs no Task of its own; message the worker with your taskId. The brief records the agreement: objective, scope, constraints, acceptance criteria, and conditions still open. workerNames optionally records workers on the owner's team; it grants nothing.",
             inputSchema: {
               id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
               title: z.string().min(1),
-              brief: z.string().min(1),
+              brief: z.string().min(1).optional(),
               status: z.string().min(1),
               owner: z.string().min(1).optional(),
+              requester: z.string().min(1).optional(),
+              assign: z.boolean().optional(),
               workerNames: z.array(z.string()).optional(),
               data: z.record(z.string(), z.unknown()).optional(),
             },
@@ -1012,7 +1014,7 @@ export async function createPaseoToolCatalog(
           "swarm_task_update",
           {
             description:
-              "Update a Swarm Task. Its owner and every seat above the owner can; the owner keeps the record current, and seats above it steer by message and edit only to escalate. The owner is told of changes it did not make. Rewrite brief when the agreement changes, not to log progress; each field you supply replaces that field, so read the Task first. owner reassigns the Task to you or a seat below you, and the new owner receives it as an assignment. resolution closes it without a result: wont-do, duplicate (with duplicateOf), or superseded, each with a reason; null reopens it with a reason. A Task that produced its result is completed with swarm_task_deliver instead. Swarm records owner, status, resolution, title and brief changes in the Task's history itself.",
+              "Update a Swarm Task. Its owner and every seat above the owner can; the owner keeps the record current, and seats above it steer by message and edit only to escalate. The owner is told of changes it did not make. Rewrite brief to record an agreed change, such as a smaller outcome the requester, a seat above the owner or the human agreed to (name who in reason), not to log progress; the requester and the owner's manager get a copy; each field you supply replaces that field, so read the Task first. If you are not the owner, pass the briefUpdatedAt you read as briefBasedOn; a brief rewritten since is not overwritten. The owner confirms a brief another seat wrote by writing it, even unchanged. owner reassigns the Task to you or a seat below you, and the new owner receives it as an assignment. resolution closes it without a result: wont-do, duplicate (with duplicateOf), or superseded (with supersededBy when a Task replaces it), each with a reason; null reopens it with a reason. A Task that produced its result is completed with swarm_task_deliver instead. Swarm records owner, status, resolution, title and brief changes in the Task's history itself. The result lists who the change reached.",
             inputSchema: {
               taskId: z.string(),
               status: z.string().min(1).optional(),
@@ -1021,7 +1023,9 @@ export async function createPaseoToolCatalog(
               owner: z.string().min(1).optional(),
               resolution: z.enum(["wont-do", "duplicate", "superseded"]).nullable().optional(),
               duplicateOf: z.string().optional(),
+              supersededBy: z.string().optional(),
               reason: z.string().min(1).optional(),
+              briefBasedOn: z.string().min(1).optional(),
               workerNames: z.array(z.string()).optional(),
               data: z.record(z.string(), z.unknown()).optional(),
             },
@@ -1041,13 +1045,15 @@ export async function createPaseoToolCatalog(
           "swarm_task_deliver",
           {
             description:
-              "Deliver a result on a Swarm Task you own. One call records it, sets the Task's state, and sends it to your manager, so don't also append an Activity, update the status first, or message the same summary. A seat above the owner delivers only to escalate, when the owner cannot; a delivery it received from below is already recorded. result is the short, readable answer: what was done or found, how to use it, and what is still unverified, with Markdown links to the artifacts (files, PRs) that hold the details; no execution diary. taskState is the Task's state after this delivery: done when the result finishes it; open for a stage result while work continues. status optionally moves the Task to a PWA status in the same call. To correct an earlier delivery whose conclusions, confidence or completion claim changed, deliver again with revises set to that delivery's id and say what changed; if the correction means more work is needed, set taskState: open, which reopens a done Task in the same call. Typos and formatting need no revision. Retrying a call that may have failed returns the first delivery.",
+              "Deliver a result on a Swarm Task you own. One call records it, sets the Task's state, and sends it to the Task's requester with a copy to your manager, so don't also append an Activity, update the status first, or message the same summary to them. to and cc choose the audience instead: either one replaces both defaults, names are seats or human, and to: [] records without telling anyone, for a result you already gave its requester. The result lists the audience. A seat above the owner delivers only to escalate, when the owner cannot; a delivery it received from below is already recorded. result is your synthesis for a reader who did not follow the work: the outcome, the decisions that shaped it and why, what is still uncertain, and how to use it, with Markdown links to documents (files, PRs) only for detail the reader may need. No execution diary and no forwarded worker reports. taskState is the Task's state after this delivery: done when the result fulfills the agreed outcome, including its required conditions; open for a useful intermediate result while that commitment remains unfinished. status optionally moves the Task to a PWA status in the same call. To correct an earlier delivery whose conclusions, confidence or completion claim changed, deliver again with revises set to that delivery's id and say what changed; if the correction means more work is needed, set taskState: open, which reopens a done Task in the same call. Typos and formatting need no revision. Retrying a call that may have failed returns the first delivery.",
             inputSchema: {
               taskId: z.string(),
               result: z.string().min(1),
               taskState: z.enum(["done", "open"]),
               status: z.string().min(1).optional(),
               revises: z.string().min(1).optional(),
+              to: z.array(z.string().min(1)).optional(),
+              cc: z.array(z.string().min(1)).optional(),
             },
           },
           async (input) =>
@@ -1062,7 +1068,7 @@ export async function createPaseoToolCatalog(
           "swarm_activity_append",
           {
             description:
-              'Append an Activity to a Swarm Task you own or are above: a decision, trade-off or blocker that Task operations do not already record. Results go through swarm_task_deliver, and owner, status and brief changes are recorded by swarm_task_update; routine progress needs no Activity. To ask the human to choose, set data.action to { type: "choice", prompt, options: [{ id, label, description? }], responseProfiles? }. Link Swarm things as paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, or paseo-swarm://file/<workspace-id>/<relative-path>.',
+              'Append an Activity to a Swarm Task you own or are above: a decision, trade-off or blocker that Task operations do not already record. Results go through swarm_task_deliver, and owner, status and brief changes are recorded by swarm_task_update; routine progress needs no Activity. It reaches the owner when you are not the owner, and the asker of the Activity it replies to; to and cc address anyone else (seats, or human). To ask the human to choose, set data.action to { type: "choice", prompt, options: [{ id, label, description? }], responseProfiles? }. Link Swarm things as paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, or paseo-swarm://file/<workspace-id>/<relative-path>.',
             inputSchema: {
               taskId: z.string(),
               kind: z.string().min(1),
@@ -1070,6 +1076,8 @@ export async function createPaseoToolCatalog(
               replyTo: z.string().nullable().optional(),
               responseProfile: z.enum(["decision", "steering", "discussion"]).nullable().optional(),
               data: z.record(z.string(), z.unknown()).optional(),
+              to: z.array(z.string().min(1)).optional(),
+              cc: z.array(z.string().min(1)).optional(),
             },
           },
           async (input) =>

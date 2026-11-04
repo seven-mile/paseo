@@ -112,8 +112,27 @@ export function useSwarmRoster(plugin: InstalledPlugin) {
   );
 }
 
-const seatReadSchema = z.object({ seat: swarmSeatSchema.nullable() });
+// A delivery the seat addressed to the person, so its conversation shows the result without the
+// seat repeating it.
+const seatDeliverySchema = z.object({
+  activityId: z.string(),
+  swarmId: z.string(),
+  taskId: z.string(),
+  taskTitle: z.string(),
+  as: z.enum(["to", "cc"]),
+  taskState: z.string().optional(),
+  body: z.string(),
+  createdAt: z.string(),
+});
+export type SeatDelivery = z.infer<typeof seatDeliverySchema>;
+
+const seatReadSchema = z.object({
+  seat: swarmSeatSchema.nullable(),
+  // Absent on hosts from before addressing.
+  deliveries: z.array(seatDeliverySchema).optional(),
+});
 type SeatRead = z.infer<typeof seatReadSchema>;
+const NO_DELIVERIES: SeatDelivery[] = [];
 
 // One seat and its occupants, retired seats included. A poll whose etag still holds costs a few
 // hundred bytes, so a seat tab can follow its occupant without reading the roster.
@@ -140,6 +159,7 @@ export function useSwarmSeat(plugin: InstalledPlugin | null, seatId: string) {
   );
   return {
     seat: query.data?.seat ?? null,
+    deliveries: query.data?.deliveries ?? NO_DELIVERIES,
     isPending: query.isPending,
     error: query.error,
   };
