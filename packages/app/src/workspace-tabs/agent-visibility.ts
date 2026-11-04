@@ -1,11 +1,16 @@
 import type { Agent } from "@/stores/session-store";
 import type { WorkspaceTabSnapshot } from "@/stores/workspace-layout-actions";
 import { isWorkspaceRootAgent } from "@/subagents/policies";
+import { seatIdOfAgent } from "@/swarm/seat-labels";
 import { normalizeWorkspaceOpaqueId } from "@/utils/workspace-identity";
+import type { WorkspaceTabTarget } from "./model";
+import { workspaceTabTargetsEqual } from "./identity";
 
 export interface WorkspaceAgentVisibility {
   activeAgentIds: Set<string>;
   autoOpenAgentIds: Set<string>;
+  // Auto-open agents whose conversation opens in another tab than their own: a Swarm seat's.
+  autoOpenTargetByAgentId: Map<string, WorkspaceTabTarget>;
 }
 
 function agentBelongsToWorkspace(agent: Agent, workspaceId: string): boolean {
@@ -23,11 +28,13 @@ export function deriveWorkspaceAgentVisibility(input: {
     return {
       activeAgentIds: new Set<string>(),
       autoOpenAgentIds: new Set<string>(),
+      autoOpenTargetByAgentId: new Map(),
     };
   }
 
   const activeAgentIds = new Set<string>();
   const autoOpenAgentIds = new Set<string>();
+  const autoOpenTargetByAgentId = new Map<string, WorkspaceTabTarget>();
   const agentsById = new Map<string, Agent>([
     ...(agentDetails?.entries() ?? []),
     ...(sessionAgents?.entries() ?? []),
@@ -41,10 +48,12 @@ export function deriveWorkspaceAgentVisibility(input: {
       const parentAgent = agent.parentAgentId ? agentsById.get(agent.parentAgentId) : undefined;
       if (isWorkspaceRootAgent(agent, parentAgent)) {
         autoOpenAgentIds.add(agent.id);
+        const seatId = seatIdOfAgent(agent);
+        if (seatId) autoOpenTargetByAgentId.set(agent.id, { kind: "swarm_seat", seatId });
       }
     }
   }
-  return { activeAgentIds, autoOpenAgentIds };
+  return { activeAgentIds, autoOpenAgentIds, autoOpenTargetByAgentId };
 }
 
 export function buildWorkspaceTabSnapshot(input: {
@@ -61,6 +70,7 @@ export function buildWorkspaceTabSnapshot(input: {
     terminalsHydrated: input.terminalsHydrated,
     activeAgentIds: input.agentVisibility.activeAgentIds,
     autoOpenAgentIds: input.agentVisibility.autoOpenAgentIds,
+    autoOpenTargetByAgentId: input.agentVisibility.autoOpenTargetByAgentId,
     knownTerminalIds: input.knownTerminalIds,
     standaloneTerminalIds: input.standaloneTerminalIds,
     hasActivePendingTerminalCreate: input.hasActivePendingTerminalCreate,
@@ -74,8 +84,25 @@ export function workspaceAgentVisibilityEqual(
 ): boolean {
   return (
     setsEqual(a.activeAgentIds, b.activeAgentIds) &&
-    setsEqual(a.autoOpenAgentIds, b.autoOpenAgentIds)
+    setsEqual(a.autoOpenAgentIds, b.autoOpenAgentIds) &&
+    targetMapsEqual(a.autoOpenTargetByAgentId, b.autoOpenTargetByAgentId)
   );
+}
+
+function targetMapsEqual(
+  a: Map<string, WorkspaceTabTarget>,
+  b: Map<string, WorkspaceTabTarget>,
+): boolean {
+  if (a.size !== b.size) {
+    return false;
+  }
+  for (const [agentId, target] of a) {
+    const other = b.get(agentId);
+    if (!other || !workspaceTabTargetsEqual(target, other)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function setsEqual(a: Set<string>, b: Set<string>): boolean {

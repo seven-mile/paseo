@@ -11,7 +11,7 @@ import type {
 import contribute from "../index.server";
 import { flushMailbox, forgetRunningTurns, MAX_DELIVERY_ATTEMPTS } from "../server/mailbox";
 import { registerOperations } from "../server/operations";
-import { declareTabClose, seatOfAgent, seatView } from "../server/seats";
+import { declareSeatLabels, seatOfAgent, seatView } from "../server/seats";
 import { store } from "../server/state";
 import { seed as seedRecords, type Seeded } from "./fixtures";
 import { mailboxMessageStatus, type AgentRecord } from "../shared/models";
@@ -477,6 +477,7 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   assert.equal(planSeat(replaced).kind, "keep");
   // Swarm declares its agents' tab close layout-only, so closing a tab never archives them.
   assert.equal(fake.creations.at(-1)?.labels?.["paseo.tab-close"], "layout-only");
+  assert.equal(fake.creations.at(-1)?.labels?.["paseo-swarm.seat-id"], supervisor.id);
   // Nothing of the old provider carries over, including the thinking option the old agent ran.
   assert.deepEqual(replaced.occupant?.config, { provider: "fast/small", modeId: "build" });
   assert.equal(replaced.occupant?.number, 2);
@@ -504,7 +505,7 @@ test("a seat edit takes effect when mail next wakes the seat, and never wakes th
   assert.equal(fake.sends.at(-1)?.agentId, fake.created(1));
 });
 
-test("agents from before the tab-close declaration get it once, and stay archived", async (t) => {
+test("agents from before the seat labels get them once, and stay archived", async (t) => {
   setup(t);
   const fake = fakePaseo();
   const past = {
@@ -525,16 +526,24 @@ test("agents from before the tab-close declaration get it once, and stay archive
     archived: true,
   });
   fake.runtime.set("someone-else", { ...fake.runtime.get(supervisor.paseoAgentId!)! });
-  fake.runtime.get(worker.paseoAgentId!)!.labels = { "paseo.tab-close": "layout-only" };
+  fake.runtime.get(worker.paseoAgentId!)!.labels = {
+    "paseo.tab-close": "layout-only",
+    "paseo-swarm.seat-id": worker.id,
+  };
 
-  assert.equal(await declareTabClose(fake.context), 2);
+  assert.equal(await declareSeatLabels(fake.context), 2);
   assert.deepEqual(fake.updates.sort(), ["first-lead", supervisor.paseoAgentId].sort());
-  for (const agentId of ["first-lead", supervisor.paseoAgentId!, worker.paseoAgentId!]) {
+  for (const [agentId, seatId] of [
+    ["first-lead", supervisor.id],
+    [supervisor.paseoAgentId!, supervisor.id],
+    [worker.paseoAgentId!, worker.id],
+  ]) {
     assert.equal(fake.runtime.get(agentId)?.labels?.["paseo.tab-close"], "layout-only", agentId);
+    assert.equal(fake.runtime.get(agentId)?.labels?.["paseo-swarm.seat-id"], seatId, agentId);
   }
   assert.equal(fake.runtime.get("first-lead")?.archived, true, "a past occupant stays archived");
   assert.equal(fake.runtime.get("someone-else")?.labels, undefined, "not Swarm's agent");
-  assert.equal(await declareTabClose(fake.context), 0, "nothing left to declare");
+  assert.equal(await declareSeatLabels(fake.context), 0, "nothing left to declare");
 });
 
 test("a seat shows the agent it is bringing in before it binds it", async (t) => {
@@ -633,6 +642,20 @@ test("moving a seat back brings back its earlier agent, or a new one if that can
     back.pastOccupants?.map((past) => [past.number, past.paseoAgentId]),
     [[2, fake.created(1)]],
   );
+  // pastOccupants no longer shows occupant 1's first stint; the handover log keeps both moves.
+  assert.deepEqual(
+    back.handovers?.map((handover) => [
+      handover.from.number,
+      handover.to.number,
+      handover.to.paseoAgentId,
+      handover.returning,
+    ]),
+    [
+      [1, 2, fake.created(1), false],
+      [2, 1, supervisor.paseoAgentId, true],
+    ],
+  );
+  assert.deepEqual(back.handovers?.[1].to.config, back.occupant?.config);
   assert.equal(fake.runtime.get(fake.created(1))!.archived, true);
   assert.equal(fake.runtime.get(supervisor.paseoAgentId)!.archived, false);
   // The return brief goes first; "On B", which occupant 2 never finished, moves over with the mail.

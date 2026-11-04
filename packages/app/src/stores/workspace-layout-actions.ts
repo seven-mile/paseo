@@ -271,6 +271,9 @@ export interface WorkspaceTabSnapshot {
   terminalsHydrated: boolean;
   activeAgentIds: Iterable<string>;
   autoOpenAgentIds: Iterable<string>;
+  // The tab to open for an auto-open agent instead of its own agent tab, such as the Swarm seat
+  // it holds. Left out, every auto-open agent gets an agent tab.
+  autoOpenTargetByAgentId?: ReadonlyMap<string, WorkspaceTabTarget>;
   knownTerminalIds?: Iterable<string>;
   standaloneTerminalIds: Iterable<string>;
   hasActivePendingTerminalCreate?: boolean;
@@ -2370,6 +2373,7 @@ function collapseStaleEntityTabs(input: {
 function addMissingEntityTabs(input: {
   layout: WorkspaceLayout;
   autoOpenAgentIds: Set<string>;
+  autoOpenTargetByAgentId: ReadonlyMap<string, WorkspaceTabTarget>;
   representedAgentIds: Set<string>;
   standaloneTerminalIds: Set<string>;
   hasActivePendingTerminalCreate: boolean;
@@ -2378,6 +2382,7 @@ function addMissingEntityTabs(input: {
 }): WorkspaceLayout {
   const {
     autoOpenAgentIds,
+    autoOpenTargetByAgentId,
     representedAgentIds,
     standaloneTerminalIds,
     hasActivePendingTerminalCreate,
@@ -2392,6 +2397,7 @@ function addMissingEntityTabs(input: {
   const currentTerminalIds = new Set(
     currentEntityTabs.filter(isTerminalTab).map((tab) => tab.target.terminalId),
   );
+  const openTargets = currentEntityTabs.map((tab) => tab.target);
 
   const sortedAutoOpenAgentIds = [...autoOpenAgentIds].sort();
   for (const agentId of sortedAutoOpenAgentIds) {
@@ -2399,6 +2405,19 @@ function addMissingEntityTabs(input: {
       continue;
     }
     if (hasActivePendingDraftCreate && !representedAgentIds.has(agentId)) {
+      continue;
+    }
+    // An agent with an open tab of its own keeps it; one shown in another tab gets that tab once.
+    const target = autoOpenTargetByAgentId.get(agentId);
+    if (target) {
+      if (!openTargets.some((open) => workspaceTabTargetsEqual(open, target))) {
+        nextLayout = openEntityTabWithoutFocusing({
+          layout: nextLayout,
+          target,
+          explorerSidebarPaneId,
+        });
+        openTargets.push(target);
+      }
       continue;
     }
     nextLayout = openEntityTabWithoutFocusing({
@@ -2510,6 +2529,7 @@ export function reconcileWorkspaceTabs(
   nextLayout = addMissingEntityTabs({
     layout: nextLayout,
     autoOpenAgentIds: autoOpenSet,
+    autoOpenTargetByAgentId: snapshot.autoOpenTargetByAgentId ?? new Map(),
     representedAgentIds,
     standaloneTerminalIds,
     hasActivePendingTerminalCreate: snapshot.hasActivePendingTerminalCreate ?? false,

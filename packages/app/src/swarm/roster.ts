@@ -16,6 +16,12 @@ const occupantSchema = z.object({
   boundAt: z.string().optional(),
 });
 
+const handoverOccupantSchema = z.object({
+  number: z.number(),
+  paseoAgentId: z.string(),
+  config: configSchema.optional(),
+});
+
 // A seat as the roster lists it. The plugin's seat summary is the source.
 export const rosterSeatSchema = z.object({
   id: z.string(),
@@ -44,6 +50,18 @@ export const swarmSeatSchema = rosterSeatSchema.extend({
         paseoAgentId: z.string(),
         retiredAt: z.string(),
         reason: z.string(),
+      }),
+    )
+    .optional(),
+  // Every handover, oldest first. Daemons from before the log leave it out.
+  handovers: z
+    .array(
+      z.object({
+        at: z.string(),
+        from: handoverOccupantSchema,
+        to: handoverOccupantSchema,
+        reason: z.string(),
+        returning: z.boolean(),
       }),
     )
     .optional(),

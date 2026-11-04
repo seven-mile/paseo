@@ -2,14 +2,20 @@ import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
-import { Armchair, ChevronDown, ChevronRight, SquareArrowOutUpRight } from "lucide-react-native";
+import {
+  Armchair,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  SquareArrowOutUpRight,
+} from "lucide-react-native";
 import { useShallow } from "zustand/shallow";
 import { Button } from "@/components/ui/button";
+import { buttonControlHeight } from "@/components/ui/control-geometry";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Composer } from "@/composer";
@@ -18,6 +24,7 @@ import { useAgentInputDraft } from "@/composer/draft/input-draft";
 import type { MessagePayload } from "@/composer/types";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { isNative } from "@/constants/platform";
+import { KeyboardTranslateView } from "@/keyboard/shift";
 import { AgentChatRouteProvider, type AgentChatRoute } from "@/panels/agent-chat-route";
 import { AgentPanelContent } from "@/panels/agent-panel";
 import { usePaneContext, usePaneFocus } from "@/panels/pane-context";
@@ -48,6 +55,7 @@ import {
 
 export const ThemedSeatIcon = withUnistyles(Armchair);
 const ThemedChevronDown = withUnistyles(ChevronDown);
+const ThemedClock = withUnistyles(Clock);
 
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
@@ -154,7 +162,7 @@ function SeatConversationContent({
     [plugin, t],
   );
   const showCurrent = useCallback(() => setViewedAgentId(null), []);
-  const aboveComposer = useMemo(
+  const aboveInput = useMemo(
     () => (
       <>
         <SeatComposerNotices pending={seat.pending ?? null} mail={mail} />
@@ -177,12 +185,12 @@ function SeatConversationContent({
     () => ({
       submit,
       placeholder: t("swarm.seat.placeholder", { name }),
-      aboveComposer,
+      aboveInput,
       composerReplacement: viewedPast ? (
         <PastStintBar occupant={viewedPast} onShowCurrent={showCurrent} />
       ) : undefined,
     }),
-    [aboveComposer, name, showCurrent, submit, t, viewedPast],
+    [aboveInput, name, showCurrent, submit, t, viewedPast],
   );
 
   return (
@@ -195,7 +203,7 @@ function SeatConversationContent({
         onShow={setViewedAgentId}
       />
       {handover && !viewedPast ? (
-        <HandoverRow handover={handover} seat={seat} onShow={setViewedAgentId} />
+        <HandoverRow handover={handover} onShow={setViewedAgentId} />
       ) : null}
       <SeatDeliveries
         serverId={plugin.serverId}
@@ -222,7 +230,7 @@ function SeatConversationContent({
           workspaceId={workspaceId}
           isPaneFocused={isPaneFocused}
           submit={submit}
-          aboveComposer={aboveComposer}
+          aboveInput={aboveInput}
         />
       )}
     </View>
@@ -383,7 +391,7 @@ function SeatHeader({
         </Text>
       </View>
       {occupants.length > 0 ? (
-        <DropdownMenu>
+        <DropdownMenu compactMode="sheet">
           <DropdownMenuTrigger
             accessibilityRole="button"
             accessibilityLabel={t("swarm.seat.occupants")}
@@ -395,8 +403,12 @@ function SeatHeader({
             </Text>
             <ThemedChevronDown size={ICON_SIZE.sm} uniProps={mutedColorMapping} />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" side="bottom" minWidth={240}>
-            <DropdownMenuLabel>{t("swarm.seat.occupants")}</DropdownMenuLabel>
+          <DropdownMenuContent
+            align="end"
+            side="bottom"
+            minWidth={240}
+            sheetTitle={t("swarm.seat.occupants")}
+          >
             {occupants.map((occupant) => (
               <OccupantItem
                 key={occupant.paseoAgentId}
@@ -458,20 +470,18 @@ function OccupantItem({
 // none of the earlier conversation, and a returning one remembers only its own.
 function HandoverRow({
   handover,
-  seat,
   onShow,
 }: {
   handover: SeatHandover;
-  seat: SwarmSeat;
   onShow: (paseoAgentId: string | null) => void;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const toggle = useCallback(() => setExpanded((value) => !value), []);
-  const previous = seat.pastOccupants?.find((past) => past.number === handover.from);
-  const showPrevious = useCallback(() => {
-    if (previous) onShow(previous.paseoAgentId);
-  }, [onShow, previous]);
+  const showPrevious = useCallback(
+    () => onShow(handover.fromAgentId),
+    [handover.fromAgentId, onShow],
+  );
   const time = formatTimeAgo(new Date(handover.at));
   const values = { from: handover.from, to: handover.to, time, reason: handover.reason };
   return (
@@ -491,11 +501,9 @@ function HandoverRow({
         >
           {t("swarm.seat.handover.given")}
         </Button>
-        {previous ? (
-          <Button variant="ghost" size="xs" onPress={showPrevious}>
-            {t("swarm.seat.handover.showPrevious", { from: handover.from })}
-          </Button>
-        ) : null}
+        <Button variant="ghost" size="xs" onPress={showPrevious}>
+          {t("swarm.seat.handover.showPrevious", { from: handover.from })}
+        </Button>
       </View>
       {expanded ? (
         <Text style={styles.handoverDetail}>
@@ -508,6 +516,8 @@ function HandoverRow({
   );
 }
 
+// Stands in for the composer while you read an earlier occupant, on the composer's own rail: that
+// occupant no longer holds the seat, so nothing typed here could reach it.
 function PastStintBar({
   occupant,
   onShowCurrent,
@@ -517,21 +527,26 @@ function PastStintBar({
 }) {
   const { t } = useTranslation();
   return (
-    <View style={styles.pastBar} testID="swarm-seat-past">
-      <Text style={styles.pastText}>
-        {t("swarm.seat.viewingPast", {
-          number: occupant.number,
-          time: occupant.retiredAt ? formatTimeAgo(new Date(occupant.retiredAt)) : "",
-        })}
-      </Text>
-      <Button variant="secondary" size="sm" onPress={onShowCurrent} testID="swarm-seat-current">
-        {t("swarm.seat.backToCurrent")}
-      </Button>
-    </View>
+    <KeyboardTranslateView style={styles.pastContainer}>
+      <View style={styles.pastRail}>
+        <View style={styles.pastBar} testID="swarm-seat-past">
+          <Text style={styles.pastText}>
+            {t("swarm.seat.viewingPast", {
+              number: occupant.number,
+              time: occupant.retiredAt ? formatTimeAgo(new Date(occupant.retiredAt)) : "",
+            })}
+          </Text>
+          <Button variant="secondary" size="sm" onPress={onShowCurrent} testID="swarm-seat-current">
+            {t("swarm.seat.backToCurrent")}
+          </Button>
+        </View>
+      </View>
+    </KeyboardTranslateView>
   );
 }
 
 // What the next message will do to the seat, and the person's mail the occupant has not seen yet.
+// They sit on the composer's rail, styled like the composer's own queue.
 function SeatComposerNotices({
   pending,
   mail,
@@ -545,12 +560,13 @@ function SeatComposerNotices({
     <View style={styles.notices}>
       {mail.map((message) => (
         <View key={message.id} style={styles.mailRow} testID={`swarm-seat-mail-${message.id}`}>
-          <Text style={styles.mailWords} numberOfLines={3}>
+          <Text style={styles.mailWords} numberOfLines={2} ellipsizeMode="tail">
             {message.words}
           </Text>
           <Text
             style={message.status === "failed" ? styles.mailFailed : styles.mailStatus}
             accessibilityRole={message.status === "failed" ? "alert" : undefined}
+            numberOfLines={2}
           >
             {message.status === "failed"
               ? t("swarm.seat.mailFailed", { reason: message.lastError ?? "" })
@@ -559,9 +575,12 @@ function SeatComposerNotices({
         </View>
       ))}
       {pending ? (
-        <Text style={styles.pending} testID="swarm-seat-pending">
-          {t("swarm.seat.pending", { reason: pending.reason })}
-        </Text>
+        <View style={styles.pending} testID="swarm-seat-pending">
+          <ThemedClock size={ICON_SIZE.sm} uniProps={mutedColorMapping} />
+          <Text style={styles.pendingText}>
+            {t("swarm.seat.pending", { reason: pending.reason })}
+          </Text>
+        </View>
       ) : null}
     </View>
   );
@@ -573,14 +592,14 @@ function EmptySeat({
   workspaceId,
   isPaneFocused,
   submit,
-  aboveComposer,
+  aboveInput,
 }: {
   serverId: string;
   seat: SwarmSeat;
   workspaceId: string | null;
   isPaneFocused: boolean;
   submit: (payload: MessagePayload) => Promise<void>;
-  aboveComposer: ReactNode;
+  aboveInput: ReactNode;
 }) {
   const { t } = useTranslation();
   const draftKey = `swarm-seat:${serverId}:${seat.id}`;
@@ -594,7 +613,6 @@ function EmptySeat({
           <Text style={styles.message}>{t("swarm.seat.startsHint")}</Text>
         </View>
         <View style={styles.composer}>
-          {aboveComposer}
           <Composer
             agentId={draftKey}
             serverId={serverId}
@@ -611,6 +629,7 @@ function EmptySeat({
             onChangeAttachments={draft.setAttachments}
             cwd=""
             clearDraft={draft.clear}
+            aboveInput={aboveInput}
             autoFocus
           />
         </View>
@@ -712,15 +731,20 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
   },
+  // As tall as the xs button beside it, so the row reads as one line of controls. A long provider
+  // name shrinks the label, not the seat name.
   occupantsTrigger: {
     flexDirection: "row",
     alignItems: "center",
+    flexShrink: 1,
+    maxWidth: "50%",
+    minHeight: buttonControlHeight.xs,
     gap: theme.spacing[1],
     paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
     borderRadius: theme.borderRadius.md,
   },
   occupantsLabel: {
+    flexShrink: 1,
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
   },
@@ -745,18 +769,30 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
   },
+  pastContainer: {
+    alignItems: "center",
+    width: "100%",
+    padding: theme.spacing[4],
+  },
+  pastRail: {
+    width: "100%",
+    maxWidth: theme.contentMaxWidth,
+  },
   pastBar: {
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[3],
-    padding: theme.spacing[3],
-    borderTopWidth: theme.borderWidth[1],
-    borderTopColor: theme.colors.border,
+    backgroundColor: theme.colors.surface1,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    borderRadius: theme.borderRadius["2xl"],
+    paddingVertical: theme.spacing[3],
+    paddingHorizontal: theme.spacing[4],
   },
   pastText: {
     flex: 1,
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   ccLine: {
     paddingHorizontal: theme.spacing[3],
@@ -793,16 +829,15 @@ const styles = StyleSheet.create((theme) => ({
   },
   notices: {
     gap: theme.spacing[2],
-    paddingHorizontal: theme.spacing[3],
-    paddingBottom: theme.spacing[2],
   },
   mailRow: {
-    alignSelf: "flex-end",
-    maxWidth: "85%",
     gap: theme.spacing[1],
-    padding: theme.spacing[3],
-    borderRadius: theme.borderRadius.xl,
-    backgroundColor: theme.colors.surface2,
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[2],
+    backgroundColor: theme.colors.surface1,
+    borderRadius: theme.borderRadius.lg,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
   },
   mailWords: {
     color: theme.colors.foreground,
@@ -817,7 +852,14 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.sm,
   },
   pending: {
-    color: theme.colors.statusWarning,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: theme.spacing[2],
+    paddingHorizontal: theme.spacing[3],
+  },
+  pendingText: {
+    flex: 1,
+    color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
   },
   empty: {
