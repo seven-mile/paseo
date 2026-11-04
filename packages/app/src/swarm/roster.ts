@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { z } from "zod";
 import { useFetchQuery } from "@/data/query";
+import { useInstalledPlugin } from "@/plugins/registry";
 import type { InstalledPlugin } from "@/plugins/types";
 import { deliveredArtifactSchema } from "./artifact-model";
 import { SWARM_POLL_MS, selectSwarmValue, swarmConditionalQuery } from "./sync";
@@ -73,7 +74,15 @@ export type SwarmSeat = z.infer<typeof swarmSeatSchema>;
 
 export const rosterSchema = z.object({
   agents: z.array(rosterSeatSchema),
-  swarms: z.array(z.object({ id: z.string(), name: z.string(), projectId: z.string().nullable() })),
+  swarms: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      projectId: z.string().nullable(),
+      // The workspace that shows the swarm's artifact copies; absent before the first publish.
+      artifactsWorkspaceId: z.string().optional(),
+    }),
+  ),
   // Swarm features the host supports; absent on older hosts.
   features: z.array(z.string()).optional(),
 });
@@ -94,23 +103,37 @@ function requirePlugin(plugin: InstalledPlugin | null): InstalledPlugin {
 
 // The seats that are not retired, in every swarm on the host.
 export function useSwarmRoster(plugin: InstalledPlugin) {
-  const rosterKey = useMemo(() => swarmRosterKey(plugin.serverId), [plugin.serverId]);
+  return useRosterQuery(plugin);
+}
+
+function useRosterQuery(plugin: InstalledPlugin | null) {
+  const serverId = plugin?.serverId ?? "";
+  const rosterKey = useMemo(() => swarmRosterKey(serverId), [serverId]);
   return useFetchQuery(
     {
       queryKey: rosterKey,
       queryFn: swarmConditionalQuery({
-        queryClient: plugin.queryClient,
+        queryClient: plugin?.queryClient,
         queryKey: rosterKey,
         schema: rosterSchema,
-        read: (etag) => plugin.invoke("swarm.roster.read", etag ? { etag } : {}),
+        read: (etag) => requirePlugin(plugin).invoke("swarm.roster.read", etag ? { etag } : {}),
       }),
       select: selectSwarmValue<Roster>,
+      enabled: plugin !== null,
       refetchInterval: SWARM_POLL_MS,
       dataShape: "value",
       staleTimeMs: SWARM_POLL_MS - 500,
     },
-    plugin.queryClient,
+    plugin?.queryClient,
   );
+}
+
+// Whether the workspace shows a swarm's artifact copies. Swarm replaces a copy from its author's
+// source, so the file pane offers no editing there: an edit would be lost at the next copy.
+export function useIsSwarmArtifactsWorkspace(serverId: string, workspaceId: string): boolean {
+  const plugin = useInstalledPlugin(serverId, "paseo-swarm");
+  const roster = useRosterQuery(plugin).data;
+  return roster?.swarms.some((swarm) => swarm.artifactsWorkspaceId === workspaceId) ?? false;
 }
 
 // A delivery the seat addressed to the person, so its conversation shows the result without the

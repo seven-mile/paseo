@@ -42,6 +42,7 @@ import { SwarmCcLine } from "./cc-line";
 import { openSwarmTasks } from "./navigation";
 import { useSwarmRoster, useSwarmSeat, type SeatDelivery, type SwarmSeat } from "./roster";
 import { useSeatAgentTimeline } from "./seat-agent-timeline";
+import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { DeliveredArtifacts } from "./artifact-views";
 import { useSwarmCanonicalLinkPress } from "./canonical-links";
 import { sendSeatMail, seatRecipient, useUndeliveredSeatMail } from "./seat-mail";
@@ -320,14 +321,14 @@ function SeatDeliveryRow({
           </Button>
         ) : null}
       </View>
-      {/* A delivery without a Task has no Task to read it in full, so it shows whole. */}
-      <Text
-        style={styles.deliveryBody}
-        numberOfLines={delivery.taskId === null ? undefined : 4}
-        selectable
-      >
-        {delivery.body}
-      </Text>
+      {delivery.taskId === null ? (
+        // A delivery without a Task has no Task to read it in, so it shows whole, links included.
+        <MarkdownRenderer text={delivery.body} />
+      ) : (
+        <Text style={styles.deliveryBody} numberOfLines={4}>
+          {delivery.body}
+        </Text>
+      )}
       <DeliveredArtifacts
         artifacts={delivery.artifacts}
         onOpenLink={openLink}

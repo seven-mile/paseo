@@ -1,8 +1,10 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -130,11 +132,27 @@ function collect(root: string, artifact: Pick<Artifact, "source">): Collected {
   return { files: sorted, hash: hash.digest("hex") };
 }
 
+// A copy is read-only on disk, so no reader or agent writes to a file the next copy replaces.
+// Directories are made writable again before Swarm replaces them.
+function setCopyMode(path: string, writable: boolean): void {
+  if (!existsSync(path)) return;
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink()) return;
+  if (!stat.isDirectory()) {
+    if (!writable) chmodSync(path, 0o444);
+    return;
+  }
+  if (writable) chmodSync(path, 0o755);
+  for (const entry of readdirSync(path)) setCopyMode(join(path, entry), writable);
+  if (!writable) chmodSync(path, 0o555);
+}
+
 // Replaces the artifact's copy whole, so a file the author removed leaves the copy too.
 function writeCopy(swarm: SwarmRecord, id: string, collected: Collected): void {
   const directory = artifactsDirectory(swarm);
   mkdirSync(directory, { recursive: true });
   const staging = join(directory, `.${id}.${process.pid}.tmp`);
+  setCopyMode(staging, true);
   rmSync(staging, { recursive: true, force: true });
   for (const file of collected.files) {
     const target = join(staging, file.path);
@@ -142,8 +160,10 @@ function writeCopy(swarm: SwarmRecord, id: string, collected: Collected): void {
     copyFileSync(file.absolute, target);
   }
   const destination = join(directory, id);
+  setCopyMode(destination, true);
   rmSync(destination, { recursive: true, force: true });
   renameSync(staging, destination);
+  setCopyMode(destination, false);
 }
 
 // The directory of a live workspace, or null once Paseo archived it or its directory is gone.

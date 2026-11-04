@@ -132,6 +132,8 @@ const swarmRefSchema = z.object({
   id: z.string(),
   name: z.string(),
   projectId: z.string().nullable(),
+  // The workspace that shows the swarm's artifact copies, which readers don't edit.
+  artifactsWorkspaceId: z.string().optional(),
 });
 
 // Swarm features this host supports. A client offers a feature only when its name is listed;

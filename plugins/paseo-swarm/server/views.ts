@@ -97,7 +97,12 @@ export function seatSummary(seat: SwarmState["agents"][number]): SeatSummary {
 }
 
 function swarmRef(swarm: SwarmRecord) {
-  return { id: swarm.id, name: swarm.name, projectId: swarm.projectId };
+  return {
+    id: swarm.id,
+    name: swarm.name,
+    projectId: swarm.projectId,
+    ...(swarm.artifactsWorkspaceId ? { artifactsWorkspaceId: swarm.artifactsWorkspaceId } : {}),
+  };
 }
 
 // How many deliveries to the human a seat's conversation lists.

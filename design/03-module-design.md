@@ -199,7 +199,7 @@ sequenceDiagram
 - **不带 Task 的交付。** `deliver_task` 省略 `taskId` 时，结果发给 `to` 列出的读者（必须给出），未给 `cc` 时抄送作者的 manager。它存为 `taskId: null` 的 delivery Activity，不进看板和 board 读取；seat 读取在 `directDeliveries` 中单独列出，旧客户端读到的 `deliveries` 形状不变。修正用 `revises` 指向作者自己之前的无 Task 交付。`taskState` 和 `status` 只属于 Task。
 - **发布。** `swarm_artifact_publish` 记录 Swarm 推不出来的一件事：作者把自己 workspace 中的这个文件当作维护中的结果。它不通知任何人，也不进 Needs you。同一作者再次发布同一路径就是同一个 artifact；`artifactId` 用来改指路径。attachments 是结果离不开的文件或目录（数据集、脚本），不是工作笔记或 worker 报告。
 - **存放位置。** 作者继续在自己的 workspace 里写。Swarm 把文件和 attachments 复制到 swarm 目录的 `artifacts/<id>/`，保留 workspace 内的相对路径，所以它们之间的相对链接仍然有效。复制发生在发布时、交付引用它时、以及作者每个回合结束时（内容 hash 不变就跳过）。来源 workspace 被归档或文件被删时，副本保持最后的样子。worktree 合并后被删除也不影响读者：读者总是打开副本。只保留当前结果，不保留历史版本。
-- **展示。** swarm 的 `artifacts/` 目录登记为项目中的一个 directory workspace（`<swarm> artifacts`），首次发布时创建，被人归档后下次复制时重建。读者用普通文件面板打开副本，链接形如 `paseo-swarm://file/<artifacts workspace>/<id>/<path>`。
+- **展示。** swarm 的 `artifacts/` 目录登记为项目中的一个 directory workspace（`<swarm> artifacts`），首次发布时创建，被人归档后下次复制时重建。读者用普通文件面板打开副本，但不能编辑：副本在磁盘上是只读的，app 对这个 workspace 也不提供编辑，因为下一次复制会覆盖读者的修改；要改结果，就让作者改源文件。链接形如 `paseo-swarm://file/<artifacts workspace>/<id>/<path>`。
 - **交付引用。** 交付正文链接到副本或作者的源文件时，Activity 的 `artifacts` 记录 artifact id 和交付时的内容 hash（交付前先同步一次）。读者看到的“交付后已更改”就是这个 hash 与当前 hash 不同；它不区分错别字修改，也不意味着通知。要不要再次交付由作者判断，`swarm_artifact_read` 列出每次交付到达了谁。
 
 链接到 artifact 以外的文件只在其 workspace 存在时有效，这是有意的：只有作者声明过的结果才承诺长期可读。

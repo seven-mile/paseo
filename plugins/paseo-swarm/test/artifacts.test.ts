@@ -1,5 +1,16 @@
 import { strict as assert } from "node:assert";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -56,6 +67,14 @@ interface Artifact {
   deliveries: Array<{ activityId: string; changed: boolean; audience: unknown[] }>;
 }
 
+// Artifact copies are read-only; the test's home is removed whole.
+function makeWritable(path: string): void {
+  const stat = lstatSync(path);
+  if (!stat.isDirectory()) return;
+  chmodSync(path, 0o755);
+  for (const entry of readdirSync(path)) makeWritable(join(path, entry));
+}
+
 // A daemon whose workspaces are directories on disk. Retiring one removes its directory, as
 // Paseo does when a worktree's work merges.
 function setup(t: { after(fn: () => void): void }) {
@@ -65,6 +84,7 @@ function setup(t: { after(fn: () => void): void }) {
   t.after(() => {
     if (previousHome === undefined) delete process.env.PASEO_HOME;
     else process.env.PASEO_HOME = previousHome;
+    makeWritable(home);
     rmSync(home, { recursive: true, force: true });
   });
   forgetRunningTurns();
@@ -156,6 +176,9 @@ test("a published artifact is copied with its attachments and outlives the workt
   // The copy sits in the swarm's directory and keeps relative links between its files.
   assert.equal(workspaces.get("artifacts-1"), join(store.read().swarms[0]!.directory, "artifacts"));
   assert.match(readCopy(artifact), /\[data\]\(\.\/data\/users\.csv\)/);
+  // The copy is read-only, so no reader edits a file the next copy replaces.
+  const copied = join(workspaces.get("artifacts-1")!, artifact.location!.path);
+  assert.equal(statSync(copied).mode & 0o222, 0);
   assert.equal(readCopy(artifact, "auth-review/reports/data/users.csv"), "id,name\n1,ada\n");
   assert.equal(
     existsSync(join(workspaces.get("artifacts-1")!, "auth-review/reports/scratch.md")),
