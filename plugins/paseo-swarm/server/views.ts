@@ -5,6 +5,7 @@ import {
   SWARM_FEATURES,
   TASK_HISTORY_PAGE,
   type seatDeliverySchema,
+  type seatDirectDeliverySchema,
   type seatSummarySchema,
   type taskSummarySchema,
 } from "../shared/swarm";
@@ -18,6 +19,7 @@ import {
   type SwarmState,
   type Task,
 } from "../shared/models";
+import { deliveredArtifactViews } from "./artifacts";
 import { listPwaRoles, readPwa } from "./pwa";
 import { seatView } from "./seats";
 import { store } from "./state";
@@ -25,6 +27,7 @@ import { store } from "./state";
 type SeatSummary = z.input<typeof seatSummarySchema>;
 type TaskSummary = z.input<typeof taskSummarySchema>;
 type SeatDelivery = z.input<typeof seatDeliverySchema>;
+type SeatDirectDelivery = z.input<typeof seatDirectDeliverySchema>;
 
 // A conditional read's answer: data is null when the caller already holds this etag.
 export interface Conditional<T> {
@@ -102,39 +105,53 @@ const SEAT_DELIVERIES = 5;
 
 export function seatReadView(state: Readonly<SwarmState>, seatId: string) {
   const seat = state.agents.find((candidate) => candidate.id === seatId);
-  if (!seat) return { seat: null, deliveries: [] };
-  return { seat: seatView(seat), deliveries: seatDeliveries(state, seat) };
+  if (!seat) return { seat: null, deliveries: [], directDeliveries: [] };
+  return { seat: seatView(seat), ...seatDeliveries(state, seat) };
 }
 
 // The newest deliveries the seat addressed to the human, so its conversation shows results the
-// seat did not repeat in its own words.
-function seatDeliveries(state: Readonly<SwarmState>, seat: AgentRecord): SeatDelivery[] {
+// seat did not repeat in its own words. Those without a Task are listed apart, newest first too.
+function seatDeliveries(
+  state: Readonly<SwarmState>,
+  seat: AgentRecord,
+): { deliveries: SeatDelivery[]; directDeliveries: SeatDirectDelivery[] } {
   const name = agentQualifiedName(seat);
   const deliveries: SeatDelivery[] = [];
+  const directDeliveries: SeatDirectDelivery[] = [];
   for (let index = state.activities.length - 1; index >= 0; index -= 1) {
-    if (deliveries.length === SEAT_DELIVERIES) break;
+    if (deliveries.length + directDeliveries.length === SEAT_DELIVERIES) break;
     const activity = state.activities[index];
     if (activity.swarmId !== seat.swarmId || activity.kind !== "delivery") continue;
     if (activity.actorName !== name) continue;
     const human = activity.audience?.find((entry) => entry.name === HUMAN);
     if (!human) continue;
-    const task = state.tasks.find(
-      (candidate) => candidate.swarmId === activity.swarmId && candidate.id === activity.taskId,
-    );
-    deliveries.push({
+    const artifacts = deliveredArtifactViews(state, activity.swarmId, activity.artifacts);
+    const common = {
       activityId: activity.id,
       swarmId: activity.swarmId,
-      taskId: activity.taskId,
-      taskTitle: task?.title ?? activity.taskId,
       as: human.as,
+      body: activity.body,
+      ...(artifacts ? { artifacts } : {}),
+      createdAt: activity.createdAt,
+    };
+    if (activity.taskId === null) {
+      directDeliveries.push({ ...common, taskId: null });
+      continue;
+    }
+    const taskId = activity.taskId;
+    const task = state.tasks.find(
+      (candidate) => candidate.swarmId === activity.swarmId && candidate.id === taskId,
+    );
+    deliveries.push({
+      ...common,
+      taskId,
+      taskTitle: task?.title ?? taskId,
       ...(typeof activity.data.taskState === "string"
         ? { taskState: activity.data.taskState }
         : {}),
-      body: activity.body,
-      createdAt: activity.createdAt,
     });
   }
-  return deliveries;
+  return { deliveries, directDeliveries };
 }
 
 export function rosterView(state: Readonly<SwarmState>) {
@@ -235,7 +252,7 @@ export function taskView(
   input: { swarmId: string; taskId: string; limit: number },
 ): {
   task: Task;
-  activities: Activity[];
+  activities: (Activity & { deliveredArtifacts?: ReturnType<typeof deliveredArtifactViews> })[];
   olderCount: number;
   absorbed: { id: string; title: string; resolution: string }[];
 } {
@@ -264,9 +281,14 @@ export function taskView(
       title: candidate.title,
       resolution: candidate.resolution ?? "",
     }));
+  // Each delivery lists the artifacts it carried as readers open them now.
+  const withArtifacts = (activity: Activity) => {
+    const deliveredArtifacts = deliveredArtifactViews(state, activity.swarmId, activity.artifacts);
+    return deliveredArtifacts ? { ...activity, deliveredArtifacts } : activity;
+  };
   return {
     task,
-    activities: [...kept, ...all.slice(start)],
+    activities: [...kept, ...all.slice(start)].map(withArtifacts),
     olderCount: older.length - kept.length,
     absorbed,
   };

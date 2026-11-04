@@ -209,10 +209,20 @@ export const audienceEntrySchema = z.object({
 });
 export type AudienceEntry = z.infer<typeof audienceEntrySchema>;
 
+// What a delivery carried: an artifact it linked, and the artifact's content when it was delivered.
+// A reader compares the hash with the artifact's current one to see whether it changed since.
+export const deliveredArtifactSchema = z.object({
+  id: slugNameSchema,
+  contentHash: z.string(),
+});
+export type DeliveredArtifact = z.infer<typeof deliveredArtifactSchema>;
+
 export const activitySchema = z.object({
   id: z.string(),
   swarmId: z.string(),
-  taskId: slugNameSchema,
+  // Null for a delivery made without a Task: it reaches the readers it names and stays off the
+  // board.
+  taskId: slugNameSchema.nullable(),
   actorName: z.string(),
   actorKind: z.preprocess((value) => value ?? "agent", z.enum(["agent", "human"])),
   // Which occupant of the actor's seat wrote it, so a degraded agent's records can be found.
@@ -225,9 +235,38 @@ export const activitySchema = z.object({
   refs: z.array(activityRefSchema).default([]),
   // Who the write reached. Absent when it reached no one, and on Activities from before addressing.
   audience: z.array(audienceEntrySchema).optional(),
+  // The artifacts a delivery linked. Absent on other Activities and on deliveries that link none.
+  artifacts: z.array(deliveredArtifactSchema).optional(),
   createdAt: z.string(),
 });
 export type Activity = z.infer<typeof activitySchema>;
+
+// A result its author maintains and readers come back to, declared by the author with
+// swarm_artifact_publish. The author keeps writing it in its own workspace; Swarm keeps a copy of
+// the file and the attachments it needs in the swarm's artifacts directory, which outlives the
+// worktrees that produced it. Readers always open that copy.
+export const artifactSchema = z.object({
+  id: slugNameSchema,
+  swarmId: z.string(),
+  title: z.string(),
+  authorName: z.string(),
+  // The Task it belongs to, when it has one.
+  taskId: slugNameSchema.optional(),
+  // Where the author maintains it: a file and the files or directories it needs, relative to the
+  // author's workspace. The copy keeps these paths under the artifact's id, so relative links
+  // between them still resolve.
+  source: z.object({
+    workspaceId: z.string(),
+    path: z.string(),
+    attachments: z.array(z.string()),
+  }),
+  // The hash of the copied content, and when it last changed.
+  contentHash: z.string(),
+  changedAt: z.string(),
+  publishedAt: z.string(),
+  updatedAt: z.string(),
+});
+export type Artifact = z.infer<typeof artifactSchema>;
 
 // An Activity that asks the human to choose: data.action holds the question and its options.
 export const choiceActionSchema = z.object({
@@ -307,6 +346,8 @@ export const swarmRecordSchema = z.object({
   // Null for a swarm of seats made with no project, before swarms.
   projectId: z.string().nullable(),
   source: swarmSourceSchema,
+  // The Paseo workspace that shows the swarm's artifacts directory, made at the first publish.
+  artifactsWorkspaceId: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -346,6 +387,7 @@ export const stateSchema = z.object({
   activities: z.array(activitySchema),
   messages: z.array(mailboxMessageSchema).default([]),
   intents: z.array(specIntentSchema).default([]),
+  artifacts: z.array(artifactSchema).default([]),
 });
 export type SwarmState = z.infer<typeof stateSchema>;
 // What the board shows; the mailbox is read through its own RPC.
@@ -360,5 +402,6 @@ export function emptyState(): SwarmState {
     activities: [],
     messages: [],
     intents: [],
+    artifacts: [],
   };
 }

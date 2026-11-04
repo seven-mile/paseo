@@ -1,4 +1,5 @@
 import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
+import { syncAuthoredArtifacts } from "./server/artifacts";
 import { flushMailbox, markConsumed, noteTurnEnded, noteTurnStarted } from "./server/mailbox";
 import { migrateStore } from "./server/migration";
 import { notifyManager, registerOperations } from "./server/operations";
@@ -44,6 +45,9 @@ export default function contribute(server: PluginServerContext) {
     noteTurnEnded(event.agent.id);
     if (event.outcome.kind === "completed") await markConsumed(event.agent.id);
     await notifyManager(event.agent, summarizeTurn(event), context);
+    // The author's artifacts are copied again when the turn changed them, so the copy readers
+    // open is current as of its last turn. A copy that fails stays as it was.
+    await syncAuthoredArtifacts(event.agent.id, context);
     // Any turn end is a chance to retry mail that earlier sends could not deliver,
     // including mail left queued when the daemon last stopped.
     await flushMailbox(context);

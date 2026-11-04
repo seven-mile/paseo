@@ -19,6 +19,7 @@ import {
   emptyState,
   mailboxMessageSchema,
   specIntentSchema,
+  artifactSchema,
   stateSchema,
   swarmRecordSchema,
   taskSchema,
@@ -64,7 +65,7 @@ export function getConfigPath(): string {
   return join(getDataDirectory(), "config.json");
 }
 
-// The store key of a Task: its id is unique only within its swarm.
+// The store key of a Task or an artifact: its id is unique only within its swarm.
 export function taskKey(task: { id: string; swarmId?: string }): string {
   return `${task.swarmId ?? ""}/${task.id}`;
 }
@@ -81,6 +82,7 @@ const collections = {
   activities: { schema: activitySchema, key: byId },
   messages: { schema: mailboxMessageSchema, key: byId },
   intents: { schema: specIntentSchema, key: byId },
+  artifacts: { schema: artifactSchema, key: taskKey },
 } as const;
 type Collections = typeof collections;
 export type CollectionName = keyof Collections;

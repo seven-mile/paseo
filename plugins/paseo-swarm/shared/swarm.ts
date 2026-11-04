@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   activitySchema,
   agentRecordSchema,
+  artifactSchema,
   audienceEntrySchema,
   mailboxMessageSchema,
   mailboxStatusSchema,
@@ -138,7 +139,7 @@ const swarmRefSchema = z.object({
 // "addressing": writes report their audience, and the seat read lists deliveries to the human.
 // "board": the Task list reads its current view and a searchable history.
 // "close": the human closes open Tasks as done without a delivery (swarm.tasks.close).
-export const SWARM_FEATURES = ["cc", "addressing", "board", "close"];
+export const SWARM_FEATURES = ["cc", "addressing", "board", "close", "artifacts"];
 const featuresSchema = z.array(z.string()).optional();
 
 // What a list or a link needs of a seat: no prompt receipts, occupant history or agent config.
@@ -219,6 +220,23 @@ export const tasksReadRpc = defineRpc({
 });
 
 // A delivery the seat addressed to the human, as its conversation lists it.
+// Where readers open an artifact: its copy in the swarm's artifacts workspace. The link is the
+// paseo-swarm://file link to that copy, which deliveries and documents use.
+export const artifactLocationSchema = z.object({
+  workspaceId: z.string(),
+  path: z.string(),
+  link: z.string(),
+});
+
+// An artifact a delivery carried, as its reader opens it now.
+export const deliveredArtifactViewSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  location: artifactLocationSchema.nullable(),
+  // The artifact changed since this delivery.
+  changed: z.boolean(),
+});
+
 export const seatDeliverySchema = z.object({
   activityId: z.string(),
   swarmId: z.string(),
@@ -227,8 +245,15 @@ export const seatDeliverySchema = z.object({
   as: z.enum(["to", "cc"]),
   taskState: z.string().optional(),
   body: z.string(),
+  // Absent when the delivery carried none, and on hosts from before artifacts.
+  artifacts: z.array(deliveredArtifactViewSchema).optional(),
   createdAt: z.string(),
 });
+
+// A delivery the seat made to the person without a Task.
+export const seatDirectDeliverySchema = seatDeliverySchema
+  .omit({ taskId: true, taskTitle: true, taskState: true })
+  .extend({ taskId: z.null() });
 
 // One seat with its occupants, retired seats included: a seat tab. Data is a null seat when no
 // seat has this id.
@@ -240,6 +265,8 @@ export const seatReadRpc = defineRpc({
       seat: seatSchema.nullable(),
       // The newest deliveries this seat addressed to the human. Absent from older hosts.
       deliveries: z.array(seatDeliverySchema).optional(),
+      // Deliveries without a Task, kept apart so hosts from before them read the seat unchanged.
+      directDeliveries: z.array(seatDirectDeliverySchema).optional(),
     }),
   ),
 });
@@ -397,19 +424,25 @@ const audienceInputSchema = {
 // in the same commit. taskState is the Task's state after the delivery: done closes it, open keeps
 // it open or reopens it. revises names an earlier delivery this one corrects. A retry of the same
 // submission returns the earlier delivery and notifies no one again.
+// A delivery without taskId is made to the readers `to` names and stays off the board; taskState
+// and status apply only to a Task.
 export const deliverTaskRpc = defineRpc({
   name: "swarm.task.deliver",
   input: z.object({
     swarmId: z.string().min(1).optional(),
-    taskId: slugNameSchema,
+    taskId: slugNameSchema.optional(),
     actorName: z.string().min(1),
     result: z.string().min(1),
-    taskState: z.enum(["done", "open"]),
+    taskState: z.enum(["done", "open"]).optional(),
     status: z.string().min(1).optional(),
     revises: z.string().min(1).nullable().default(null),
     ...audienceInputSchema,
   }),
-  output: z.object({ task: taskSchema, activity: activitySchema, duplicate: z.boolean() }),
+  output: z.object({
+    task: taskSchema.nullable(),
+    activity: activitySchema,
+    duplicate: z.boolean(),
+  }),
 });
 
 export const appendActivityRpc = defineRpc({
@@ -581,4 +614,54 @@ export const seatHistoryReadRpc = defineRpc({
     entries: z.array(z.object({ type: z.string(), text: z.string() })),
     nextBefore: z.string().nullable(),
   }),
+});
+
+// A delivery that carried an artifact: who it reached, and whether the artifact changed since.
+export const artifactDeliverySchema = z.object({
+  activityId: z.string(),
+  taskId: z.string().nullable(),
+  actorName: z.string(),
+  audience: z.array(audienceEntrySchema),
+  changed: z.boolean(),
+  createdAt: z.string(),
+});
+
+export const artifactViewSchema = artifactSchema.extend({
+  location: artifactLocationSchema.nullable(),
+  taskTitle: z.string().nullable(),
+  deliveries: z.array(artifactDeliverySchema),
+});
+
+// Declares a file in the author's workspace as a maintained result, or updates one the author
+// published before. Publishing records the declaration and copies the content; it tells no one.
+export const publishArtifactRpc = defineRpc({
+  name: "swarm.artifact.publish",
+  input: z.object({
+    swarmId: z.string().min(1).optional(),
+    actorName: z.string().min(1),
+    // The artifact to update; absent to publish a new one, or the one the path already holds.
+    artifactId: slugNameSchema.optional(),
+    path: z.string().min(1),
+    title: z.string().min(1),
+    attachments: z.array(z.string().min(1)).max(100).default([]),
+    taskId: slugNameSchema.nullable().optional(),
+  }),
+  output: z.object({ artifact: artifactViewSchema, created: z.boolean() }),
+});
+
+export const readArtifactRpc = defineRpc({
+  name: "swarm.artifact.read",
+  input: z.object({
+    swarmId: z.string().min(1).optional(),
+    actorName: z.string().min(1).optional(),
+    artifactId: slugNameSchema,
+  }),
+  output: artifactViewSchema,
+});
+
+// A swarm's artifacts, most recently changed first, for the Artifacts view.
+export const artifactsReadRpc = defineRpc({
+  name: "swarm.artifacts.read",
+  input: z.object({ ...swarmScopeSchema, ...etagInputSchema }),
+  output: conditionalOutput(z.object({ artifacts: z.array(artifactViewSchema) })),
 });
