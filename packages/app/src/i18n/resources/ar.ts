@@ -52,6 +52,8 @@ export const ar: TranslationResources = {
       deliveries: "نتائج لك",
       deliveryCopied: "نسخة لك",
       openTask: "فتح {{title}}",
+      showAll: "عرض الكل",
+      showLatest: "عرض الأحدث",
       handover: {
         new: "تسلّم الشاغل {{to}} من الشاغل {{from}} {{time}} ({{reason}}).",
         returning: "عاد الشاغل {{to}} إلى المقعد {{time}} ({{reason}}).",
@@ -95,6 +97,8 @@ export const ar: TranslationResources = {
       deliveredTo: "سُلِّم إلى {{names}}",
       byAuthor: "بواسطة {{author}}",
       unavailable: "لا توجد بعد نسخة من هذا المخرج لفتحها.",
+      find: "بحث عن مخرج",
+      noMatches: "لا توجد مخرجات مطابقة.",
     },
     tasks: {
       title: "المهام",
@@ -166,6 +170,7 @@ export const ar: TranslationResources = {
       audienceCc: "نسخة إلى {{names}}",
       briefUnconfirmed: "موجز كتبه {{author}}، ولم يؤكده {{owner}} بعد",
       delivered: "تم التسليم",
+      current: "الحالية",
       history: "السجل",
       emptyHistory: "لا توجد مهام مغلقة مطابقة.",
       supersededBy: "استبدلتها {{id}}",
@@ -173,6 +178,7 @@ export const ar: TranslationResources = {
       absorbed: "ضمّت {{ids}}",
       closeAsDone: "إغلاق كمكتملة",
       closeAllAsDone: "إغلاق الكل كمكتملة",
+      columnActions: "إجراءات {{status}}",
       closeReason: "السبب، يبقى في السجل",
       closeTellsOwner: "سيُبلَّغ {{owner}}. الدورة الجارية تستمر.",
       closeQuietly_one: "يغلق {{count}} Task مفتوحة دون إبلاغ مالكها.",

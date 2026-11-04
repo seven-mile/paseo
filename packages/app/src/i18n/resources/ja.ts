@@ -53,6 +53,8 @@ export const ja: TranslationResources = {
       deliveries: "あなた宛ての結果",
       deliveryCopied: "CC で受信",
       openTask: "{{title}} を開く",
+      showAll: "すべて表示",
+      showLatest: "最新のみ表示",
       handover: {
         new: "担当者 {{to}} が{{time}}に担当者 {{from}} から引き継ぎました ({{reason}})。",
         returning: "担当者 {{to}} が{{time}}にシートに戻りました ({{reason}})。",
@@ -96,6 +98,8 @@ export const ja: TranslationResources = {
       deliveredTo: "{{names}} に納品",
       byAuthor: "作成: {{author}}",
       unavailable: "この成果物には、まだ開けるコピーがありません。",
+      find: "成果物を検索",
+      noMatches: "一致する成果物はありません。",
     },
     tasks: {
       title: "タスク",
@@ -168,6 +172,7 @@ export const ja: TranslationResources = {
       audienceCc: "CC {{names}}",
       briefUnconfirmed: "{{author}} が書いた概要で、{{owner}} はまだ確認していません",
       delivered: "納品済み",
+      current: "現在",
       history: "履歴",
       emptyHistory: "一致する完了済みタスクはありません。",
       supersededBy: "{{id}} に置き換え",
@@ -175,6 +180,7 @@ export const ja: TranslationResources = {
       absorbed: "{{ids}} を統合",
       closeAsDone: "完了として閉じる",
       closeAllAsDone: "すべて完了として閉じる",
+      columnActions: "{{status}} の操作",
       closeReason: "理由（履歴に残ります）",
       closeTellsOwner: "{{owner}} に通知されます。実行中のターンは止まりません。",
       closeQuietly_one: "開いている Task {{count}} 件を担当者に通知せずに閉じます。",

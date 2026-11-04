@@ -3,10 +3,10 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { FileText } from "lucide-react-native";
 import type { QueryClient } from "@tanstack/react-query";
-import { StyleSheet } from "react-native-unistyles";
-import { Button } from "@/components/ui/button";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useFetchQuery } from "@/data/query";
+import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { formatTimeAgo } from "@/utils/time";
 import {
   artifactReaders,
@@ -15,7 +15,12 @@ import {
   type DeliveredArtifact,
   type SwarmArtifact,
 } from "./artifact-model";
+import { SwarmInlineLink } from "./inline-link";
 import { SWARM_POLL_MS, selectSwarmValue, swarmConditionalQuery } from "./sync";
+
+const ThemedFileText = withUnistyles(FileText);
+const mutedIcon = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+const ARTIFACT_ICON = <ThemedFileText size={ICON_SIZE.sm} uniProps={mutedIcon} />;
 
 interface SwarmArtifacts {
   artifacts: SwarmArtifact[];
@@ -97,16 +102,13 @@ function DeliveredArtifactEntry({
   }, [link, onOpenLink]);
   return (
     <View style={styles.entry}>
-      <Button
-        variant="ghost"
-        size="xs"
-        leftIcon={FileText}
+      <SwarmInlineLink
+        label={artifact.title}
         onPress={open}
         disabled={!link || !onOpenLink}
+        leading={ARTIFACT_ICON}
         testID={`swarm-artifact-open-${artifact.id}`}
-      >
-        {artifact.title}
-      </Button>
+      />
       {artifact.changed ? (
         <StatusBadge size="xs" label={t("swarm.artifacts.changedSinceDelivery")} />
       ) : null}
@@ -119,21 +121,25 @@ function DeliveredArtifactEntry({
 export function SwarmArtifactList({
   artifacts,
   loading,
+  searching,
   onOpenLink,
   onOpenTask,
 }: {
   artifacts: readonly SwarmArtifact[];
   loading: boolean;
+  // A search is narrowing the list, so an empty one means no match rather than none at all.
+  searching: boolean;
   onOpenLink: ((uri: string) => boolean) | null | undefined;
   onOpenTask: (taskId: string) => void;
 }) {
   const { t } = useTranslation();
+  let emptyMessage = t("swarm.artifacts.empty");
+  if (loading) emptyMessage = t("swarm.tasks.loading");
+  else if (searching) emptyMessage = t("swarm.artifacts.noMatches");
   return (
     <ScrollView contentContainerStyle={styles.rows} testID="swarm-artifact-list">
       {artifacts.length === 0 ? (
-        <Text style={styles.meta}>
-          {loading ? t("swarm.tasks.loading") : t("swarm.artifacts.empty")}
-        </Text>
+        <Text style={styles.meta}>{emptyMessage}</Text>
       ) : (
         artifacts.map((artifact) => (
           <ArtifactRow
@@ -173,62 +179,58 @@ function ArtifactRow({
   const readers = artifactReaders(artifact);
   const changed = changedSinceLastDelivery(artifact);
   return (
-    <View style={styles.rowHost}>
-      <Pressable
-        onPress={open}
-        disabled={!link || !onOpenLink}
-        style={rowStyle}
-        accessibilityRole="button"
-        accessibilityLabel={artifact.title}
-        testID={`swarm-artifact-${artifact.id}`}
-      >
-        <Text style={styles.primary} numberOfLines={2}>
-          {artifact.title}
+    <Pressable
+      onPress={open}
+      disabled={!link || !onOpenLink}
+      style={rowStyle}
+      accessibilityRole="button"
+      accessibilityLabel={artifact.title}
+      testID={`swarm-artifact-${artifact.id}`}
+    >
+      <Text style={styles.primary} numberOfLines={2}>
+        {artifact.title}
+      </Text>
+      <View style={styles.metaLine}>
+        <Text style={styles.meta} numberOfLines={1}>
+          {t("swarm.artifacts.byAuthor", { author: artifact.authorName })}
+          {` · ${formatTimeAgo(new Date(artifact.changedAt))}`}
+          {taskId ? " ·" : ""}
         </Text>
-        <View style={styles.rowMeta}>
-          <Text style={styles.meta} numberOfLines={1}>
-            {t("swarm.artifacts.byAuthor", { author: artifact.authorName })}
-            {` · ${formatTimeAgo(new Date(artifact.changedAt))}`}
-          </Text>
-          {changed ? (
-            <StatusBadge size="xs" label={t("swarm.artifacts.changedSinceLastDelivery")} />
-          ) : null}
-        </View>
+        {taskId ? (
+          <SwarmInlineLink
+            label={artifact.taskTitle ?? taskId}
+            onPress={openTask}
+            testID={`swarm-artifact-task-${artifact.id}`}
+          />
+        ) : null}
+      </View>
+      <View style={styles.rowMeta}>
         <Text style={styles.meta} numberOfLines={1}>
           {readers.length > 0
             ? t("swarm.artifacts.deliveredTo", { names: readers.join(", ") })
             : t("swarm.artifacts.notDelivered")}
         </Text>
-      </Pressable>
-      {taskId ? (
-        <View style={styles.rowMeta}>
-          <Button
-            variant="ghost"
-            size="xs"
-            onPress={openTask}
-            testID={`swarm-artifact-task-${artifact.id}`}
-          >
-            {artifact.taskTitle ?? taskId}
-          </Button>
-        </View>
-      ) : null}
-    </View>
+        {changed ? (
+          <StatusBadge size="xs" label={t("swarm.artifacts.changedSinceLastDelivery")} />
+        ) : null}
+      </View>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  entries: { gap: theme.spacing[1] },
+  entries: { gap: theme.spacing[2], paddingTop: theme.spacing[1] },
   entry: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: theme.spacing[2] },
   rows: { padding: theme.spacing[2], gap: theme.spacing[1] },
-  rowHost: { gap: theme.spacing[1] },
   row: {
-    minHeight: 64,
     padding: theme.spacing[2],
-    gap: theme.spacing[2],
+    gap: theme.spacing[1],
     borderRadius: theme.borderRadius.lg,
   },
   pressedRow: { backgroundColor: theme.colors.surface2 },
   rowMeta: { flexDirection: "row", alignItems: "center", gap: theme.spacing[2], flexWrap: "wrap" },
-  primary: { color: theme.colors.foreground, fontSize: theme.fontSize.base },
+  // A link continues the sentence before it, a space apart.
+  metaLine: { flexDirection: "row", alignItems: "center", gap: theme.spacing[1], flexWrap: "wrap" },
+  primary: { color: theme.colors.foreground, fontSize: theme.fontSize.base, flexShrink: 1 },
   meta: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm, flexShrink: 1 },
 }));

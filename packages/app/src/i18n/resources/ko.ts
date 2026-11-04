@@ -52,6 +52,8 @@ export const ko: TranslationResources = {
       deliveries: "나에게 온 결과",
       deliveryCopied: "참조로 받음",
       openTask: "{{title}} 열기",
+      showAll: "모두 보기",
+      showLatest: "최신만 보기",
       handover: {
         new: "담당자 {{to}}이(가) {{time}} 담당자 {{from}}에게서 이어받았습니다 ({{reason}}).",
         returning: "담당자 {{to}}이(가) {{time}} 자리로 돌아왔습니다 ({{reason}}).",
@@ -95,6 +97,8 @@ export const ko: TranslationResources = {
       deliveredTo: "{{names}}에게 전달됨",
       byAuthor: "작성자 {{author}}",
       unavailable: "이 산출물에는 아직 열 수 있는 사본이 없습니다.",
+      find: "산출물 찾기",
+      noMatches: "일치하는 산출물이 없습니다.",
     },
     tasks: {
       title: "작업",
@@ -167,6 +171,7 @@ export const ko: TranslationResources = {
       audienceCc: "참조 {{names}}",
       briefUnconfirmed: "{{author}}이(가) 쓴 개요로, {{owner}}이(가) 아직 확인하지 않았습니다",
       delivered: "전달됨",
+      current: "현재",
       history: "기록",
       emptyHistory: "일치하는 닫힌 작업이 없습니다.",
       supersededBy: "{{id}}(으)로 대체됨",
@@ -174,6 +179,7 @@ export const ko: TranslationResources = {
       absorbed: "{{ids}} 통합",
       closeAsDone: "완료로 닫기",
       closeAllAsDone: "모두 완료로 닫기",
+      columnActions: "{{status}} 작업",
       closeReason: "이유(기록에 남음)",
       closeTellsOwner: "{{owner}}에게 알립니다. 실행 중인 턴은 계속됩니다.",
       closeQuietly_one: "열린 Task {{count}}개를 담당자에게 알리지 않고 닫습니다.",

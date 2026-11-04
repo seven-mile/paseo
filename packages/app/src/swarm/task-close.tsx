@@ -13,6 +13,8 @@ export function TaskCloseControl({
   owner,
   invoke,
   onClosed,
+  open: controlledOpen,
+  onOpenChange,
   testID,
 }: {
   // Task ids are unique only within a swarm, so each Task names its swarm.
@@ -21,20 +23,32 @@ export function TaskCloseControl({
   owner?: string;
   invoke: <T>(method: string, input: unknown) => Promise<T>;
   onClosed: () => void;
+  // A caller with its own trigger, such as a menu, opens the form itself and is told when it
+  // closes.
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   testID: string;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = controlledOpen ?? localOpen;
+  const setOpen = useCallback(
+    (value: boolean) => {
+      setLocalOpen(value);
+      onOpenChange?.(value);
+    },
+    [onOpenChange],
+  );
   const [reason, setReason] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const quiet = owner === undefined;
-  const start = useCallback(() => setOpen(true), []);
+  const start = useCallback(() => setOpen(true), [setOpen]);
   const cancel = useCallback(() => {
     setOpen(false);
     setReason("");
     setError(null);
-  }, []);
+  }, [setOpen]);
   const confirm = useCallback(async () => {
     const text = reason.trim();
     if (!text || pending) return;
@@ -56,12 +70,14 @@ export function TaskCloseControl({
     } finally {
       setPending(false);
     }
-  }, [invoke, onClosed, pending, quiet, reason, tasks]);
+  }, [invoke, onClosed, pending, quiet, reason, setOpen, tasks]);
   if (!open) {
     return (
-      <Button variant="ghost" size="xs" onPress={start} testID={testID}>
-        {quiet ? t("swarm.tasks.closeAllAsDone") : t("swarm.tasks.closeAsDone")}
-      </Button>
+      <View style={styles.trigger}>
+        <Button variant="outline" size="sm" onPress={start} testID={testID}>
+          {quiet ? t("swarm.tasks.closeAllAsDone") : t("swarm.tasks.closeAsDone")}
+        </Button>
+      </View>
     );
   }
   return (
@@ -100,6 +116,8 @@ export function TaskCloseControl({
 
 const styles = StyleSheet.create((theme) => ({
   form: { gap: theme.spacing[2] },
+  // The button keeps its own width on the content's leading rail.
+  trigger: { flexDirection: "row" },
   actions: { flexDirection: "row", justifyContent: "flex-end", gap: theme.spacing[2] },
   meta: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
   error: { color: theme.colors.destructive, fontSize: theme.fontSize.sm },

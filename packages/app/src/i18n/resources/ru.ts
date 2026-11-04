@@ -52,6 +52,8 @@ export const ru: TranslationResources = {
       deliveries: "Результаты для вас",
       deliveryCopied: "Копия вам",
       openTask: "Открыть {{title}}",
+      showAll: "Показать все",
+      showLatest: "Показать последний",
       handover: {
         new: "Агент {{to}} сменил агента {{from}} {{time}} ({{reason}}).",
         returning: "Агент {{to}} вернулся на место {{time}} ({{reason}}).",
@@ -95,6 +97,8 @@ export const ru: TranslationResources = {
       deliveredTo: "Передан: {{names}}",
       byAuthor: "Автор: {{author}}",
       unavailable: "У этого артефакта пока нет копии, которую можно открыть.",
+      find: "Найти артефакт",
+      noMatches: "Нет подходящих артефактов.",
     },
     tasks: {
       title: "Задачи",
@@ -168,6 +172,7 @@ export const ru: TranslationResources = {
       audienceCc: "Копия: {{names}}",
       briefUnconfirmed: "Описание написал {{author}}, {{owner}} ещё не подтвердил его",
       delivered: "Сдано",
+      current: "Текущие",
       history: "История",
       emptyHistory: "Нет подходящих закрытых задач.",
       supersededBy: "Заменена {{id}}",
@@ -175,6 +180,7 @@ export const ru: TranslationResources = {
       absorbed: "Включила {{ids}}",
       closeAsDone: "Закрыть как выполненную",
       closeAllAsDone: "Закрыть все как выполненные",
+      columnActions: "Действия: {{status}}",
       closeReason: "Причина, сохраняется в истории",
       closeTellsOwner: "{{owner}} получит уведомление. Текущий ход продолжится.",
       closeQuietly_one: "Закрывает {{count}} открытую Task без уведомления владельца.",

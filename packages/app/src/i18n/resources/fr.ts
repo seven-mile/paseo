@@ -55,6 +55,8 @@ export const fr: TranslationResources = {
       deliveries: "Résultats pour vous",
       deliveryCopied: "Copie pour vous",
       openTask: "Ouvrir {{title}}",
+      showAll: "Tout afficher",
+      showLatest: "Afficher le dernier",
       handover: {
         new: "L'occupant {{to}} a pris la relève de l'occupant {{from}} {{time}} ({{reason}}).",
         returning: "L'occupant {{to}} est revenu au poste {{time}} ({{reason}}).",
@@ -99,6 +101,8 @@ export const fr: TranslationResources = {
       deliveredTo: "Livré à {{names}}",
       byAuthor: "Par {{author}}",
       unavailable: "Cet artefact n'a pas encore de copie à ouvrir.",
+      find: "Rechercher un artefact",
+      noMatches: "Aucun artefact correspondant.",
     },
     tasks: {
       title: "Tâches",
@@ -172,6 +176,7 @@ export const fr: TranslationResources = {
       audienceCc: "Cc {{names}}",
       briefUnconfirmed: "Brief de {{author}}, pas encore confirmé par {{owner}}",
       delivered: "Livrées",
+      current: "En cours",
       history: "Historique",
       emptyHistory: "Aucune tâche fermée ne correspond.",
       supersededBy: "Remplacée par {{id}}",
@@ -179,6 +184,7 @@ export const fr: TranslationResources = {
       absorbed: "A absorbé {{ids}}",
       closeAsDone: "Fermer comme faite",
       closeAllAsDone: "Tout fermer comme fait",
+      columnActions: "Actions pour {{status}}",
       closeReason: "Raison, conservée dans l'historique",
       closeTellsOwner: "{{owner}} est prévenu. Un tour en cours continue.",
       closeQuietly_one: "Ferme {{count}} Task ouverte sans prévenir son responsable.",

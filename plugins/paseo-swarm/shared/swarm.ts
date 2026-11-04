@@ -289,7 +289,13 @@ export const taskReadRpc = defineRpc({
   output: conditionalOutput(
     z.object({
       task: taskSchema,
-      activities: z.array(activitySchema),
+      // A delivery lists the artifacts it carried as readers open them now. Absent from older
+      // hosts and from deliveries that carried none.
+      activities: z.array(
+        activitySchema.extend({
+          deliveredArtifacts: z.array(deliveredArtifactViewSchema).optional(),
+        }),
+      ),
       // Activities before the oldest one returned, other than unanswered choices.
       olderCount: z.number().int().nonnegative(),
       // Tasks closed as a duplicate of this one or superseded by it. Absent from older hosts.

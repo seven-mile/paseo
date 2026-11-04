@@ -11,9 +11,9 @@ import {
   useSyncExternalStore,
   type ComponentProps,
 } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View, type PressableStateCallbackType } from "react-native";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft } from "lucide-react-native";
+import { ArrowLeft, MoreHorizontal } from "lucide-react-native";
 import { i18n } from "@/i18n/i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import Animated from "react-native-reanimated";
@@ -23,14 +23,20 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { isNative } from "@/constants/platform";
 import { useContainerWidthBelow } from "@/hooks/use-container-width";
 import { useKeyboardShiftStyle } from "@/keyboard/shift";
-import type { Theme } from "@/styles/theme";
+import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { createSharedMarkdownRules, MarkdownRenderer } from "@/components/markdown/renderer";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { Button } from "@/components/ui/button";
 import { SurfaceCard } from "@/components/ui/scrollable-code-surface";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { DropdownTrigger } from "@/components/ui/dropdown-trigger";
 import { Field, FormTextInput } from "@/components/ui/form-field";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { StatusBadge } from "@/components/ui/status-badge";
 import type { EditingTextInputHandle } from "@/components/ui/text-input";
 import {
@@ -46,7 +52,9 @@ import {
   useWorkspaceFields,
   useWorkspaceStructure,
 } from "@/stores/session-store-hooks";
+import { filterSwarmArtifacts } from "./artifact-model";
 import { DeliveredArtifacts, SwarmArtifactList, useSwarmArtifacts } from "./artifact-views";
+import { SwarmInlineLink } from "./inline-link";
 import { useSwarmCanonicalLinkPress } from "./canonical-links";
 import { SwarmCcLine } from "./cc-line";
 import { TaskCloseControl } from "./task-close";
@@ -120,7 +128,10 @@ const TaskAuthorsContext = createContext<{
   agents: readonly SwarmTaskAgent[];
 } | null>(null);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
+const ThemedMoreHorizontal = withUnistyles(MoreHorizontal);
 const spinnerMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+const mutedIconMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+const foregroundIconMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 
 function TaskSelect({
   label,
@@ -624,11 +635,11 @@ function LoadedTasks({
   const lanes = useMemo(() => partitionSwarmTasks(filtered), [filtered]);
   const openLink = useSwarmCanonicalLinkPress();
   const {
+    lane,
+    setLane,
     showHistory,
-    toggleHistory,
     historySupported,
     showArtifacts,
-    toggleArtifacts,
     artifactsSupported,
     artifacts,
     history,
@@ -668,10 +679,6 @@ function LoadedTasks({
     ],
     [board, tasks, t],
   );
-  const filterStyle = useMemo(
-    () => [styles.filters, wide && !split && styles.filtersWide],
-    [wide, split],
-  );
   const navigatorStyle = useMemo(
     () => [
       styles.navigator,
@@ -686,6 +693,10 @@ function LoadedTasks({
   );
   const bodyStyle = useMemo(() => [styles.taskBody, split && styles.taskBodySplit], [split]);
   const showList = !showHistory && !showArtifacts;
+  const shownArtifacts = useMemo(
+    () => filterSwarmArtifacts(artifacts.artifacts, search),
+    [artifacts.artifacts, search],
+  );
   const showKanban = !selectedTaskId && presentation === "main" && wide && showList;
   return (
     <View style={styles.loaded} onLayout={onLayout}>
@@ -695,34 +706,23 @@ function LoadedTasks({
           style={navigatorStyle}
           testID="swarm-task-navigator"
         >
-          <View style={filterStyle}>
-            <TaskSelect
-              label={t("swarm.tasks.scope")}
-              value={scope}
-              options={scopeOptions}
-              onSelect={changeScope}
-            />
-            <View style={wide && !split ? styles.searchWide : undefined}>
-              <FormTextInput
-                initialValue={search}
-                size={compact ? "md" : "sm"}
-                onChangeText={setSearch}
-                placeholder={t("swarm.tasks.findTask")}
-                accessibilityLabel={t("swarm.tasks.findTask")}
-                testID="swarm-task-search"
-              />
-            </View>
-            <TaskStatusFilter statuses={statuses} options={statusOptions} onToggle={toggleStatus} />
-            <TaskLaneControls
-              attention={swarmAttentionTotal(tasks)}
-              historySupported={historySupported}
-              showHistory={showHistory}
-              onToggleHistory={toggleHistory}
-              artifactsSupported={artifactsSupported}
-              showArtifacts={showArtifacts}
-              onToggleArtifacts={toggleArtifacts}
-            />
-          </View>
+          <TaskFilters
+            inline={wide && !split}
+            compact={compact}
+            lane={lane}
+            onLaneChange={setLane}
+            historySupported={historySupported}
+            artifactsSupported={artifactsSupported}
+            scope={scope}
+            scopeOptions={scopeOptions}
+            onScopeChange={changeScope}
+            search={search}
+            onSearchChange={setSearch}
+            statuses={statuses}
+            statusOptions={statusOptions}
+            onToggleStatus={toggleStatus}
+            attention={swarmAttentionTotal(tasks)}
+          />
           <RetainedPanel active={showKanban}>
             <TaskKanban
               tasks={lanes.open}
@@ -757,7 +757,8 @@ function LoadedTasks({
           </RetainedPanel>
           <RetainedPanel active={showArtifacts}>
             <SwarmArtifactList
-              artifacts={artifacts.artifacts}
+              artifacts={shownArtifacts}
+              searching={search.trim().length > 0}
               loading={artifacts.loading}
               onOpenLink={openLink}
               onOpenTask={openTask}
@@ -854,66 +855,130 @@ function TaskKanban({
       contentContainerStyle={styles.columns}
       testID="swarm-task-kanban"
     >
-      {columns.map((column) =>
-        // An empty status narrows to its heading, so the columns with cards, Delivered among
-        // them, stay in view.
-        column.tasks.length === 0 ? (
-          <View
-            style={styles.columnEmpty}
-            key={column.status}
-            testID={`swarm-column-${column.status}`}
-          >
-            <View style={styles.columnHeading}>
-              <StatusBadge label={column.status} />
-              <Text style={styles.meta}>0</Text>
-            </View>
-          </View>
-        ) : (
-          <View style={styles.column} key={column.status} testID={`swarm-column-${column.status}`}>
-            <View style={styles.columnHeading}>
-              <StatusBadge label={column.status} />
-              <Text style={styles.meta}>{column.tasks.length}</Text>
-            </View>
-            {closeSupported ? (
-              <TaskCloseControl
-                tasks={column.tasks}
-                invoke={invoke}
-                onClosed={onRefresh}
-                testID={`swarm-column-close-${column.status}`}
-              />
-            ) : null}
-            <ScrollView contentContainerStyle={styles.columnCards} nestedScrollEnabled>
-              {column.tasks.map((task) => (
-                <SurfaceCard key={task.id}>
-                  <TaskRow
-                    task={task}
-                    selected={false}
-                    attention={task.attention}
-                    onOpen={onOpen}
-                  />
-                </SurfaceCard>
-              ))}
-            </ScrollView>
-          </View>
-        ),
-      )}
+      {columns.map((column) => (
+        <KanbanColumn
+          key={column.status}
+          label={column.status}
+          tasks={column.tasks}
+          closeSupported={closeSupported}
+          invoke={invoke}
+          onOpen={onOpen}
+          onRefresh={onRefresh}
+          testID={`swarm-column-${column.status}`}
+        />
+      ))}
       {delivered.length > 0 ? (
-        <View style={styles.column} testID="swarm-column-delivered">
-          <View style={styles.columnHeading}>
-            <StatusBadge variant="success" label={t("swarm.tasks.delivered")} />
-            <Text style={styles.meta}>{delivered.length}</Text>
-          </View>
-          <ScrollView contentContainerStyle={styles.columnCards} nestedScrollEnabled>
-            {delivered.map((task) => (
-              <SurfaceCard key={task.id}>
-                <TaskRow task={task} selected={false} attention={task.attention} onOpen={onOpen} />
-              </SurfaceCard>
-            ))}
-          </ScrollView>
-        </View>
+        <KanbanColumn
+          label={t("swarm.tasks.delivered")}
+          tasks={delivered}
+          closeSupported={false}
+          invoke={invoke}
+          onOpen={onOpen}
+          onRefresh={onRefresh}
+          testID="swarm-column-delivered"
+        />
       ) : null}
     </ScrollView>
   );
+}
+
+// One status of the board. The heading names it and counts its Tasks; the cards leave the status
+// out, since the column says it. An empty status narrows to its heading, so the columns with cards
+// stay in view. Closing a whole column as done is how a board from before resolutions is cleared,
+// so it waits in the heading's menu.
+function KanbanColumn({
+  label,
+  tasks,
+  closeSupported,
+  invoke,
+  onOpen,
+  onRefresh,
+  testID,
+}: {
+  label: string;
+  tasks: readonly SwarmTask[];
+  closeSupported: boolean;
+  invoke: <T>(method: string, input: unknown) => Promise<T>;
+  onOpen: (id: string) => void;
+  onRefresh: () => void;
+  testID: string;
+}) {
+  const { t } = useTranslation();
+  const [closing, setClosing] = useState(false);
+  const startClosing = useCallback(() => setClosing(true), []);
+  const empty = tasks.length === 0;
+  return (
+    <View style={empty ? styles.columnEmpty : styles.column} testID={testID}>
+      <View style={styles.columnHeading}>
+        <Text style={empty ? styles.columnLabelEmpty : styles.columnLabel} numberOfLines={1}>
+          {label}
+        </Text>
+        <Text style={styles.columnCount}>{tasks.length}</Text>
+        {closeSupported && !empty ? (
+          <View style={styles.columnActions}>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                hitSlop={8}
+                style={columnMenuTriggerStyle}
+                accessibilityLabel={t("swarm.tasks.columnActions", { status: label })}
+                testID={`${testID.replace("swarm-column-", "swarm-column-menu-")}`}
+              >
+                {renderColumnMenuIcon}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" width={200}>
+                <DropdownMenuItem
+                  onSelect={startClosing}
+                  testID={`${testID.replace("swarm-column-", "swarm-column-close-")}`}
+                >
+                  {t("swarm.tasks.closeAllAsDone")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </View>
+        ) : null}
+      </View>
+      {closing ? (
+        <TaskCloseControl
+          tasks={tasks}
+          invoke={invoke}
+          onClosed={onRefresh}
+          open
+          onOpenChange={setClosing}
+          testID={`${testID.replace("swarm-column-", "swarm-column-close-")}`}
+        />
+      ) : null}
+      {empty ? null : (
+        <ScrollView contentContainerStyle={styles.columnCards} nestedScrollEnabled>
+          {tasks.map((task) => (
+            <SurfaceCard key={task.id}>
+              <TaskRow
+                task={task}
+                selected={false}
+                attention={task.attention}
+                onOpen={onOpen}
+                showStatus={false}
+              />
+            </SurfaceCard>
+          ))}
+        </ScrollView>
+      )}
+    </View>
+  );
+}
+
+function renderColumnMenuIcon({ hovered }: { hovered?: boolean }) {
+  return (
+    <ThemedMoreHorizontal
+      size={ICON_SIZE.sm}
+      uniProps={hovered ? foregroundIconMapping : mutedIconMapping}
+    />
+  );
+}
+
+function columnMenuTriggerStyle({
+  hovered = false,
+}: PressableStateCallbackType & { hovered?: boolean }) {
+  return [styles.columnMenuTrigger, hovered && styles.columnMenuTriggerHovered];
 }
 
 function TaskRows({
@@ -953,55 +1018,147 @@ function TaskRows({
   );
 }
 
-// The Task list's count of choices waiting for the person, and the switch to closed Tasks.
-function TaskLaneControls({
-  attention,
+type TaskLane = "board" | "history" | "artifacts";
+
+// The view switch and the filters for it. They sit on one line beside the board and stack in a
+// narrow list; on a phone both pickers share a line under the search. Artifacts belong to the project,
+// so the Task scope and statuses do not apply to them.
+function TaskFilters({
+  inline,
+  compact,
+  lane,
+  onLaneChange,
   historySupported,
-  showHistory,
-  onToggleHistory,
   artifactsSupported,
-  showArtifacts,
-  onToggleArtifacts,
+  scope,
+  scopeOptions,
+  onScopeChange,
+  search,
+  onSearchChange,
+  statuses,
+  statusOptions,
+  onToggleStatus,
+  attention,
 }: {
-  attention: number;
+  inline: boolean;
+  compact: boolean;
+  lane: TaskLane;
+  onLaneChange: (lane: TaskLane) => void;
   historySupported: boolean;
-  showHistory: boolean;
-  onToggleHistory: () => void;
   artifactsSupported: boolean;
-  showArtifacts: boolean;
-  onToggleArtifacts: () => void;
+  scope: string;
+  scopeOptions: Array<{ value: string; label: string }>;
+  onScopeChange: (value: string) => void;
+  search: string;
+  onSearchChange: (value: string) => void;
+  statuses: readonly string[];
+  statusOptions: Array<{ value: string; label: string }>;
+  onToggleStatus: (value: string) => void;
+  attention: number;
 }) {
   const { t } = useTranslation();
-  if (attention === 0 && !historySupported && !artifactsSupported) return null;
+  const artifacts = lane === "artifacts";
+  const findLabel = artifacts ? t("swarm.artifacts.find") : t("swarm.tasks.findTask");
+  const style = useMemo(() => [styles.filters, inline && styles.filtersWide], [inline]);
+  const scopeFilter = artifacts ? null : (
+    <TaskSelect
+      label={t("swarm.tasks.scope")}
+      value={scope}
+      options={scopeOptions}
+      onSelect={onScopeChange}
+    />
+  );
+  const statusFilter = artifacts ? null : (
+    <TaskStatusFilter statuses={statuses} options={statusOptions} onToggle={onToggleStatus} />
+  );
   return (
-    <View style={styles.rowMeta}>
-      {attention > 0 ? (
+    <View style={style}>
+      <TaskViewSwitch
+        lane={lane}
+        onChange={onLaneChange}
+        historySupported={historySupported}
+        artifactsSupported={artifactsSupported}
+        compact={compact}
+      />
+      {inline ? scopeFilter : null}
+      <View style={inline ? styles.searchWide : undefined}>
+        <FormTextInput
+          initialValue={search}
+          size={compact ? "md" : "sm"}
+          onChangeText={onSearchChange}
+          placeholder={findLabel}
+          accessibilityLabel={findLabel}
+          testID="swarm-task-search"
+        />
+      </View>
+      {inline ? statusFilter : null}
+      {!inline && compact && !artifacts ? (
+        <View style={styles.pickers}>
+          <View style={styles.picker}>{scopeFilter}</View>
+          <View style={styles.picker}>{statusFilter}</View>
+        </View>
+      ) : null}
+      {!inline && !compact ? scopeFilter : null}
+      {!inline && !compact ? statusFilter : null}
+      {attention > 0 && !artifacts ? (
         <StatusBadge
           variant="warning"
           label={t("swarm.tasks.awaitingReply", { count: attention })}
         />
       ) : null}
-      {historySupported ? (
-        <Button
-          variant={showHistory ? "secondary" : "ghost"}
-          size="sm"
-          onPress={onToggleHistory}
-          testID="swarm-task-history-toggle"
-        >
-          {t("swarm.tasks.history")}
-        </Button>
-      ) : null}
-      {artifactsSupported ? (
-        <Button
-          variant={showArtifacts ? "secondary" : "ghost"}
-          size="sm"
-          onPress={onToggleArtifacts}
-          testID="swarm-artifacts-toggle"
-        >
-          {t("swarm.artifacts.title")}
-        </Button>
-      ) : null}
     </View>
+  );
+}
+
+// What the list shows: the current Tasks, closed ones, or the project's artifacts. Hosts from
+// before History or artifacts offer only the views they have.
+function TaskViewSwitch({
+  lane,
+  onChange,
+  historySupported,
+  artifactsSupported,
+  compact,
+}: {
+  lane: TaskLane;
+  onChange: (lane: TaskLane) => void;
+  historySupported: boolean;
+  artifactsSupported: boolean;
+  compact: boolean;
+}) {
+  const { t } = useTranslation();
+  const options = useMemo(
+    () => [
+      { value: "board" as const, label: t("swarm.tasks.current"), testID: "swarm-task-current" },
+      ...(historySupported
+        ? [
+            {
+              value: "history" as const,
+              label: t("swarm.tasks.history"),
+              testID: "swarm-task-history-toggle",
+            },
+          ]
+        : []),
+      ...(artifactsSupported
+        ? [
+            {
+              value: "artifacts" as const,
+              label: t("swarm.artifacts.title"),
+              testID: "swarm-artifacts-toggle",
+            },
+          ]
+        : []),
+    ],
+    [artifactsSupported, historySupported, t],
+  );
+  if (options.length < 2) return null;
+  return (
+    <SegmentedControl
+      options={options}
+      value={lane}
+      onValueChange={onChange}
+      size={compact ? "md" : "sm"}
+      testID="swarm-task-view"
+    />
   );
 }
 
@@ -1025,17 +1182,9 @@ function useHistoryLane(input: {
 }) {
   const { board, projectWorkspaceIds, knownWorkspaceIds, agentName } = input;
   // The list shows the board, closed Tasks, or the project's artifacts.
-  const [lane, setLane] = useState<"board" | "history" | "artifacts">("board");
+  const [lane, setLane] = useState<TaskLane>("board");
   const showHistory = lane === "history";
   const showArtifacts = lane === "artifacts";
-  const toggleHistory = useCallback(
-    () => setLane((value) => (value === "history" ? "board" : "history")),
-    [],
-  );
-  const toggleArtifacts = useCallback(
-    () => setLane((value) => (value === "artifacts" ? "board" : "artifacts")),
-    [],
-  );
   const historySupported = board.features?.includes("board") ?? false;
   const artifactsSupported = board.features?.includes("artifacts") ?? false;
   const artifacts = useSwarmArtifacts({
@@ -1085,11 +1234,11 @@ function useHistoryLane(input: {
     });
   }, [board.tasks, history.seen, lookup.seen]);
   return {
+    lane,
+    setLane,
     showHistory,
-    toggleHistory,
     historySupported,
     showArtifacts,
-    toggleArtifacts,
     artifactsSupported,
     artifacts,
     history,
@@ -1154,11 +1303,14 @@ function TaskRow({
   selected,
   attention,
   onOpen,
+  showStatus = true,
 }: {
   task: SwarmTask;
   selected: boolean;
   attention: number;
   onOpen: (id: string) => void;
+  // A board column already names the status.
+  showStatus?: boolean;
 }) {
   const { t } = useTranslation();
   const open = useCallback(() => onOpen(task.id), [onOpen, task.id]);
@@ -1184,8 +1336,9 @@ function TaskRow({
         {task.title}
       </Text>
       <View style={styles.rowMeta}>
-        <StatusBadge label={task.status} />
+        {/* A closed Task's status is where it stopped; how it closed is what a reader needs. */}
         {task.resolution ? <ResolutionBadge resolution={task.resolution} /> : null}
+        {!task.resolution && showStatus ? <StatusBadge label={task.status} /> : null}
         <Text style={styles.meta} numberOfLines={1}>
           {task.managerName}
         </Text>
@@ -1783,9 +1936,9 @@ function ActivityRow({
     <View style={styles.activity} testID={`swarm-activity-${activity.id}`}>
       <View style={styles.activityHeader}>
         {activity.actorKind === "agent" ? (
-          <PersonButton name={activity.actorName} onOpen={onOpenActor} />
+          <PersonLink name={activity.actorName} onOpen={onOpenActor} />
         ) : (
-          <Text style={styles.primary}>{activity.actorName}</Text>
+          <Text style={styles.metaStrong}>{activity.actorName}</Text>
         )}
         <Text style={styles.meta}>
           {activity.kind === "delivery" ? t("swarm.tasks.result") : activity.kind}
@@ -1795,15 +1948,17 @@ function ActivityRow({
         {notInBrief ? (
           <StatusBadge size="xs" variant="warning" label={t("swarm.tasks.notInBrief")} />
         ) : null}
-        <Button
-          variant="ghost"
-          size="xs"
-          disabled={pending}
-          onPress={reply}
-          accessibilityLabel={t("swarm.tasks.replyAccessibility", { actor: activity.actorName })}
-        >
-          {t("swarm.tasks.reply")}
-        </Button>
+        <View style={styles.activityTrailing}>
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={pending}
+            onPress={reply}
+            accessibilityLabel={t("swarm.tasks.replyAccessibility", { actor: activity.actorName })}
+          >
+            {t("swarm.tasks.reply")}
+          </Button>
+        </View>
       </View>
       <Text style={styles.meta}>
         {new Date(activity.createdAt).toLocaleString()}
@@ -1905,18 +2060,26 @@ function TaskSummary({
         />
       ) : null}
       <View style={styles.participants}>
-        <Text style={styles.meta}>{t("swarm.tasks.owner")}</Text>
-        <PersonButton name={task.managerName} onOpen={onOpenActor} />
-        <Text style={styles.meta}>{t("swarm.tasks.createdBy")}</Text>
-        <PersonButton name={task.createdBy} onOpen={onOpenActor} />
+        <View style={styles.participant}>
+          <Text style={styles.meta}>{t("swarm.tasks.owner")}</Text>
+          <PersonLink name={task.managerName} onOpen={onOpenActor} />
+        </View>
+        <View style={styles.participant}>
+          <Text style={styles.meta}>{t("swarm.tasks.createdBy")}</Text>
+          <PersonLink name={task.createdBy} onOpen={onOpenActor} />
+        </View>
         <Requester
           requester={record?.requester}
           createdBy={task.createdBy}
           onOpenActor={onOpenActor}
         />
-        {task.workerNames.map((name) => (
-          <PersonButton key={name} name={name} onOpen={onOpenActor} />
-        ))}
+        {task.workerNames.length ? (
+          <View style={styles.participant}>
+            {task.workerNames.map((name) => (
+              <PersonLink key={name} name={name} onOpen={onOpenActor} />
+            ))}
+          </View>
+        ) : null}
       </View>
     </>
   );
@@ -2060,14 +2223,14 @@ function Requester({
   const { t } = useTranslation();
   if (!requester || requester === createdBy) return null;
   return (
-    <>
+    <View style={styles.participant}>
       <Text style={styles.meta}>{t("swarm.tasks.requestedBy")}</Text>
       {requester === PERSON_SENDER ? (
-        <Text style={styles.primary}>{requester}</Text>
+        <Text style={styles.metaStrong}>{requester}</Text>
       ) : (
-        <PersonButton name={requester} onOpen={onOpenActor} />
+        <PersonLink name={requester} onOpen={onOpenActor} />
       )}
-    </>
+    </View>
   );
 }
 
@@ -2141,12 +2304,14 @@ function TaskResult({
   return (
     <SurfaceCard style={styles.result} testID="swarm-task-result">
       <View style={styles.activityHeader}>
-        <Text style={styles.primary}>
+        <Text style={styles.label}>
           {stage ? t("swarm.tasks.stageResult") : t("swarm.tasks.result")}
         </Text>
         {revised ? <StatusBadge size="xs" label={t("swarm.tasks.revised")} /> : null}
-        <PersonButton name={delivery.actorName} onOpen={onOpenActor} />
-        <Text style={styles.meta}>{new Date(delivery.createdAt).toLocaleString()}</Text>
+      </View>
+      <View style={styles.metaLine}>
+        <PersonLink name={delivery.actorName} onOpen={onOpenActor} />
+        <Text style={styles.meta}>· {new Date(delivery.createdAt).toLocaleString()}</Text>
       </View>
       <AudienceLine activity={delivery} />
       <AuthoredMarkdown
@@ -2163,13 +2328,10 @@ function TaskResult({
   );
 }
 
-function PersonButton({ name, onOpen }: { name: string; onOpen: (name: string) => void }) {
+// A seat named in a line of metadata; it opens the seat.
+function PersonLink({ name, onOpen }: { name: string; onOpen: (name: string) => void }) {
   const open = useCallback(() => onOpen(name), [onOpen, name]);
-  return (
-    <Button variant="ghost" size="xs" onPress={open}>
-      {name}
-    </Button>
-  );
+  return <SwarmInlineLink label={name} onPress={open} />;
 }
 
 function ChoiceOption({
@@ -2256,17 +2418,41 @@ const styles = StyleSheet.create((theme) => ({
   kanban: { flex: 1 },
   columns: { gap: theme.spacing[3], padding: theme.spacing[3] },
   column: { width: 260, gap: theme.spacing[2] },
-  columnEmpty: { gap: theme.spacing[2] },
+  columnEmpty: { gap: theme.spacing[2], maxWidth: 160 },
+  // The heading's text starts on the cards' text rail: the card's border and the row's padding.
   columnHeading: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    minHeight: 32,
+    gap: theme.spacing[2],
+    minHeight: 28,
+    paddingHorizontal: theme.spacing[2] + theme.borderWidth[1],
   },
+  columnLabel: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
+    flexShrink: 1,
+  },
+  columnLabelEmpty: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
+    flexShrink: 1,
+  },
+  columnCount: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    fontVariant: ["tabular-nums"],
+  },
+  columnActions: { marginLeft: "auto" },
+  columnMenuTrigger: { padding: 2, borderRadius: 4 },
+  columnMenuTriggerHovered: { backgroundColor: theme.colors.surface2 },
   columnCards: { gap: theme.spacing[2], paddingBottom: theme.spacing[3] },
   filters: { padding: theme.spacing[3], gap: theme.spacing[2] },
   filtersWide: { flexDirection: "row", alignItems: "center", flexWrap: "wrap" },
   searchWide: { flex: 1, minWidth: 160 },
+  pickers: { flexDirection: "row", gap: theme.spacing[2] },
+  picker: { flex: 1, minWidth: 0 },
   taskRows: { padding: theme.spacing[2], gap: theme.spacing[1] },
   lane: { gap: theme.spacing[1], paddingTop: theme.spacing[3] },
   relation: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: theme.spacing[1] },
@@ -2298,9 +2484,20 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     flexWrap: "wrap",
     alignItems: "center",
-    gap: theme.spacing[1],
+    columnGap: theme.spacing[4],
+    rowGap: theme.spacing[1],
     marginBottom: theme.spacing[2],
   },
+  // A label and the names it introduces, a space apart.
+  participant: { flexDirection: "row", alignItems: "center", gap: theme.spacing[1] },
+  metaLine: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: theme.spacing[1] },
+  metaStrong: { color: theme.colors.foreground, fontSize: theme.fontSize.sm },
+  label: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.medium,
+  },
+  activityTrailing: { marginLeft: "auto" },
   activity: {
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,

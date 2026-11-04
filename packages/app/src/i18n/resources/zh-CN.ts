@@ -51,6 +51,8 @@ export const zhCN: TranslationResources = {
       deliveries: "给你的结果",
       deliveryCopied: "抄送给你",
       openTask: "打开 {{title}}",
+      showAll: "显示全部",
+      showLatest: "只显示最新",
       handover: {
         new: "占用者 {{to}} 于{{time}}接替了占用者 {{from}}（{{reason}}）。",
         returning: "占用者 {{to}} 于{{time}}回到席位（{{reason}}）。",
@@ -94,6 +96,8 @@ export const zhCN: TranslationResources = {
       deliveredTo: "已交付给 {{names}}",
       byAuthor: "作者 {{author}}",
       unavailable: "这个成果还没有可以打开的副本。",
+      find: "查找成果",
+      noMatches: "没有匹配的成果。",
     },
     tasks: {
       title: "任务",
@@ -165,6 +169,7 @@ export const zhCN: TranslationResources = {
       audienceCc: "抄送 {{names}}",
       briefUnconfirmed: "简报由 {{author}} 撰写，{{owner}} 尚未确认",
       delivered: "已交付",
+      current: "当前",
       history: "历史",
       emptyHistory: "没有匹配的已关闭任务。",
       supersededBy: "被 {{id}} 取代",
@@ -172,6 +177,7 @@ export const zhCN: TranslationResources = {
       absorbed: "已并入 {{ids}}",
       closeAsDone: "标记完成并关闭",
       closeAllAsDone: "全部标记完成并关闭",
+      columnActions: "{{status}} 操作",
       closeReason: "原因（记入历史）",
       closeTellsOwner: "会通知 {{owner}}。正在运行的回合不会被中止。",
       closeQuietly_one: "关闭 {{count}} 个未关闭的 Task，不通知负责人。",

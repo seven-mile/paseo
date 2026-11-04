@@ -59,3 +59,16 @@ export function changedSinceLastDelivery(artifact: Pick<SwarmArtifact, "deliveri
   const latest = artifact.deliveries.at(-1);
   return latest ? latest.changed : null;
 }
+
+// The artifacts whose title, author or Task title holds the search, in order.
+export function filterSwarmArtifacts<
+  T extends Pick<SwarmArtifact, "title" | "authorName" | "taskTitle">,
+>(artifacts: readonly T[], search: string): readonly T[] {
+  const query = search.trim().toLowerCase();
+  if (!query) return artifacts;
+  return artifacts.filter((artifact) =>
+    [artifact.title, artifact.authorName, artifact.taskTitle ?? ""].some((text) =>
+      text.toLowerCase().includes(query),
+    ),
+  );
+}

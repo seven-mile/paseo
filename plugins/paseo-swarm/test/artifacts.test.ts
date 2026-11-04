@@ -29,6 +29,7 @@ import {
   deliverTaskRpc,
   publishArtifactRpc,
   readArtifactRpc,
+  taskReadRpc,
 } from "../shared/swarm";
 
 const timestamp = "2026-11-01T00:00:00Z";
@@ -287,6 +288,16 @@ test("a delivery records the artifacts it links, and readers see when one change
   const result = view.activities.find((activity) => activity.id === delivered.activity.id)!;
   assert.deepEqual(
     result.deliveredArtifacts?.map((entry) => [entry.id, entry.changed]),
+    [["auth-review", true]],
+  );
+  // The host parses each reply with the contract's output, which must keep the artifacts.
+  const read = taskReadRpc.output.parse(
+    await call(taskReadRpc, { swarmId: task.swarmId, taskId: task.id }),
+  );
+  assert.deepEqual(
+    read.data?.activities
+      .find((activity) => activity.id === delivered.activity.id)
+      ?.deliveredArtifacts?.map((entry) => [entry.id, entry.changed]),
     [["auth-review", true]],
   );
   const seatView = seatReadView(store.read(), lead.id);
