@@ -42,6 +42,8 @@ import { SwarmCcLine } from "./cc-line";
 import { openSwarmTasks } from "./navigation";
 import { useSwarmRoster, useSwarmSeat, type SeatDelivery, type SwarmSeat } from "./roster";
 import { useSeatAgentTimeline } from "./seat-agent-timeline";
+import { DeliveredArtifacts } from "./artifact-views";
+import { useSwarmCanonicalLinkPress } from "./canonical-links";
 import { sendSeatMail, seatRecipient, useUndeliveredSeatMail } from "./seat-mail";
 import { defaultSwarmCc } from "./task-model";
 import {
@@ -290,19 +292,23 @@ function SeatDeliveryRow({
   delivery: SeatDelivery;
 }) {
   const { t } = useTranslation();
+  const openLink = useSwarmCanonicalLinkPress();
+  const { taskId } = delivery;
   const open = useCallback(() => {
-    if (!workspaceId) return;
-    openSwarmTasks({ serverId, workspaceId, agentName: "", taskId: delivery.taskId });
-  }, [delivery.taskId, serverId, workspaceId]);
+    if (!workspaceId || !taskId) return;
+    openSwarmTasks({ serverId, workspaceId, agentName: "", taskId });
+  }, [taskId, serverId, workspaceId]);
   return (
     <View style={styles.delivery} testID={`swarm-seat-delivery-${delivery.activityId}`}>
       <View style={styles.deliveriesHeader}>
         <Text style={styles.deliveryLabel}>
-          {delivery.taskState === "open" ? t("swarm.tasks.stageResult") : t("swarm.tasks.result")}
+          {delivery.taskId !== null && delivery.taskState === "open"
+            ? t("swarm.tasks.stageResult")
+            : t("swarm.tasks.result")}
           {delivery.as === "cc" ? ` · ${t("swarm.seat.deliveryCopied")}` : ""}
           {` · ${formatTimeAgo(new Date(delivery.createdAt))}`}
         </Text>
-        {workspaceId ? (
+        {workspaceId && delivery.taskId !== null ? (
           <Button
             variant="ghost"
             size="xs"
@@ -314,9 +320,19 @@ function SeatDeliveryRow({
           </Button>
         ) : null}
       </View>
-      <Text style={styles.deliveryBody} numberOfLines={4}>
+      {/* A delivery without a Task has no Task to read it in full, so it shows whole. */}
+      <Text
+        style={styles.deliveryBody}
+        numberOfLines={delivery.taskId === null ? undefined : 4}
+        selectable
+      >
         {delivery.body}
       </Text>
+      <DeliveredArtifacts
+        artifacts={delivery.artifacts}
+        onOpenLink={openLink}
+        testID={`swarm-seat-delivery-artifacts-${delivery.activityId}`}
+      />
     </View>
   );
 }

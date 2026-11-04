@@ -86,6 +86,16 @@ export const ar: TranslationResources = {
       directoryLabel: "المجلد",
       saved: "تم حفظ مجلد PWA",
     },
+    artifacts: {
+      title: "المخرجات",
+      empty: "لا توجد مخرجات بعد. ينشر المقعد مخرجًا عندما تستحق النتيجة العودة إليها.",
+      changedSinceDelivery: "تغيّر منذ هذا التسليم",
+      changedSinceLastDelivery: "تغيّر منذ آخر تسليم",
+      notDelivered: "لم يُسلَّم بعد",
+      deliveredTo: "سُلِّم إلى {{names}}",
+      byAuthor: "بواسطة {{author}}",
+      unavailable: "لا توجد بعد نسخة من هذا المخرج لفتحها.",
+    },
     tasks: {
       title: "المهام",
       description: "المهام والنشاط",

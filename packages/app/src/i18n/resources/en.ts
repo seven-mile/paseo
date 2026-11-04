@@ -83,6 +83,16 @@ export const en = {
       directoryLabel: "Directory",
       saved: "PWA directory saved",
     },
+    artifacts: {
+      title: "Artifacts",
+      empty: "No artifacts yet. A seat publishes one when a result is worth coming back to.",
+      changedSinceDelivery: "Changed since this delivery",
+      changedSinceLastDelivery: "Changed since last delivered",
+      notDelivered: "Not delivered yet",
+      deliveredTo: "Delivered to {{names}}",
+      byAuthor: "By {{author}}",
+      unavailable: "This artifact has no copy to open yet.",
+    },
     tasks: {
       title: "Tasks",
       description: "Tasks and activity",

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { deliveredArtifactSchema } from "./artifact-model";
 import { i18n } from "@/i18n/i18next";
 import { isFileLookingAssistantToken, parseAssistantFileLink } from "@/assistant-file-links/parse";
 import { isImeComposingKeyboardEvent } from "@/utils/keyboard-ime";
@@ -111,6 +112,8 @@ const activitySchema = z.object({
   audience: z
     .array(z.object({ name: z.string(), as: z.enum(["to", "cc"]), why: z.string() }))
     .optional(),
+  // The artifacts a delivery carried, as readers open them now; absent when none.
+  deliveredArtifacts: z.array(deliveredArtifactSchema).optional(),
   createdAt: z.string(),
 });
 export const swarmHumanActivityReceiptSchema = activitySchema.extend({

@@ -46,6 +46,8 @@ import {
   useWorkspaceFields,
   useWorkspaceStructure,
 } from "@/stores/session-store-hooks";
+import { DeliveredArtifacts, SwarmArtifactList, useSwarmArtifacts } from "./artifact-views";
+import { useSwarmCanonicalLinkPress } from "./canonical-links";
 import { SwarmCcLine } from "./cc-line";
 import { TaskCloseControl } from "./task-close";
 import { useSwarmRpc } from "./rpc";
@@ -620,10 +622,15 @@ function LoadedTasks({
     [tasks, statuses, search],
   );
   const lanes = useMemo(() => partitionSwarmTasks(filtered), [filtered]);
+  const openLink = useSwarmCanonicalLinkPress();
   const {
     showHistory,
     toggleHistory,
     historySupported,
+    showArtifacts,
+    toggleArtifacts,
+    artifactsSupported,
+    artifacts,
     history,
     historyTasks,
     knownTasks,
@@ -678,7 +685,8 @@ function LoadedTasks({
     [selectedTaskId],
   );
   const bodyStyle = useMemo(() => [styles.taskBody, split && styles.taskBodySplit], [split]);
-  const showKanban = !selectedTaskId && presentation === "main" && wide && !showHistory;
+  const showList = !showHistory && !showArtifacts;
+  const showKanban = !selectedTaskId && presentation === "main" && wide && showList;
   return (
     <View style={styles.loaded} onLayout={onLayout}>
       <View style={bodyStyle}>
@@ -710,6 +718,9 @@ function LoadedTasks({
               historySupported={historySupported}
               showHistory={showHistory}
               onToggleHistory={toggleHistory}
+              artifactsSupported={artifactsSupported}
+              showArtifacts={showArtifacts}
+              onToggleArtifacts={toggleArtifacts}
             />
           </View>
           <RetainedPanel active={showKanban}>
@@ -723,7 +734,7 @@ function LoadedTasks({
               onRefresh={onRefresh}
             />
           </RetainedPanel>
-          <RetainedPanel active={!showKanban && !showHistory}>
+          <RetainedPanel active={!showKanban && showList}>
             <TaskRows
               tasks={lanes.open}
               delivered={lanes.closed}
@@ -742,6 +753,14 @@ function LoadedTasks({
                 history.loading ? t("swarm.tasks.loading") : t("swarm.tasks.emptyHistory")
               }
               onOpen={openTask}
+            />
+          </RetainedPanel>
+          <RetainedPanel active={showArtifacts}>
+            <SwarmArtifactList
+              artifacts={artifacts.artifacts}
+              loading={artifacts.loading}
+              onOpenLink={openLink}
+              onOpenTask={openTask}
             />
           </RetainedPanel>
         </RetainedPanel>
@@ -940,14 +959,20 @@ function TaskLaneControls({
   historySupported,
   showHistory,
   onToggleHistory,
+  artifactsSupported,
+  showArtifacts,
+  onToggleArtifacts,
 }: {
   attention: number;
   historySupported: boolean;
   showHistory: boolean;
   onToggleHistory: () => void;
+  artifactsSupported: boolean;
+  showArtifacts: boolean;
+  onToggleArtifacts: () => void;
 }) {
   const { t } = useTranslation();
-  if (attention === 0 && !historySupported) return null;
+  if (attention === 0 && !historySupported && !artifactsSupported) return null;
   return (
     <View style={styles.rowMeta}>
       {attention > 0 ? (
@@ -964,6 +989,16 @@ function TaskLaneControls({
           testID="swarm-task-history-toggle"
         >
           {t("swarm.tasks.history")}
+        </Button>
+      ) : null}
+      {artifactsSupported ? (
+        <Button
+          variant={showArtifacts ? "secondary" : "ghost"}
+          size="sm"
+          onPress={onToggleArtifacts}
+          testID="swarm-artifacts-toggle"
+        >
+          {t("swarm.artifacts.title")}
         </Button>
       ) : null}
     </View>
@@ -989,9 +1024,27 @@ function useHistoryLane(input: {
   selectedTaskId: string | null;
 }) {
   const { board, projectWorkspaceIds, knownWorkspaceIds, agentName } = input;
-  const [showHistory, setShowHistory] = useState(false);
-  const toggleHistory = useCallback(() => setShowHistory((value) => !value), []);
+  // The list shows the board, closed Tasks, or the project's artifacts.
+  const [lane, setLane] = useState<"board" | "history" | "artifacts">("board");
+  const showHistory = lane === "history";
+  const showArtifacts = lane === "artifacts";
+  const toggleHistory = useCallback(
+    () => setLane((value) => (value === "history" ? "board" : "history")),
+    [],
+  );
+  const toggleArtifacts = useCallback(
+    () => setLane((value) => (value === "artifacts" ? "board" : "artifacts")),
+    [],
+  );
   const historySupported = board.features?.includes("board") ?? false;
+  const artifactsSupported = board.features?.includes("artifacts") ?? false;
+  const artifacts = useSwarmArtifacts({
+    serverId: input.serverId,
+    projectId: input.projectId,
+    invoke: input.invoke,
+    queryClient: input.queryClient,
+    enabled: showArtifacts && artifactsSupported && input.online,
+  });
   const history = useSwarmTaskHistory({
     serverId: input.serverId,
     projectId: input.projectId,
@@ -1035,6 +1088,10 @@ function useHistoryLane(input: {
     showHistory,
     toggleHistory,
     historySupported,
+    showArtifacts,
+    toggleArtifacts,
+    artifactsSupported,
+    artifacts,
     history,
     historyTasks,
     knownTasks,
@@ -1759,6 +1816,11 @@ function ActivityRow({
         author={activity.actorName}
         onLinkPress={onLinkPress}
       />
+      <DeliveredArtifacts
+        artifacts={activity.deliveredArtifacts}
+        onOpenLink={onLinkPress}
+        testID={`swarm-activity-artifacts-${activity.id}`}
+      />
       {choice && canChoose ? (
         <View style={styles.choices}>
           <Text style={styles.primary}>{choice.prompt}</Text>
@@ -2091,6 +2153,11 @@ function TaskResult({
         text={delivery.body}
         author={delivery.actorName}
         onLinkPress={onLinkPress}
+      />
+      <DeliveredArtifacts
+        artifacts={delivery.deliveredArtifacts}
+        onOpenLink={onLinkPress}
+        testID="swarm-task-result-artifacts"
       />
     </SurfaceCard>
   );

@@ -86,6 +86,17 @@ export const es: TranslationResources = {
       directoryLabel: "Directorio",
       saved: "Directorio PWA guardado",
     },
+    artifacts: {
+      title: "Artefactos",
+      empty:
+        "Aún no hay artefactos. Un puesto publica uno cuando vale la pena volver a un resultado.",
+      changedSinceDelivery: "Cambió desde esta entrega",
+      changedSinceLastDelivery: "Cambió desde la última entrega",
+      notDelivered: "Aún no entregado",
+      deliveredTo: "Entregado a {{names}}",
+      byAuthor: "De {{author}}",
+      unavailable: "Este artefacto aún no tiene una copia que abrir.",
+    },
     tasks: {
       title: "Tareas",
       description: "Tareas y actividad",

@@ -87,6 +87,16 @@ export const ja: TranslationResources = {
       directoryLabel: "ディレクトリ",
       saved: "PWA ディレクトリを保存しました",
     },
+    artifacts: {
+      title: "成果物",
+      empty: "成果物はまだありません。後で見返す価値のある結果を、シートが公開します。",
+      changedSinceDelivery: "この納品後に変更あり",
+      changedSinceLastDelivery: "最後の納品後に変更あり",
+      notDelivered: "未納品",
+      deliveredTo: "{{names}} に納品",
+      byAuthor: "作成: {{author}}",
+      unavailable: "この成果物には、まだ開けるコピーがありません。",
+    },
     tasks: {
       title: "タスク",
       description: "タスクとアクティビティ",

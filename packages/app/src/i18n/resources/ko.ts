@@ -86,6 +86,16 @@ export const ko: TranslationResources = {
       directoryLabel: "디렉터리",
       saved: "PWA 디렉터리가 저장되었습니다",
     },
+    artifacts: {
+      title: "산출물",
+      empty: "아직 산출물이 없습니다. 다시 볼 가치가 있는 결과는 자리에서 게시합니다.",
+      changedSinceDelivery: "이 전달 이후 변경됨",
+      changedSinceLastDelivery: "마지막 전달 이후 변경됨",
+      notDelivered: "아직 전달되지 않음",
+      deliveredTo: "{{names}}에게 전달됨",
+      byAuthor: "작성자 {{author}}",
+      unavailable: "이 산출물에는 아직 열 수 있는 사본이 없습니다.",
+    },
     tasks: {
       title: "작업",
       description: "작업 및 활동",

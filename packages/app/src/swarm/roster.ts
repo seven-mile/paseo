@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { z } from "zod";
 import { useFetchQuery } from "@/data/query";
 import type { InstalledPlugin } from "@/plugins/types";
+import { deliveredArtifactSchema } from "./artifact-model";
 import { SWARM_POLL_MS, selectSwarmValue, swarmConditionalQuery } from "./sync";
 
 const configSchema = z.object({
@@ -122,17 +123,35 @@ const seatDeliverySchema = z.object({
   as: z.enum(["to", "cc"]),
   taskState: z.string().optional(),
   body: z.string(),
+  // The artifacts it carried; absent when none, and on hosts from before artifacts.
+  artifacts: z.array(deliveredArtifactSchema).optional(),
   createdAt: z.string(),
 });
-export type SeatDelivery = z.infer<typeof seatDeliverySchema>;
+// A delivery made without a Task, listed apart by the host.
+const seatDirectDeliverySchema = seatDeliverySchema
+  .omit({ taskId: true, taskTitle: true, taskState: true })
+  .extend({ taskId: z.null() });
+export type SeatDelivery =
+  | z.infer<typeof seatDeliverySchema>
+  | z.infer<typeof seatDirectDeliverySchema>;
 
 const seatReadSchema = z.object({
   seat: swarmSeatSchema.nullable(),
   // Absent on hosts from before addressing.
   deliveries: z.array(seatDeliverySchema).optional(),
+  // Absent on hosts from before deliveries without a Task.
+  directDeliveries: z.array(seatDirectDeliverySchema).optional(),
 });
 type SeatRead = z.infer<typeof seatReadSchema>;
 const NO_DELIVERIES: SeatDelivery[] = [];
+
+// Both lists, newest first.
+function seatDeliveries(read: SeatRead | undefined): SeatDelivery[] {
+  if (!read?.directDeliveries?.length) return read?.deliveries ?? NO_DELIVERIES;
+  return [...(read.deliveries ?? []), ...read.directDeliveries].sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt),
+  );
+}
 
 // One seat and its occupants, retired seats included. A poll whose etag still holds costs a few
 // hundred bytes, so a seat tab can follow its occupant without reading the roster.
@@ -157,9 +176,10 @@ export function useSwarmSeat(plugin: InstalledPlugin | null, seatId: string) {
     },
     plugin?.queryClient,
   );
+  const deliveries = useMemo(() => seatDeliveries(query.data), [query.data]);
   return {
     seat: query.data?.seat ?? null,
-    deliveries: query.data?.deliveries ?? NO_DELIVERIES,
+    deliveries,
     isPending: query.isPending,
     error: query.error,
   };

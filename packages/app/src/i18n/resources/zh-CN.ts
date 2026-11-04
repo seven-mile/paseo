@@ -85,6 +85,16 @@ export const zhCN: TranslationResources = {
       directoryLabel: "目录",
       saved: "PWA 目录已保存",
     },
+    artifacts: {
+      title: "成果",
+      empty: "还没有成果。值得回头再看的结果，由席位发布为成果。",
+      changedSinceDelivery: "此次交付后已更改",
+      changedSinceLastDelivery: "上次交付后已更改",
+      notDelivered: "尚未交付",
+      deliveredTo: "已交付给 {{names}}",
+      byAuthor: "作者 {{author}}",
+      unavailable: "这个成果还没有可以打开的副本。",
+    },
     tasks: {
       title: "任务",
       description: "任务与活动",

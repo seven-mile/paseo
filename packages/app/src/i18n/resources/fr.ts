@@ -89,6 +89,17 @@ export const fr: TranslationResources = {
       directoryLabel: "Dossier",
       saved: "Dossier PWA enregistré",
     },
+    artifacts: {
+      title: "Artefacts",
+      empty:
+        "Aucun artefact pour l'instant. Un poste en publie un quand un résultat mérite d'être relu.",
+      changedSinceDelivery: "Modifié depuis cette livraison",
+      changedSinceLastDelivery: "Modifié depuis la dernière livraison",
+      notDelivered: "Pas encore livré",
+      deliveredTo: "Livré à {{names}}",
+      byAuthor: "Par {{author}}",
+      unavailable: "Cet artefact n'a pas encore de copie à ouvrir.",
+    },
     tasks: {
       title: "Tâches",
       description: "Tâches et activité",

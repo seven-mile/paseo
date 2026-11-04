@@ -87,6 +87,17 @@ export const ptBR: TranslationResources = {
       directoryLabel: "Diretório",
       saved: "Diretório PWA salvo",
     },
+    artifacts: {
+      title: "Artefatos",
+      empty:
+        "Ainda não há artefatos. Um posto publica um quando vale a pena voltar a um resultado.",
+      changedSinceDelivery: "Alterado desde esta entrega",
+      changedSinceLastDelivery: "Alterado desde a última entrega",
+      notDelivered: "Ainda não entregue",
+      deliveredTo: "Entregue a {{names}}",
+      byAuthor: "Por {{author}}",
+      unavailable: "Este artefato ainda não tem uma cópia para abrir.",
+    },
     tasks: {
       title: "Tarefas",
       description: "Tarefas e atividade",

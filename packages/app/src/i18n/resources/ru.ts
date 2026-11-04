@@ -86,6 +86,16 @@ export const ru: TranslationResources = {
       directoryLabel: "Каталог",
       saved: "Каталог PWA сохранён",
     },
+    artifacts: {
+      title: "Артефакты",
+      empty: "Артефактов пока нет. Место публикует артефакт, когда к результату стоит вернуться.",
+      changedSinceDelivery: "Изменён после этой передачи",
+      changedSinceLastDelivery: "Изменён после последней передачи",
+      notDelivered: "Ещё не передан",
+      deliveredTo: "Передан: {{names}}",
+      byAuthor: "Автор: {{author}}",
+      unavailable: "У этого артефакта пока нет копии, которую можно открыть.",
+    },
     tasks: {
       title: "Задачи",
       description: "Задачи и активность",
