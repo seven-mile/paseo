@@ -106,10 +106,11 @@ function buildClaudeHarnessModels(harnessModels: readonly ModelInfo[]): AgentMod
   return models;
 }
 
-/** An alias row (`opus`) resolves to another model; a `[1m]` row resolves to its own base id. */
+/** An alias row (`opus`) resolves to another model; a concrete row resolves to itself, with or without `[1m]`. */
 function isClaudeAliasRow(info: ModelInfo): boolean {
-  if (info.resolvedModel === undefined) return false;
-  return info.resolvedModel !== stripContextSuffix(info.value);
+  const { resolvedModel, value } = info;
+  if (resolvedModel === undefined) return false;
+  return resolvedModel !== value && resolvedModel !== stripContextSuffix(value);
 }
 
 /**

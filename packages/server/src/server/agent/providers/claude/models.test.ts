@@ -329,6 +329,12 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
         description: "via gateway",
         supportedEffortLevels: ["low", "high", "xhigh"],
       },
+      {
+        value: "gateway/GLM-5.3[1m]",
+        resolvedModel: "gateway/GLM-5.3[1m]",
+        displayName: "GLM-5.3 · Gateway",
+        description: "via gateway",
+      },
       { value: "gateway/plain", displayName: "", description: "Custom model" },
       { value: "claude-opus-4-7", displayName: "Opus 4.7 (harness)", description: "dup" },
     ]);
@@ -353,6 +359,12 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
           { id: "xhigh", label: "Extra High" },
           { id: "ultracode", label: "Ultra Code" },
         ],
+      },
+      {
+        provider: "claude",
+        id: "gateway/GLM-5.3[1m]",
+        label: "GLM-5.3 · Gateway",
+        description: "via gateway",
       },
       {
         provider: "claude",
