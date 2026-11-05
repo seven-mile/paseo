@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { installCliTarget, isOwnedCliTarget, resolveCliInstallSourcePath } from "./path";
+import path, { join } from "node:path";
+import {
+  installCliTarget,
+  isOwnedCliTarget,
+  resolveCliInstallSourcePath,
+  resolveCliShimPath,
+} from "./path";
 
 describe("cli-install-path", () => {
   it("uses the bundled shim for packaged macOS installs", () => {
@@ -98,5 +104,40 @@ describe("CLI entry ownership", () => {
       "Refusing to replace",
     );
     expect(await readlink(target)).toBe(foreign);
+  });
+});
+
+describe("CLI executable selection", () => {
+  const resolveWorkspaceCli = () =>
+    createRequire(import.meta.url).resolve("@getpaseo/cli/bin/paseo");
+
+  it("uses the workspace CLI for an unpackaged Electron launcher", () => {
+    expect(
+      resolveCliShimPath({
+        platform: "linux",
+        isPackaged: false,
+        executablePath: "/nix/store/electron/bin/electron",
+        resolveWorkspaceCli,
+      }),
+    ).toBe(resolveWorkspaceCli());
+  });
+
+  it("uses the application shim for a packaged launcher", () => {
+    expect(
+      resolveCliShimPath({
+        platform: "linux",
+        isPackaged: true,
+        executablePath: "/opt/Paseo/paseo",
+        resolveWorkspaceCli,
+      }),
+    ).toBe(path.join("/opt/Paseo", "resources", "bin", "paseo"));
+    expect(
+      resolveCliShimPath({
+        platform: "darwin",
+        isPackaged: true,
+        executablePath: "/Applications/Paseo.app/Contents/MacOS/Paseo",
+        resolveWorkspaceCli,
+      }),
+    ).toBe(path.join("/Applications/Paseo.app", "Contents", "Resources", "bin", "paseo"));
   });
 });

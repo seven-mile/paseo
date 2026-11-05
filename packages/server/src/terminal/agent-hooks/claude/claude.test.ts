@@ -5,12 +5,12 @@ import { tmpdir } from "node:os";
 import { delimiter, join, relative } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isPlatform } from "../../../test-utils/platform.js";
+import { buildTerminalEnvironment } from "../../terminal.js";
 import {
-  buildTerminalEnvironment,
   resolvePaseoCliExecutablePath,
   resolveWorkspaceCliBin,
   resolvePaseoCliShim,
-} from "../../terminal.js";
+} from "../../paseo-cli-path.js";
 import { buildAgentHookShellCommand } from "../agent-hook-installer.js";
 import {
   AGENT_HOOK_PROVIDERS,
@@ -84,7 +84,7 @@ describe("CLI resolution", () => {
     expect(resolveWorkspaceCliBin(import.meta.url)).toBe(expected);
     expect(
       resolveWorkspaceCliBin(
-        new URL("../../../../dist/server/terminal/terminal.js", import.meta.url).href,
+        new URL("../../../../dist/server/terminal/paseo-cli-path.js", import.meta.url).href,
       ),
     ).toBe(expected);
   });

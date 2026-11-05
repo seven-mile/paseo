@@ -9,11 +9,13 @@ export const builtinPlugins = [
   "copilot-usage-source",
   "cursor-usage-source",
   "grok-usage-source",
+  "hoplite-provider",
   "kimi-usage-source",
   "minimax-usage-source",
   "muse-provider",
   "opencode-go-usage-source",
   "paseo-swarm",
+  "worktree-include",
   "zai-usage-source",
 ] as const;
 

@@ -97,6 +97,7 @@ export interface ProviderDefinition extends AgentProviderDefinition {
 
 /** Provider metadata and an unconfigured factory; the registry owns override application. */
 export interface RegisteredProviderDefinition extends AgentProviderDefinition {
+  requiresConfiguration?: boolean;
   iconSvg?: string;
   supportsExactMcpPreapproval: boolean;
   createClient: (logger: Logger, runtimeSettings?: ProviderRuntimeSettings) => AgentClient;
@@ -468,6 +469,7 @@ export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession
     describePersistence: () => mapPersistenceHandle(provider, inner.describePersistence()),
     interrupt: () => inner.interrupt(),
     close: () => inner.close(),
+    canStopRuntime: inner.canStopRuntime?.bind(inner),
     listCommands: inner.listCommands?.bind(inner),
     setModel: inner.setModel?.bind(inner),
     setThinkingOption: inner.setThinkingOption?.bind(inner),
@@ -492,6 +494,7 @@ function wrapClientProvider(
   const listFeatures = inner.listFeatures?.bind(inner);
   const archiveNativeSession = inner.archiveNativeSession?.bind(inner);
   const unarchiveNativeSession = inner.unarchiveNativeSession?.bind(inner);
+  const configuredModelIds = [...profileModels, ...additionalModels].map((model) => model.id);
 
   return {
     provider,
@@ -509,7 +512,7 @@ function wrapClientProvider(
             providerOptions: mergeProviderOptions(providerOptions, config.providerOptions),
           },
           launchContext,
-          options,
+          { ...options, configuredModelIds },
         ),
       ),
     resumeSession: async (handle, overrides, launchContext, options) =>
@@ -526,7 +529,7 @@ function wrapClientProvider(
             providerOptions: mergeProviderOptions(providerOptions, overrides?.providerOptions),
           },
           launchContext,
-          options,
+          { ...options, configuredModelIds },
         ),
       ),
     fetchCatalog: async (options, context) => {
@@ -924,6 +927,8 @@ export function buildProviderRegistry(
       throw new Error(`Plugin provider '${provider}' conflicts with a built-in provider`);
     }
     const override = providerOverrides[provider];
+    if (definition.requiresConfiguration && !override) continue;
+
     if (override?.extends) {
       logger.warn({ provider }, "Plugin provider shadowed by configured provider");
       continue;

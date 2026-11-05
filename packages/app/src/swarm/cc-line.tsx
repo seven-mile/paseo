@@ -34,7 +34,7 @@ export function SwarmCcLine({
       {restorable ? (
         <Button
           variant="ghost"
-          size="xs"
+          size="sm"
           disabled={disabled}
           onPress={onRestore}
           testID="swarm-cc-restore"
@@ -60,7 +60,7 @@ function CcEntry({
   return (
     <Button
       variant="outline"
-      size="xs"
+      size="sm"
       leftIcon={X}
       disabled={disabled}
       onPress={remove}

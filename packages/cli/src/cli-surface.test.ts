@@ -38,6 +38,25 @@ describe("canonical CLI surface", () => {
       "Review new upstream command hints; use paseo-swarm for executable examples",
     ).toEqual([]);
   });
+  it.each(["send", "agent send"])(
+    "%s accepts an explicit behavior override",
+    async (commandPath) => {
+      const cli = createCli();
+      const owner =
+        commandPath === "send" ? cli : cli.commands.find((command) => command.name() === "agent")!;
+      const send = owner.commands.find((command) => command.name() === "send")!;
+      send.action(() => {});
+      await send.parseAsync(["target", "message", "--behavior", "interrupt"], { from: "user" });
+      expect(send.opts().behavior).toBe("interrupt");
+      await send.parseAsync(["target", "message", "--behavior", "steer"], { from: "user" });
+      expect(send.opts().behavior).toBe("steer");
+      send.exitOverride().configureOutput({ writeErr: () => {} });
+      await expect(
+        send.parseAsync(["target", "message", "--behavior", "queue"], { from: "user" }),
+      ).rejects.toThrow();
+    },
+  );
+
   it("offers daemon host selection as a global option", () => {
     expect(createCli().helpInformation()).toContain("--host <host>");
   });
@@ -99,10 +118,25 @@ describe("canonical CLI surface", () => {
     expect(help).toContain("--forge <forge>");
   });
 
-  it("uses background for execution and reserves detach for ownership", () => {
+  it("uses --no-wait for execution, --internal for visibility, and reserves detach for ownership", () => {
     const run = createCli().commands.find((command) => command.name() === "run");
-    expect(run?.helpInformation()).toContain("--background");
-    expect(run?.helpInformation()).not.toContain("--detach");
+    const help = run?.helpInformation();
+    expect(help).toContain("--no-wait");
+    expect(help).not.toContain("--background");
+    expect(help).not.toContain("--background");
+    expect(help).not.toContain("--detach");
+  });
+
+  it("hides internal agents and workspaces from listings unless --internal is passed", () => {
+    const cli = createCli();
+    const ls = cli.commands.find((command) => command.name() === "ls");
+    const workspace = cli.commands.find((command) => command.name() === "workspace");
+    const workspaceLs = workspace?.commands.find((command) => command.name() === "ls");
+    const workspaceCreate = workspace?.commands.find((command) => command.name() === "create");
+
+    expect(ls?.helpInformation()).toContain("--background");
+    expect(workspaceLs?.helpInformation()).toContain("--background");
+    expect(workspaceCreate?.helpInformation()).toContain("--background");
   });
 
   it("offers thinking configuration when running, updating, and scheduling agents", () => {
@@ -149,4 +183,16 @@ describe("canonical CLI surface", () => {
       plugin?.commands.find((command) => command.name() === "install")?.helpInformation(),
     ).toContain("--id <id>");
   });
+});
+
+it("preserves omitted and explicit false workspace background intent", () => {
+  const readOptions = (args: string[]) => {
+    const workspace = createCli().commands.find((command) => command.name() === "workspace")!;
+    const create = workspace.commands.find((command) => command.name() === "create")!;
+    create.parseOptions(args);
+    return create.opts();
+  };
+  expect(readOptions([]).background).toBeUndefined();
+  expect(readOptions(["--background"]).background).toBe(true);
+  expect(readOptions(["--no-background"]).background).toBe(false);
 });

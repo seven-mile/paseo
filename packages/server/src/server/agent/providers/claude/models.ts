@@ -52,13 +52,23 @@ export function findClaudeModel(
   return getClaudeModels().find((model) => model.id === normalizedModelId);
 }
 
+export function getClaudeContextWindowMaxTokens(
+  modelId: string | null | undefined,
+): number | undefined {
+  if (modelId?.trim().toLowerCase().endsWith("[1m]")) {
+    return 1_000_000;
+  }
+  return findClaudeModel(modelId)?.contextWindowMaxTokens;
+}
+
 export async function getClaudeModelsWithSettings(
   logger: Logger,
   configDir: string,
   claudeCodeVersion?: string,
+  discoveredModelIds: ReadonlySet<string> = new Set(),
   harnessModels: readonly ModelInfo[] = [],
 ): Promise<AgentModelDefinition[]> {
-  const hardcodedModels = getClaudeModels(claudeCodeVersion);
+  const hardcodedModels = getClaudeManifestModels(claudeCodeVersion, discoveredModelIds);
   const settingsModels = (await readClaudeSettingsModels(logger, configDir)).map((model) =>
     withAliasEffort(model, harnessModels),
   );
@@ -73,7 +83,10 @@ export async function getClaudeModelsWithSettings(
       }
       continue;
     }
-    models.push(model);
+    const manifestModel = getClaudeModels(claudeCodeVersion).find(
+      (candidate) => candidate.id === model.id,
+    );
+    models.push({ ...manifestModel, ...model });
   }
 
   return models;

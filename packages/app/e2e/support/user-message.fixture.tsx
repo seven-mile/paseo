@@ -1,3 +1,4 @@
+import type { ToastApi } from "@/components/toast-host";
 // Test-only entry for the real UserMessage contract under Metro's web resolver.
 import "../../src/styles/unistyles";
 // oxlint-disable-next-line import/no-unassigned-import -- Match the existing Metro fixture entry.
@@ -39,7 +40,14 @@ function recordToast(...args: unknown[]) {
 function recordToastError(...args: unknown[]) {
   toastErrors.push(args);
 }
-const toast = { show: recordToast, copied: recordToast, error: recordToastError };
+const toast: ToastApi = {
+  show: (...args) => {
+    recordToast(...args);
+    return () => {};
+  },
+  copied: recordToast,
+  error: recordToastError,
+};
 
 export interface UserMessageFixtureBridge {
   readMessageRanges(query: string): Range[];

@@ -16,11 +16,7 @@ import {
 } from "@/utils/workspace-identity";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { buildHostSeatRoute } from "@/utils/host-routes";
-import {
-  openExplorerSidebarView,
-  usesCompactExplorerSidebar,
-} from "@/workspace-tabs/explorer-sidebar";
-import type { ExplorerCheckoutContext } from "@/stores/explorer-checkout-context";
+import { openExplorerSidebarView } from "@/workspace-tabs/explorer-sidebar";
 import type { WorkspaceTab } from "@/workspace-tabs/model";
 import type { WorkspaceLayout } from "@/stores/workspace-layout-actions";
 import type { SwarmTaskReference } from "./task-model";
@@ -151,19 +147,8 @@ function navigateToSwarmTasks(input: {
   isCompact: boolean;
 }): void {
   if (input.host === "explorer") {
-    const checkout: ExplorerCheckoutContext | null = input.workspace?.workspaceDirectory
-      ? {
-          serverId: input.serverId,
-          cwd: input.workspace.workspaceDirectory,
-          isGit: input.workspace.projectKind === "git",
-        }
-      : null;
-    const explorer = {
-      isCompact: input.isCompact,
-      workspaceKey: input.workspaceKey,
-      checkout,
-    };
-    if (usesCompactExplorerSidebar(explorer)) {
+    const explorer = { isCompact: input.isCompact, workspaceKey: input.workspaceKey };
+    if (explorer.isCompact) {
       const layout = useWorkspaceLayoutStore.getState().layoutByWorkspace[input.workspaceKey];
       const focusedId = layout && findPaneById(layout.root, layout.focusedPaneId)?.focusedTabId;
       const focused = layout && collectAllTabs(layout.root).find((tab) => tab.tabId === focusedId);

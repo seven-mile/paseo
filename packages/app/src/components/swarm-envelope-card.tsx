@@ -3,16 +3,13 @@ import { Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { ChevronRight } from "lucide-react-native";
-import type { RenderRules } from "react-native-markdown-display";
 import { mutedIconColorMapping } from "@/components/ui/icon-color";
 import { ICON_SIZE } from "@/styles/theme";
-import { PlanMarkdownBody } from "@/components/plan-card";
+import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { Button } from "@/components/ui/button";
 import { isWeb } from "@/constants/platform";
 import type { SwarmEnvelope } from "@/swarm/system-envelope";
-import { createSwarmEnvelopeMarkdownParser } from "@/swarm/envelope-markdown";
-import { createSharedMarkdownRules } from "@/components/markdown/renderer";
-import { useSwarmCanonicalLinkPress } from "@/swarm/canonical-links";
+import { linkSwarmEnvelopeFields } from "@/swarm/envelope-markdown";
 
 export interface SwarmEnvelopeCardProps {
   envelope: SwarmEnvelope;
@@ -27,8 +24,6 @@ interface SwarmEnvelopeOriginalProps {
 
 const ThemedChevron = withUnistyles(ChevronRight);
 const messageTextDataSet = { messageText: "true" };
-const sharedLinkRule = createSharedMarkdownRules().link;
-const consumeUnhostedReference = () => false;
 
 export const swarmEnvelopeTitleKeys = {
   settings: "message.envelope.titles.settings",
@@ -47,29 +42,17 @@ export function swarmEnvelopeStartsExpanded(
   return autoExpand && kind !== "refresh";
 }
 
+// Field references open through the hosting pane's Swarm link handler; without one, the renderer
+// consumes them instead of handing an app-internal URI to the browser.
 export function SwarmEnvelopeBody({ envelope }: Pick<SwarmEnvelopeCardProps, "envelope">) {
-  const canonicalLinkPress = useSwarmCanonicalLinkPress();
-  const linkRule = useMemo<RenderRules["link"]>(
-    () => (node, children, parent, ruleStyles, onLinkPress) =>
-      sharedLinkRule?.(
-        node,
-        children,
-        parent,
-        ruleStyles,
-        node.attributes["data-swarm-envelope-reference"] === "true" && !canonicalLinkPress
-          ? consumeUnhostedReference
-          : onLinkPress,
-      ),
-    [canonicalLinkPress],
-  );
-  const markdownit = useMemo(
-    () => createSwarmEnvelopeMarkdownParser(envelope.kind),
-    [envelope.kind],
+  const text = useMemo(
+    () => linkSwarmEnvelopeFields(envelope.kind, envelope.body),
+    [envelope.kind, envelope.body],
   );
   return (
     <View style={styles.container} testID="swarm-envelope-body">
       <View dataSet={messageTextDataSet}>
-        <PlanMarkdownBody text={envelope.body} markdownit={markdownit} linkRule={linkRule} />
+        <MarkdownRenderer text={text} compact />
       </View>
     </View>
   );

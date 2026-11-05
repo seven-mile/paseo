@@ -12,6 +12,7 @@ import { i18n } from "../../src/i18n/i18next";
 import { lightTheme, darkTheme } from "../../src/styles/theme";
 import { isWeb } from "../../src/constants/platform";
 import { findRenderedMatches } from "../../src/agent-stream/chat-find/ranges.web";
+import type { ToastApi } from "@/components/toast-host";
 
 declare global {
   interface Window {
@@ -23,7 +24,7 @@ const params = isWeb ? new URLSearchParams(window.location.search) : new URLSear
 const themeName = params.get("theme") === "dark" ? "dark" : "light";
 const theme = themeName === "dark" ? darkTheme : lightTheme;
 const client = new QueryClient();
-const toast = { show() {}, copied() {}, error() {} };
+const toast: ToastApi = { show: () => () => {}, copied() {}, error() {} };
 const examples = [
   {
     kind: "settings",

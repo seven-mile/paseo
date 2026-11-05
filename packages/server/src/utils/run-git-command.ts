@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { existsSync } from "node:fs";
 import type { Logger } from "pino";
 import { terminateProcess } from "@getpaseo/plugin/server";
 import type { ProcessEnvRecord } from "../server/paseo-env.js";
@@ -314,7 +313,6 @@ function executeGitCommand<Output>(
             command: "git",
             args,
             cwd: options.cwd,
-            cwdExists: existsSync(options.cwd),
             timeout,
             maxOutputBytes,
             acceptExitCodes,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMarkdownParser } from "./markdown-parser";
-import { createSwarmEnvelopeMarkdownParser } from "@/swarm/envelope-markdown";
+import { linkSwarmEnvelopeFields } from "@/swarm/envelope-markdown";
 import type { SwarmEnvelope } from "@/swarm/system-envelope";
 import {
   messagePrompt,
@@ -84,13 +84,13 @@ function escapeHtml(value: string): string {
 
 describe("Swarm envelope reference fields", () => {
   function links(kind: SwarmEnvelope["kind"], source: string) {
-    return createSwarmEnvelopeMarkdownParser(kind)
-      .parse(source, {})
+    return createMarkdownParser({ linkify: false })
+      .parse(linkSwarmEnvelopeFields(kind, source), {})
       .flatMap((token) => token.children ?? [])
       .filter((token) => token.type === "link_open")
       .map((token) => ({
         href: token.attrGet("href"),
-        generated: token.attrGet("data-swarm-envelope-reference") === "true",
+        generated: !source.includes(`](${token.attrGet("href")})`),
       }));
   }
 
@@ -110,11 +110,10 @@ describe("Swarm envelope reference fields", () => {
   });
 
   it("uses capture boundaries even when names equal the field's prose", () => {
-    const parser = createSwarmEnvelopeMarkdownParser("team");
     const source = "Team message message-12 from message:\nRecipient: recipient.";
-    expect(parser.render(source)).toContain(
-      'Team message message-12 from <a href="paseo-swarm://agent/message"',
-    );
+    expect(
+      createMarkdownParser({ linkify: true }).render(linkSwarmEnvelopeFields("team", source)),
+    ).toContain('Team message message-12 from <a href="paseo-swarm://agent/message"');
     expect(links("team", source)).toEqual([
       { href: "paseo-swarm://agent/message", generated: true },
       { href: "paseo-swarm://agent/recipient", generated: true },
@@ -155,16 +154,17 @@ describe("Swarm envelope reference fields", () => {
     });
     const envelope = parseSwarmEnvelope(notification);
     if (!envelope) throw new Error("Expected actual team envelope");
-    const parser = createSwarmEnvelopeMarkdownParser(envelope.kind);
-    const original = createMarkdownParser({ linkify: false });
-    const textTokens = (markdown: ReturnType<typeof createMarkdownParser>) =>
+    const markdown = createMarkdownParser({ linkify: false });
+    const textTokens = (body: string) =>
       markdown
-        .parse(envelope.body, {})
+        .parse(body, {})
         .flatMap((token) => token.children ?? [])
         .filter((token) => token.type !== "link_open" && token.type !== "link_close")
         .map((token) => token.content)
         .join("");
-    expect(textTokens(parser)).toBe(textTokens(original));
+    expect(textTokens(linkSwarmEnvelopeFields(envelope.kind, envelope.body))).toBe(
+      textTokens(envelope.body),
+    );
     expect(links(envelope.kind, envelope.body)).toEqual([
       { href: "paseo-swarm://task/ui-task-9", generated: true },
       { href: "paseo-swarm://agent/planner.supervisor.worker", generated: true },

@@ -8,6 +8,7 @@ import { createTestLogger } from "../../test-utils/test-logger.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { AgentManager, type AgentManagerEvent } from "./agent-manager.js";
 import { AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS } from "./agent-stream-coalescer.js";
+import { limitAgentTimelineItemContent } from "./agent-timeline-content.js";
 import type { AgentTimelineRow } from "./agent-timeline-store-types.js";
 import { projectTimelineRows } from "./timeline-projection.js";
 import type {
@@ -33,7 +34,6 @@ import type {
 
 const COALESCE_WINDOW_MS = AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS;
 const BEFORE_COALESCE_WINDOW_MS = Math.max(COALESCE_WINDOW_MS - 1, 0);
-const TOOL_CALL_CONTENT_MAX_LENGTH = 64 * 1024;
 
 const TEST_CAPABILITIES: AgentCapabilityFlags = {
   supportsStreaming: false,
@@ -241,7 +241,7 @@ interface Harness {
   manager: AgentManager;
   client: TestAgentClient;
   events: AgentManagerEvent[];
-  endedTurns: PluginLifecycleEvents["agent.turn_ended"][];
+  endedTurns: PluginLifecycleEvents["agent.turn.after"][];
   workdir: string;
   cleanup: () => void;
 }
@@ -249,11 +249,11 @@ interface Harness {
 function createHarness(options?: { provider?: AgentProvider }): Harness {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-stream-coalescing-"));
   const client = new TestAgentClient(options?.provider ?? "codex");
-  const endedTurns: PluginLifecycleEvents["agent.turn_ended"][] = [];
+  const endedTurns: PluginLifecycleEvents["agent.turn.after"][] = [];
   const pluginLifecycle: PluginLifecycle = {
     emit(name, event) {
-      if (name === "agent.turn_ended") {
-        endedTurns.push(event as PluginLifecycleEvents["agent.turn_ended"]);
+      if (name === "agent.turn.after") {
+        endedTurns.push(event as PluginLifecycleEvents["agent.turn.after"]);
       }
     },
     async before(_name, request) {
@@ -416,10 +416,7 @@ describe("target coalesced behavior", () => {
     try {
       const { agentId, session } = await createManagedSession(harness);
       const output = `${"a".repeat(512 * 1024)}${"z".repeat(512 * 1024)}`;
-      const expectedItem = toolCall({
-        status: "completed",
-        output: "a".repeat(TOOL_CALL_CONTENT_MAX_LENGTH),
-      });
+      const expectedItem = limitAgentTimelineItemContent(toolCall({ status: "completed", output }));
 
       session.pushEvent(timelineEvent(toolCall({ status: "completed", output })));
       await waitForSessionEventQueue();
@@ -441,10 +438,7 @@ describe("target coalesced behavior", () => {
     try {
       const { agentId } = await createManagedSession(harness);
       const output = `${"a".repeat(512 * 1024)}${"z".repeat(512 * 1024)}`;
-      const expectedItem = toolCall({
-        status: "completed",
-        output: "a".repeat(TOOL_CALL_CONTENT_MAX_LENGTH),
-      });
+      const expectedItem = limitAgentTimelineItemContent(toolCall({ status: "completed", output }));
 
       await harness.manager.appendTimelineItem(agentId, toolCall({ status: "completed", output }));
 
@@ -465,10 +459,7 @@ describe("target coalesced behavior", () => {
     try {
       const { agentId, session } = await createManagedSession(harness);
       const output = `${"a".repeat(512 * 1024)}${"z".repeat(512 * 1024)}`;
-      const expectedItem = toolCall({
-        status: "completed",
-        output: "a".repeat(TOOL_CALL_CONTENT_MAX_LENGTH),
-      });
+      const expectedItem = limitAgentTimelineItemContent(toolCall({ status: "completed", output }));
       session.setHistory([timelineEvent(toolCall({ status: "completed", output }))]);
 
       await harness.manager.hydrateTimelineFromProvider(agentId, { force: true });
@@ -486,10 +477,7 @@ describe("target coalesced behavior", () => {
     try {
       const { agentId } = await createManagedSession(harness);
       const output = `${"a".repeat(512 * 1024)}${"z".repeat(512 * 1024)}`;
-      const expectedItem = toolCall({
-        status: "completed",
-        output: "a".repeat(TOOL_CALL_CONTENT_MAX_LENGTH),
-      });
+      const expectedItem = limitAgentTimelineItemContent(toolCall({ status: "completed", output }));
 
       await harness.manager.emitLiveTimelineItem(
         agentId,
@@ -511,10 +499,9 @@ describe("target coalesced behavior", () => {
     try {
       const { agentId, session } = await createManagedSession(harness);
       const content = `${"a".repeat(512 * 1024)}${"z".repeat(512 * 1024)}`;
-      const expectedItem = toolCall({
-        status: "failed",
-        error: { content: "a".repeat(TOOL_CALL_CONTENT_MAX_LENGTH) },
-      });
+      const expectedItem = limitAgentTimelineItemContent(
+        toolCall({ status: "failed", error: { content } }),
+      );
 
       session.pushEvent(timelineEvent(toolCall({ status: "failed", error: { content } })));
       await waitForSessionEventQueue();
@@ -1083,10 +1070,7 @@ describe("target coalesced behavior", () => {
 
         session.pushEvent(terminalEvent(terminalType, "turn-empty"));
         await waitForSessionEventQueue();
-        expect(harness.endedTurns[1]?.timeline).toContainEqual({
-          type: "assistant_message",
-          text: "OLD",
-        });
+        expect(harness.endedTurns[1]?.timeline).toEqual([]);
         expect(harness.endedTurns[1]?.turnTimeline).toEqual([]);
 
         session.pushEvent(assistant("PART", "codex", "turn-partial"));
@@ -1101,10 +1085,7 @@ describe("target coalesced behavior", () => {
         await waitForSessionEventQueue();
         expect(harness.endedTurns[3]?.turnId).toBeNull();
         expect(harness.endedTurns[3]?.turnTimeline).toBeUndefined();
-        expect(harness.endedTurns[3]?.timeline).toContainEqual({
-          type: "assistant_message",
-          text: "PARTIAL",
-        });
+        expect(harness.endedTurns[3]?.timeline).toEqual([]);
       } finally {
         harness.cleanup();
       }
