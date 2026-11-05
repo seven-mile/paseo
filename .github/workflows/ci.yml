@@ -102,7 +102,8 @@ jobs:
     name: typecheck
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.quality != 'false') }}
-    runs-on: ubuntu-latest
+    # TODO: back to ubuntu-latest once Playwright supports ubuntu-26.04 (1.58 cannot install browsers there).
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -323,7 +324,7 @@ jobs:
     name: app-tests
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.app != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -349,7 +350,7 @@ jobs:
     name: sdk-tests
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.sdk != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -386,7 +387,7 @@ jobs:
     name: playwright (shard 1/4)
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       PLAYWRIGHT_SHARD: "1/4"
       PLAYWRIGHT_ARTIFACT: "1"
@@ -440,7 +441,7 @@ jobs:
     name: playwright (shard 2/4)
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       PLAYWRIGHT_SHARD: "2/4"
       PLAYWRIGHT_ARTIFACT: "2"
@@ -450,7 +451,7 @@ jobs:
     name: playwright (shard 3/4)
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       PLAYWRIGHT_SHARD: "3/4"
       PLAYWRIGHT_ARTIFACT: "3"
@@ -460,7 +461,7 @@ jobs:
     name: playwright (shard 4/4)
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       PLAYWRIGHT_SHARD: "4/4"
       PLAYWRIGHT_ARTIFACT: "4"
