@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { filterSwarmArtifacts, latestDeliveryToYou, type SwarmArtifact } from "./artifact-model";
+import {
+  artifactCopyLink,
+  filterSwarmArtifacts,
+  latestDeliveryToYou,
+  type SwarmArtifact,
+} from "./artifact-model";
 
 const delivery = (
   activityId: string,
@@ -43,5 +48,46 @@ describe("artifact search", () => {
       "Cache options",
     ]);
     expect(filterSwarmArtifacts(artifacts, "  ")).toBe(artifacts);
+  });
+});
+
+describe("artifact copy links", () => {
+  const artifacts = [
+    {
+      id: "auth-review",
+      source: {
+        workspaceId: "lead-worktree",
+        path: "reports/auth.md",
+        attachments: ["reports/data"],
+      },
+      location: {
+        workspaceId: "artifacts",
+        path: "auth-review/reports/auth.md",
+        link: "paseo-swarm://file/artifacts/auth-review/reports/auth.md",
+      },
+    },
+  ];
+
+  it("opens the copy of an artifact's file or attachment", () => {
+    expect(artifactCopyLink(artifacts, "paseo-swarm://file/lead-worktree/reports/auth.md")).toBe(
+      "paseo-swarm://file/artifacts/auth-review/reports/auth.md",
+    );
+    expect(
+      artifactCopyLink(artifacts, "paseo-swarm://file/lead-worktree/reports%2Fdata/users.csv"),
+    ).toBe("paseo-swarm://file/artifacts/auth-review/reports/data/users.csv");
+  });
+
+  it("leaves other files, workspaces and links alone", () => {
+    expect(
+      artifactCopyLink(artifacts, "paseo-swarm://file/lead-worktree/reports/notes.md"),
+    ).toBeNull();
+    expect(
+      artifactCopyLink(artifacts, "paseo-swarm://file/lead-worktree/reports/database.md"),
+    ).toBeNull();
+    expect(artifactCopyLink(artifacts, "paseo-swarm://file/other/reports/auth.md")).toBeNull();
+    expect(artifactCopyLink(artifacts, "paseo-swarm://task/auth")).toBeNull();
+    expect(
+      artifactCopyLink(artifacts, "paseo-swarm://file/artifacts/auth-review/reports/auth.md"),
+    ).toBeNull();
   });
 });

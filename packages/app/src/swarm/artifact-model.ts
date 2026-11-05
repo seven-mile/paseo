@@ -36,6 +36,10 @@ const swarmArtifactSchema = z.object({
   taskTitle: z.string().nullable(),
   changedAt: z.string(),
   publishedAt: z.string(),
+  // Where its author maintains it, relative to the author's workspace.
+  source: z
+    .object({ workspaceId: z.string(), path: z.string(), attachments: z.array(z.string()) })
+    .optional(),
   location: artifactLocationSchema.nullable(),
   // Oldest first.
   deliveries: z.array(artifactDeliverySchema),
@@ -71,4 +75,37 @@ export function filterSwarmArtifacts<
       text.toLowerCase().includes(query),
     ),
   );
+}
+
+// A link to a file an artifact was copied from, turned into a link to that file in the copy. An
+// author may link its own file in a reply; the copy outlives the author's worktree and readers
+// can't edit it, so readers open the copy. Null for any other link.
+export function artifactCopyLink(
+  artifacts: readonly Pick<SwarmArtifact, "id" | "source" | "location">[],
+  uri: string,
+): string | null {
+  const match = /^paseo-swarm:\/\/file\/([^?#]+)$/i.exec(uri);
+  if (!match) return null;
+  let segments: string[];
+  try {
+    segments = match[1].split("/").map(decodeURIComponent);
+  } catch {
+    return null;
+  }
+  const [workspaceId, ...rest] = segments;
+  const path = rest.join("/");
+  if (!workspaceId || !path) return null;
+  for (const artifact of artifacts) {
+    const { source, location } = artifact;
+    if (!source || !location || source.workspaceId !== workspaceId) continue;
+    const copied =
+      path === source.path ||
+      source.attachments.some(
+        (attachment) => path === attachment || path.startsWith(`${attachment}/`),
+      );
+    if (!copied) continue;
+    const copyPath = [artifact.id, ...path.split("/")].map(encodeURIComponent).join("/");
+    return `paseo-swarm://file/${encodeURIComponent(location.workspaceId)}/${copyPath}`;
+  }
+  return null;
 }
