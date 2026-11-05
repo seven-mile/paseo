@@ -252,11 +252,6 @@ export const seatDeliverySchema = z.object({
   createdAt: z.string(),
 });
 
-// A delivery the seat made to the person without a Task.
-export const seatDirectDeliverySchema = seatDeliverySchema
-  .omit({ taskId: true, taskTitle: true, taskState: true })
-  .extend({ taskId: z.null() });
-
 // One seat with its occupants, retired seats included: a seat tab. Data is a null seat when no
 // seat has this id.
 export const seatReadRpc = defineRpc({
@@ -267,8 +262,6 @@ export const seatReadRpc = defineRpc({
       seat: seatSchema.nullable(),
       // The newest deliveries this seat addressed to the human. Absent from older hosts.
       deliveries: z.array(seatDeliverySchema).optional(),
-      // Deliveries without a Task, kept apart so hosts from before them read the seat unchanged.
-      directDeliveries: z.array(seatDirectDeliverySchema).optional(),
     }),
   ),
 });
@@ -432,25 +425,19 @@ const audienceInputSchema = {
 // in the same commit. taskState is the Task's state after the delivery: done closes it, open keeps
 // it open or reopens it. revises names an earlier delivery this one corrects. A retry of the same
 // submission returns the earlier delivery and notifies no one again.
-// A delivery without taskId is made to the readers `to` names and stays off the board; taskState
-// and status apply only to a Task.
 export const deliverTaskRpc = defineRpc({
   name: "swarm.task.deliver",
   input: z.object({
     swarmId: z.string().min(1).optional(),
-    taskId: slugNameSchema.optional(),
+    taskId: slugNameSchema,
     actorName: z.string().min(1),
     result: z.string().min(1),
-    taskState: z.enum(["done", "open"]).optional(),
+    taskState: z.enum(["done", "open"]),
     status: z.string().min(1).optional(),
     revises: z.string().min(1).nullable().default(null),
     ...audienceInputSchema,
   }),
-  output: z.object({
-    task: taskSchema.nullable(),
-    activity: activitySchema,
-    duplicate: z.boolean(),
-  }),
+  output: z.object({ task: taskSchema, activity: activitySchema, duplicate: z.boolean() }),
 });
 
 export const appendActivityRpc = defineRpc({

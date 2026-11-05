@@ -5,7 +5,6 @@ import {
   SWARM_FEATURES,
   TASK_HISTORY_PAGE,
   type seatDeliverySchema,
-  type seatDirectDeliverySchema,
   type seatSummarySchema,
   type taskSummarySchema,
 } from "../shared/swarm";
@@ -27,7 +26,6 @@ import { store } from "./state";
 type SeatSummary = z.input<typeof seatSummarySchema>;
 type TaskSummary = z.input<typeof taskSummarySchema>;
 type SeatDelivery = z.input<typeof seatDeliverySchema>;
-type SeatDirectDelivery = z.input<typeof seatDirectDeliverySchema>;
 
 // A conditional read's answer: data is null when the caller already holds this etag.
 export interface Conditional<T> {
@@ -110,53 +108,43 @@ const SEAT_DELIVERIES = 5;
 
 export function seatReadView(state: Readonly<SwarmState>, seatId: string) {
   const seat = state.agents.find((candidate) => candidate.id === seatId);
-  if (!seat) return { seat: null, deliveries: [], directDeliveries: [] };
-  return { seat: seatView(seat), ...seatDeliveries(state, seat) };
+  if (!seat) return { seat: null, deliveries: [] };
+  return { seat: seatView(seat), deliveries: seatDeliveries(state, seat) };
 }
 
 // The newest deliveries the seat addressed to the human, so its conversation shows results the
-// seat did not repeat in its own words. Those without a Task are listed apart, newest first too.
-function seatDeliveries(
-  state: Readonly<SwarmState>,
-  seat: AgentRecord,
-): { deliveries: SeatDelivery[]; directDeliveries: SeatDirectDelivery[] } {
+// seat did not repeat in its own words.
+function seatDeliveries(state: Readonly<SwarmState>, seat: AgentRecord): SeatDelivery[] {
   const name = agentQualifiedName(seat);
   const deliveries: SeatDelivery[] = [];
-  const directDeliveries: SeatDirectDelivery[] = [];
   for (let index = state.activities.length - 1; index >= 0; index -= 1) {
-    if (deliveries.length + directDeliveries.length === SEAT_DELIVERIES) break;
+    if (deliveries.length === SEAT_DELIVERIES) break;
     const activity = state.activities[index];
     if (activity.swarmId !== seat.swarmId || activity.kind !== "delivery") continue;
     if (activity.actorName !== name) continue;
+    const taskId = activity.taskId;
+    if (taskId === null) continue;
     const human = activity.audience?.find((entry) => entry.name === HUMAN);
     if (!human) continue;
-    const artifacts = deliveredArtifactViews(state, activity.swarmId, activity.artifacts);
-    const common = {
-      activityId: activity.id,
-      swarmId: activity.swarmId,
-      as: human.as,
-      body: activity.body,
-      ...(artifacts ? { artifacts } : {}),
-      createdAt: activity.createdAt,
-    };
-    if (activity.taskId === null) {
-      directDeliveries.push({ ...common, taskId: null });
-      continue;
-    }
-    const taskId = activity.taskId;
     const task = state.tasks.find(
       (candidate) => candidate.swarmId === activity.swarmId && candidate.id === taskId,
     );
+    const artifacts = deliveredArtifactViews(state, activity.swarmId, activity.artifacts);
     deliveries.push({
-      ...common,
+      activityId: activity.id,
+      swarmId: activity.swarmId,
       taskId,
       taskTitle: task?.title ?? taskId,
+      as: human.as,
       ...(typeof activity.data.taskState === "string"
         ? { taskState: activity.data.taskState }
         : {}),
+      body: activity.body,
+      ...(artifacts ? { artifacts } : {}),
+      createdAt: activity.createdAt,
     });
   }
-  return { deliveries, directDeliveries };
+  return deliveries;
 }
 
 export function rosterView(state: Readonly<SwarmState>) {

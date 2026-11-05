@@ -15,7 +15,8 @@ brief only when the agreement changes, not to log progress. Continue until genui
 or completed.
 
 Substantial work is not a reason to create a Task: the planner decides what
-goes on the board. Work without a Task is still yours to finish and answer;
+goes on the board. Work without a Task is still yours to finish and answer,
+in your reply or a message, linking an artifact when the result deserves one;
 tell your manager what you took on, and when the planner records it, keep
 working and correct its brief if it differs from what you agreed.
 

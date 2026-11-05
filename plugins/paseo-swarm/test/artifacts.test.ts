@@ -311,60 +311,49 @@ test("a delivery records the artifacts it links, and readers see when one change
   );
 });
 
-test("a delivery without a Task goes to whom it names, copies the manager, and stays off the board", async (t) => {
-  const { call } = setup(t);
+test("a delivery needs a Task; one made without a Task in playtest stays readable as a citation only", async (t) => {
+  const { call, write } = setup(t);
   await seed({ agents: [planner, lead] });
   await assert.rejects(
-    call(deliverTaskRpc, { actorName: "planner.lead", result: "Answer." }),
-    /goes to the readers you name/,
-  );
-  await assert.rejects(
-    call(deliverTaskRpc, {
-      actorName: "planner.lead",
-      result: "Answer.",
-      to: ["human"],
-      taskState: "done",
-    }),
-    /belong to a Task/,
-  );
-  const { activity, task } = await call<{ activity: Activity; task: Task | null }>(deliverTaskRpc, {
-    actorName: "planner.lead",
-    result: "The cache is safe to drop.",
-    to: ["human"],
-  });
-  assert.equal(task, null);
-  assert.equal(activity.taskId, null);
-  assert.deepEqual(activity.audience, [
-    { name: "human", as: "to", why: "named" },
-    { name: "planner", as: "cc", why: "manager" },
-  ]);
-  assert.equal(store.read().messages.filter((m) => m.recipientName === "planner").length, 1);
-  const seatView = seatReadView(store.read(), lead.id);
-  assert.deepEqual(seatView.deliveries, []);
-  assert.equal(seatView.directDeliveries[0]?.activityId, activity.id);
-  const board = await call<{ activities: Activity[] }>(boardReadRpc, {});
-  assert.equal(
-    board.activities.some((entry) => entry.id === activity.id),
-    false,
+    call(deliverTaskRpc, { actorName: "planner.lead", result: "Answer.", to: ["human"] }),
   );
 
-  // A correction revises it; a delivery on a Task can't be revised from here.
-  const revised = await call<{ activity: Activity }>(deliverTaskRpc, {
+  write("lead-worktree", "cache.md", "# Cache");
+  const { artifact } = await call<{ artifact: Artifact }>(publishArtifactRpc, {
     actorName: "planner.lead",
-    result: "Correction: drop it only after the migration.",
-    to: ["human"],
-    cc: [],
-    revises: activity.id,
+    path: "cache.md",
+    title: "Cache",
   });
-  assert.equal(revised.activity.data.revises, activity.id);
-  assert.deepEqual(revised.activity.audience, [{ name: "human", as: "to", why: "named" }]);
-  await assert.rejects(
-    call(deliverTaskRpc, {
-      actorName: "planner",
-      result: "Not mine.",
-      to: ["human"],
-      revises: activity.id,
-    }),
-    /not a delivery you made without a Task/,
+  const legacy: Activity = {
+    id: "legacy",
+    swarmId: store.read().swarms[0]!.id,
+    taskId: null,
+    actorName: "planner.lead",
+    actorKind: "agent",
+    replyTo: null,
+    responseProfile: null,
+    kind: "delivery",
+    body: `The cache is safe to drop. [Cache](${artifact.location!.link})`,
+    data: {},
+    refs: [],
+    audience: [{ name: "human", as: "to", why: "named" }],
+    artifacts: [{ id: artifact.id, contentHash: artifact.contentHash }],
+    createdAt: timestamp,
+  };
+  await store.commit(() => [{ op: "put", collection: "activities", record: legacy }]);
+
+  assert.deepEqual(seatReadView(store.read(), lead.id).deliveries, []);
+  const board = await call<{ activities: Activity[] }>(boardReadRpc, {});
+  assert.equal(
+    board.activities.some((entry) => entry.id === "legacy"),
+    false,
+  );
+  const read = await call<Artifact>(readArtifactRpc, {
+    actorName: "planner.lead",
+    artifactId: artifact.id,
+  });
+  assert.deepEqual(
+    read.deliveries.map((entry) => [entry.activityId, entry.changed]),
+    [["legacy", false]],
   );
 });

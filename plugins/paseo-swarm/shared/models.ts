@@ -220,8 +220,9 @@ export type DeliveredArtifact = z.infer<typeof deliveredArtifactSchema>;
 export const activitySchema = z.object({
   id: z.string(),
   swarmId: z.string(),
-  // Null for a delivery made without a Task: it reaches the readers it names and stays off the
-  // board.
+  // Null on deliveries made without a Task during the artifacts playtest. Nothing writes one now;
+  // those records still parse, stay off the board and the seat read, and show in an artifact's
+  // citations.
   taskId: slugNameSchema.nullable(),
   actorName: z.string(),
   actorKind: z.preprocess((value) => value ?? "agent", z.enum(["agent", "human"])),
@@ -250,7 +251,8 @@ export const artifactSchema = z.object({
   swarmId: z.string(),
   title: z.string(),
   authorName: z.string(),
-  // The Task it belongs to, when it has one.
+  // The Task it was made for, when there was one. Provenance only: the artifact can serve other
+  // Tasks and outlive them, and a Task's result still comes from its deliveries.
   taskId: slugNameSchema.optional(),
   // Where the author maintains it: a file and the files or directories it needs, relative to the
   // author's workspace. The copy keeps these paths under the artifact's id, so relative links

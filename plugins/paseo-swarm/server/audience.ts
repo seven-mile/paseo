@@ -34,9 +34,6 @@ export interface AudienceInput {
   // Added as To whatever the lists say: the owner when another seat writes its record, the asker
   // of the Activity being replied to.
   always?: AudienceTarget[];
-  // Added as Cc whatever the lists say: the author's manager on a delivery without a Task, when
-  // the sender gave no cc of its own.
-  copies?: AudienceTarget[];
 }
 
 function activeSeat(state: Readonly<SwarmState>, swarmId: string, name: string) {
@@ -67,7 +64,6 @@ export function resolveAudience(input: AudienceInput): Audience {
     ? (input.cc ?? []).map((name) => ({ name: named(swarmId, name, actorName), why: "named" }))
     : (input.defaults?.cc ?? []).filter((target) => present(state, swarmId, target));
   const always = (input.always ?? []).filter((target) => present(state, swarmId, target));
-  const copies = (input.copies ?? []).filter((target) => present(state, swarmId, target));
 
   const entries: AudienceEntry[] = [];
   const seen = new Set<string>([actorName]);
@@ -76,7 +72,7 @@ export function resolveAudience(input: AudienceInput): Audience {
     seen.add(target.name);
     entries.push({ name: target.name, as: "to", why: target.why });
   }
-  for (const target of [...ccTargets, ...copies]) {
+  for (const target of ccTargets) {
     if (seen.has(target.name)) continue;
     seen.add(target.name);
     entries.push({ name: target.name, as: "cc", why: target.why });

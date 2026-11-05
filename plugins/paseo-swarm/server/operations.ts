@@ -475,7 +475,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         .filter((agent) => agent.paseoAgentId !== null || includeReserved === true)
         .map(seatView),
       tasks: scoped(saved.tasks),
-      // Deliveries without a Task stay off the board.
+      // Deliveries without a Task, from the artifacts playtest, stay off the board.
       activities: scoped(saved.activities).filter((activity) => activity.taskId !== null),
       swarms: swarms.map((swarm) => ({
         id: swarm.id,

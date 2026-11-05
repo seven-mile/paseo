@@ -312,7 +312,7 @@ function SeatDeliveryRow({
   const openLink = useSwarmCanonicalLinkPress();
   const { taskId } = delivery;
   const open = useCallback(() => {
-    if (!workspaceId || !taskId) return;
+    if (!workspaceId) return;
     openSwarmTasks({ serverId, workspaceId, agentName: "", taskId });
   }, [taskId, serverId, workspaceId]);
   const rowStyle = useMemo(() => [styles.delivery, !first && styles.deliveryDivided], [first]);
@@ -320,22 +320,17 @@ function SeatDeliveryRow({
     <View style={rowStyle} testID={`swarm-seat-delivery-${delivery.activityId}`}>
       <View style={styles.deliveryMeta}>
         <Text style={styles.deliveryLabel}>
-          {delivery.taskId !== null && delivery.taskState === "open"
-            ? t("swarm.tasks.stageResult")
-            : t("swarm.tasks.result")}
+          {delivery.taskState === "open" ? t("swarm.tasks.stageResult") : t("swarm.tasks.result")}
           {delivery.as === "cc" ? ` · ${t("swarm.seat.deliveryCopied")}` : ""}
-          {` · ${formatTimeAgo(new Date(delivery.createdAt))}`}
-          {delivery.taskId !== null ? " ·" : ""}
+          {` · ${formatTimeAgo(new Date(delivery.createdAt))} ·`}
         </Text>
-        {delivery.taskId !== null ? (
-          <SwarmInlineLink
-            label={delivery.taskTitle}
-            onPress={open}
-            disabled={!workspaceId}
-            accessibilityLabel={t("swarm.seat.openTask", { title: delivery.taskTitle })}
-            testID={`swarm-seat-delivery-open-${delivery.activityId}`}
-          />
-        ) : null}
+        <SwarmInlineLink
+          label={delivery.taskTitle}
+          onPress={open}
+          disabled={!workspaceId}
+          accessibilityLabel={t("swarm.seat.openTask", { title: delivery.taskTitle })}
+          testID={`swarm-seat-delivery-open-${delivery.activityId}`}
+        />
       </View>
       <MarkdownRenderer text={delivery.body} compact onLinkPress={openLink ?? undefined} />
       <DeliveredArtifacts

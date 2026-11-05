@@ -133,7 +133,7 @@ function resolveTaskWorkers(workerNames: string[], owner: AgentRecord): string[]
 
 interface ActivityInput {
   swarmId: string;
-  taskId: string | null;
+  taskId: string;
   actorName: string;
   actorKind: "agent" | "human";
   actorOccupant?: number;
@@ -209,7 +209,7 @@ function taskMail(input: {
 function addressedMail(
   audience: Audience,
   mail: {
-    taskId: string | null;
+    taskId: string;
     sender: string;
     kind: string;
     body: string;
@@ -671,7 +671,7 @@ const RETRY_WINDOW_MS = 5 * 60_000;
 // change, makes the same text a new delivery.
 function retriedDelivery(
   swarmId: string,
-  taskId: string | null,
+  taskId: string,
   actorName: string,
   input: RpcInput<typeof deliverTaskRpc>,
 ): Activity | undefined {
@@ -713,102 +713,6 @@ function deliveryAudience(
     },
     always: [{ name: task.managerName, why: "owner" }],
   });
-}
-
-// A delivery without a Task: a result a seat gives the readers it names, such as an answer to a
-// question the human asked it directly. It goes to them with a copy to the author's manager, and
-// stays off the board. Corrections revise it like a delivery on a Task.
-async function deliverWithoutTask(
-  input: RpcInput<typeof deliverTaskRpc>,
-  context: PluginHandlerContext,
-): Promise<{ task: null; activity: Activity; duplicate: boolean }> {
-  const swarmId = actorSwarmId(input, input.actorName);
-  const actor = findAgent(swarmId, input.actorName);
-  const actorName = agentQualifiedName(actor);
-  const refused = `${actorName} cannot deliver without a Task`;
-  if (!input.to?.length) {
-    throw refusal(
-      refused,
-      "a delivery without a Task goes to the readers you name",
-      "Pass to with whoever asked for it (seats, or human), or pass the taskId.",
-    );
-  }
-  if (input.taskState !== undefined || input.status !== undefined) {
-    throw refusal(
-      refused,
-      "taskState and status belong to a Task",
-      "Leave them out, or pass the taskId of the Task this result is for.",
-    );
-  }
-  if (
-    input.revises &&
-    !store
-      .read()
-      .activities.some(
-        (activity) =>
-          activity.id === input.revises &&
-          activity.swarmId === swarmId &&
-          activity.kind === DELIVERY &&
-          activity.taskId === null &&
-          activity.actorName === actorName,
-      )
-  ) {
-    throw refusal(
-      `${actorName} cannot revise ${input.revises}`,
-      "it is not a delivery you made without a Task",
-      "Pass the id of your earlier delivery, or leave revises out.",
-    );
-  }
-  const retried = retriedDelivery(swarmId, null, actorName, input);
-  if (retried) return { task: null, activity: retried, duplicate: true };
-  const artifacts = await carriedArtifacts(
-    swarmId,
-    resolveActivityRefs(input.result, store.read(), swarmId),
-    context,
-  );
-  let activity!: Activity;
-  await store.commit((state) => {
-    const manager = activeSeat(state, swarmId, actor.reportsTo);
-    const audience = resolveAudience({
-      state,
-      swarmId,
-      actorName,
-      to: input.to,
-      cc: input.cc ?? [],
-      ...(input.cc === undefined && manager
-        ? { copies: [{ name: agentQualifiedName(manager), why: "manager" as const }] }
-        : {}),
-    });
-    activity = makeActivity(
-      {
-        swarmId,
-        taskId: null,
-        actorName,
-        actorKind: "agent",
-        actorOccupant: currentOccupant(actor).number,
-        replyTo: null,
-        responseProfile: null,
-        kind: DELIVERY,
-        body: input.result,
-        data: input.revises ? { revises: input.revises } : {},
-        audience: audience.entries,
-        artifacts,
-      },
-      state,
-    );
-    return [
-      { op: "put", collection: "activities", record: activity },
-      ...addressedMail(audience, {
-        taskId: null,
-        sender: actorName,
-        kind: DELIVERY,
-        body: input.result,
-        attributes: { activity: activity.id, revises: input.revises },
-      }),
-    ];
-  });
-  await deliverMail(context);
-  return { task: null, activity, duplicate: false };
 }
 
 // The human's close: resolution done without a delivery, one change Activity per Task, and the
@@ -1010,20 +914,12 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
   server.handle(
     deliverTaskRpc,
     async (input: RpcInput<typeof deliverTaskRpc>, context: PluginHandlerContext) => {
-      if (input.taskId === undefined) return deliverWithoutTask(input, context);
       const swarmId = actorSwarmId(input, input.actorName);
       const task = findTask(swarmId, input.taskId);
       const actor = findAgent(swarmId, input.actorName);
       const actorName = agentQualifiedName(actor);
       assertOnLine(task, actor, "deliver on");
       const taskState = input.taskState;
-      if (!taskState) {
-        throw refusal(
-          `${actorName} cannot deliver on ${task.id} without taskState`,
-          "a delivery on a Task says the state it leaves the Task in",
-          "Pass taskState: done when the result fulfills the agreed outcome, or open while work continues.",
-        );
-      }
       const deliveries = store
         .read()
         .activities.filter(

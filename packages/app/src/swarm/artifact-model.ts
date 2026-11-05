@@ -31,6 +31,7 @@ const swarmArtifactSchema = z.object({
   id: z.string(),
   title: z.string(),
   authorName: z.string(),
+  // The Task it was made for, if any: where it came from, not what it belongs to.
   taskId: z.string().optional(),
   taskTitle: z.string().nullable(),
   changedAt: z.string(),
@@ -43,21 +44,20 @@ export type SwarmArtifact = z.infer<typeof swarmArtifactSchema>;
 
 export const swarmArtifactsSchema = z.object({ artifacts: z.array(swarmArtifactSchema) });
 
-// Everyone its deliveries reached, in the order they first did.
-export function artifactReaders(artifact: Pick<SwarmArtifact, "deliveries">): string[] {
-  const readers: string[] = [];
-  for (const delivery of artifact.deliveries) {
-    for (const entry of delivery.audience) {
-      if (!readers.includes(entry.name)) readers.push(entry.name);
-    }
-  }
-  return readers;
-}
+// The audience name Swarm gives the person.
+const HUMAN = "human";
 
-// Whether the artifact changed since its newest delivery; null when it was never delivered.
-export function changedSinceLastDelivery(artifact: Pick<SwarmArtifact, "deliveries">) {
-  const latest = artifact.deliveries.at(-1);
-  return latest ? latest.changed : null;
+// The newest delivery that carried the artifact to you. "Changed since sent to you" compares with
+// it. Null when none did: an artifact has no delivery state of its own, only when it last changed,
+// and citing it in conversation is not a delivery.
+export function latestDeliveryToYou(
+  artifact: Pick<SwarmArtifact, "deliveries">,
+): SwarmArtifact["deliveries"][number] | null {
+  for (let index = artifact.deliveries.length - 1; index >= 0; index -= 1) {
+    const delivery = artifact.deliveries[index];
+    if (delivery.audience.some((entry) => entry.name === HUMAN)) return delivery;
+  }
+  return null;
 }
 
 // The artifacts whose title, author or Task title holds the search, in order.

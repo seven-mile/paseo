@@ -150,31 +150,15 @@ const seatDeliverySchema = z.object({
   artifacts: z.array(deliveredArtifactSchema).optional(),
   createdAt: z.string(),
 });
-// A delivery made without a Task, listed apart by the host.
-const seatDirectDeliverySchema = seatDeliverySchema
-  .omit({ taskId: true, taskTitle: true, taskState: true })
-  .extend({ taskId: z.null() });
-export type SeatDelivery =
-  | z.infer<typeof seatDeliverySchema>
-  | z.infer<typeof seatDirectDeliverySchema>;
+export type SeatDelivery = z.infer<typeof seatDeliverySchema>;
 
 const seatReadSchema = z.object({
   seat: swarmSeatSchema.nullable(),
   // Absent on hosts from before addressing.
   deliveries: z.array(seatDeliverySchema).optional(),
-  // Absent on hosts from before deliveries without a Task.
-  directDeliveries: z.array(seatDirectDeliverySchema).optional(),
 });
 type SeatRead = z.infer<typeof seatReadSchema>;
 const NO_DELIVERIES: SeatDelivery[] = [];
-
-// Both lists, newest first.
-function seatDeliveries(read: SeatRead | undefined): SeatDelivery[] {
-  if (!read?.directDeliveries?.length) return read?.deliveries ?? NO_DELIVERIES;
-  return [...(read.deliveries ?? []), ...read.directDeliveries].sort((a, b) =>
-    b.createdAt.localeCompare(a.createdAt),
-  );
-}
 
 // One seat and its occupants, retired seats included. A poll whose etag still holds costs a few
 // hundred bytes, so a seat tab can follow its occupant without reading the roster.
@@ -199,10 +183,9 @@ export function useSwarmSeat(plugin: InstalledPlugin | null, seatId: string) {
     },
     plugin?.queryClient,
   );
-  const deliveries = useMemo(() => seatDeliveries(query.data), [query.data]);
   return {
     seat: query.data?.seat ?? null,
-    deliveries,
+    deliveries: query.data?.deliveries ?? NO_DELIVERIES,
     isPending: query.isPending,
     error: query.error,
   };

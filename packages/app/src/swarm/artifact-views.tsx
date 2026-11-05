@@ -9,8 +9,7 @@ import { useFetchQuery } from "@/data/query";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { formatTimeAgo } from "@/utils/time";
 import {
-  artifactReaders,
-  changedSinceLastDelivery,
+  latestDeliveryToYou,
   swarmArtifactsSchema,
   type DeliveredArtifact,
   type SwarmArtifact,
@@ -116,8 +115,9 @@ function DeliveredArtifactEntry({
   );
 }
 
-// The Artifacts view: every artifact in the project, with who it reached and whether it changed
-// since. An artifact here may not have been delivered yet.
+// The Artifacts view: every artifact in the project, with when it changed, the Task it was made
+// for, and whether it changed since a delivery last sent it to you. An artifact has no delivery
+// state of its own; one no delivery sent you just shows when it changed.
 export function SwarmArtifactList({
   artifacts,
   loading,
@@ -176,8 +176,7 @@ function ArtifactRow({
     ({ pressed }: { pressed: boolean }) => [styles.row, pressed && styles.pressedRow],
     [],
   );
-  const readers = artifactReaders(artifact);
-  const changed = changedSinceLastDelivery(artifact);
+  const sent = latestDeliveryToYou(artifact);
   return (
     <Pressable
       onPress={open}
@@ -193,8 +192,8 @@ function ArtifactRow({
       <View style={styles.metaLine}>
         <Text style={styles.meta} numberOfLines={1}>
           {t("swarm.artifacts.byAuthor", { author: artifact.authorName })}
-          {` · ${formatTimeAgo(new Date(artifact.changedAt))}`}
-          {taskId ? " ·" : ""}
+          {` · ${t("swarm.artifacts.updated", { time: formatTimeAgo(new Date(artifact.changedAt)) })}`}
+          {taskId ? ` · ${t("swarm.artifacts.madeFor")}` : ""}
         </Text>
         {taskId ? (
           <SwarmInlineLink
@@ -204,16 +203,16 @@ function ArtifactRow({
           />
         ) : null}
       </View>
-      <View style={styles.rowMeta}>
-        <Text style={styles.meta} numberOfLines={1}>
-          {readers.length > 0
-            ? t("swarm.artifacts.deliveredTo", { names: readers.join(", ") })
-            : t("swarm.artifacts.notDelivered")}
-        </Text>
-        {changed ? (
-          <StatusBadge size="xs" label={t("swarm.artifacts.changedSinceLastDelivery")} />
-        ) : null}
-      </View>
+      {sent ? (
+        <View style={styles.rowMeta}>
+          <Text style={styles.meta} numberOfLines={1}>
+            {t("swarm.artifacts.sentToYou", { time: formatTimeAgo(new Date(sent.createdAt)) })}
+          </Text>
+          {sent.changed ? (
+            <StatusBadge size="xs" label={t("swarm.artifacts.changedSinceSentToYou")} />
+          ) : null}
+        </View>
+      ) : null}
     </Pressable>
   );
 }
