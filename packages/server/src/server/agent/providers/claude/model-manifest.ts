@@ -1,6 +1,6 @@
 import type { AgentModelDefinition, AgentSelectOption } from "../../agent-sdk-types.js";
 
-type ClaudeEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+export type ClaudeEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 interface ClaudeModelManifestEntry {
   id: string;
@@ -419,6 +419,13 @@ export function normalizeClaudeRuntimeModelId(value: string | null | undefined):
     singleSegmentMatch[2],
     trimmed.toLowerCase().includes("[1m]"),
   );
+}
+
+/** Effort options for a model outside the manifest, from the effort levels Claude Code reports. */
+export function buildClaudeEffortThinkingOptions(
+  effortLevels: readonly ClaudeEffortLevel[],
+): AgentSelectOption[] | undefined {
+  return buildThinkingOptions(effortLevels, false, CLAUDE_DEFAULT_THINKING_OPTION_ID);
 }
 
 export function getClaudeCustomModelThinkingOptions(): AgentSelectOption[] {

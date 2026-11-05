@@ -1,10 +1,12 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { ModelInfo, Query } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createTestLogger } from "../../../../test-utils/test-logger.js";
 import { ClaudeAgentClient } from "./agent.js";
+import type { ClaudeQueryFactory } from "./query.js";
 import {
   CLAUDE_DISABLED_THINKING_OPTION_ID,
   CLAUDE_ULTRACODE_THINKING_OPTION_ID,
@@ -39,11 +41,20 @@ async function createClaudeConfigDirWithRawSettings(settings: string): Promise<s
   return configDir;
 }
 
-function createCatalogClient(claudeCodeVersion = "2.1.284"): ClaudeAgentClient {
+function createCatalogClient(
+  claudeCodeVersion = "2.1.284",
+  supportedModels: () => Promise<ModelInfo[]> = async () => [],
+): ClaudeAgentClient {
   return new ClaudeAgentClient({
     logger: createTestLogger(),
+    resolveBinary: async () => "/test/claude/bin",
     resolveVersion: async () => claudeCodeVersion,
+    queryFactory: harnessQueryFactory(supportedModels),
   });
+}
+
+function harnessQueryFactory(supportedModels: () => Promise<ModelInfo[]>): ClaudeQueryFactory {
+  return () => ({ supportedModels, close: () => undefined }) as unknown as Query;
 }
 
 describe("getClaudeModels", () => {
@@ -287,8 +298,10 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
     vi.stubEnv("CLAUDE_CONFIG_DIR", daemonConfigDir);
     const client = new ClaudeAgentClient({
       logger: createTestLogger(),
+      resolveBinary: async () => "/test/claude/bin",
       resolveVersion: async () => "2.1.280",
       runtimeSettings: { env: { CLAUDE_CONFIG_DIR: providerConfigDir } },
+      queryFactory: harnessQueryFactory(async () => []),
     });
 
     const { models } = await client.fetchCatalog({
@@ -298,6 +311,121 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
     });
 
     expect(models.map((model) => model.id)).toContain("glm-5.1");
+  });
+
+  it("adds the concrete models Claude Code's /model picker offers", async () => {
+    vi.stubEnv("CLAUDE_CONFIG_DIR", await createClaudeConfigDir({}));
+    const client = createCatalogClient("2.1.284", async () => [
+      {
+        value: "opus",
+        resolvedModel: "gateway/claude-opus-5-5",
+        displayName: "Opus 5.5",
+        description: "Alias row",
+      },
+      {
+        value: "gateway/AWS-Claude-Opus-4-7[1m]",
+        resolvedModel: "gateway/AWS-Claude-Opus-4-7",
+        displayName: "AWS-Claude-Opus-4.7 · Gateway",
+        description: "via gateway",
+        supportedEffortLevels: ["low", "high", "xhigh"],
+      },
+      {
+        value: "gateway/GLM-5.3[1m]",
+        resolvedModel: "gateway/GLM-5.3[1m]",
+        displayName: "GLM-5.3 · Gateway",
+        description: "via gateway",
+      },
+      { value: "gateway/plain", displayName: "", description: "Custom model" },
+      { value: "claude-opus-4-7", displayName: "Opus 4.7 (harness)", description: "dup" },
+    ]);
+
+    const { models } = await client.fetchCatalog({
+      scope: "workspace",
+      cwd: os.tmpdir(),
+      force: true,
+    });
+
+    expect(models.slice(0, getClaudeModels().length)).toEqual(getClaudeModels());
+    expect(models.slice(getClaudeModels().length)).toEqual([
+      {
+        provider: "claude",
+        id: "gateway/AWS-Claude-Opus-4-7[1m]",
+        label: "AWS-Claude-Opus-4.7 · Gateway",
+        description: "via gateway",
+        defaultThinkingOptionId: "high",
+        thinkingOptions: [
+          { id: "low", label: "Low" },
+          { id: "high", label: "High", isDefault: true },
+          { id: "xhigh", label: "Extra High" },
+          { id: "ultracode", label: "Ultra Code" },
+        ],
+      },
+      {
+        provider: "claude",
+        id: "gateway/GLM-5.3[1m]",
+        label: "GLM-5.3 · Gateway",
+        description: "via gateway",
+      },
+      {
+        provider: "claude",
+        id: "gateway/plain",
+        label: "gateway/plain",
+        description: "Custom model",
+      },
+    ]);
+  });
+
+  it("gives an alias's effort levels to the settings model it points at", async () => {
+    vi.stubEnv(
+      "CLAUDE_CONFIG_DIR",
+      await createClaudeConfigDir({
+        env: { ANTHROPIC_DEFAULT_OPUS_MODEL: "gateway/kiro/claude-opus-5-5[1m]" },
+      }),
+    );
+    const client = createCatalogClient("2.1.284", async () => [
+      {
+        value: "opus",
+        resolvedModel: "gateway/kiro/claude-opus-5-5",
+        displayName: "Opus 5.5",
+        description: "Custom Opus model",
+        supportedEffortLevels: ["low", "medium", "high"],
+      },
+    ]);
+
+    const { models } = await client.fetchCatalog({
+      scope: "workspace",
+      cwd: os.tmpdir(),
+      force: true,
+    });
+
+    expect(models.find((model) => model.id === "gateway/kiro/claude-opus-5-5[1m]")).toEqual({
+      provider: "claude",
+      id: "gateway/kiro/claude-opus-5-5[1m]",
+      label: "gateway/kiro/claude-opus-5-5[1m]",
+      description: "From Claude settings.json env.ANTHROPIC_DEFAULT_OPUS_MODEL",
+      defaultThinkingOptionId: "high",
+      thinkingOptions: [
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High", isDefault: true },
+      ],
+    });
+    expect(models.some((model) => model.id === "opus")).toBe(false);
+  });
+
+  it("keeps the catalog when Claude Code cannot list its models", async () => {
+    vi.stubEnv("CLAUDE_CONFIG_DIR", await createClaudeConfigDir({}));
+    const client = createCatalogClient("2.1.284", async () => {
+      throw new Error("Claude Code exited");
+    });
+
+    const { models } = await client.fetchCatalog({
+      scope: "workspace",
+      cwd: os.tmpdir(),
+      force: true,
+    });
+
+    expect(models).toEqual(getClaudeModels());
   });
 
   it("falls back to hardcoded models when settings.json is missing", async () => {

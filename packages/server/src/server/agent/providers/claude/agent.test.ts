@@ -2184,6 +2184,30 @@ describe("ClaudeAgentSession context window usage", () => {
     await session.close();
   });
 
+  test.each([
+    {
+      configured: "central/kiro/claude-opus-5-5[1m]",
+      reported: "central/kiro/claude-opus-5-5",
+      expected: "central/kiro/claude-opus-5-5[1m]",
+    },
+    {
+      configured: "opus",
+      reported: "us.anthropic.claude-opus-4-7-v1",
+      expected: "claude-opus-4-7",
+    },
+  ])("reports $reported running as $expected when $configured is configured", async (row) => {
+    const session = await createSessionForTurns(
+      [[{ ...createInitMessage(), model: row.reported }, createSuccessResult()]],
+      { model: row.configured },
+    );
+    try {
+      await session.run("turn");
+      expect((await session.getRuntimeInfo()).model).toBe(row.expected);
+    } finally {
+      await session.close();
+    }
+  });
+
   test("passes persistSession through to the Claude SDK query options", async () => {
     const createResultTurn = (sessionId: string) => [
       {
