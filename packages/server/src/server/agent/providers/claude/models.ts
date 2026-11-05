@@ -133,7 +133,8 @@ function withAliasEffort(
   return { ...model, thinkingOptions, defaultThinkingOptionId: CLAUDE_DEFAULT_THINKING_OPTION_ID };
 }
 
-function stripContextSuffix(modelId: string): string {
+/** Drops the `[1m]` context suffix, which Claude Code leaves off the model id it reports. */
+export function stripContextSuffix(modelId: string): string {
   return modelId.replace(/\[1m\]$/i, "");
 }
 

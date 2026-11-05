@@ -36,6 +36,7 @@ import {
   findClaudeModel,
   getClaudeModelsWithSettings,
   normalizeClaudeRuntimeModelId,
+  stripContextSuffix,
   resolveConfiguredClaudeModel,
 } from "./models.js";
 import {
@@ -4709,7 +4710,13 @@ class ClaudeAgentSession implements AgentSession {
     this.observePermissionMode(message.permissionMode);
     this.persistence = null;
     if (message.model) {
-      const normalizedRuntimeModel = normalizeClaudeRuntimeModelId(message.model);
+      // A configured id that names the running model is its identity; a gateway id such as
+      // `kiro/claude-opus-5-5` must not collapse onto the manifest entry it contains.
+      // TODO: an alias (`opus`) wired to a gateway model still collapses; match the catalog instead.
+      const normalizedRuntimeModel =
+        this.config.model && stripContextSuffix(this.config.model) === message.model
+          ? this.config.model
+          : normalizeClaudeRuntimeModelId(message.model);
       this.logger.debug(
         { runtimeModel: message.model, normalizedRuntimeModel },
         "Captured runtime model from SDK init",
