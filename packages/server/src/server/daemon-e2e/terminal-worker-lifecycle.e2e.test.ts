@@ -1,21 +1,12 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { DaemonClient } from "../test-utils/daemon-client.js";
-import { resolveDaemonVersion } from "../daemon-version.js";
 import { readDaemonInstance, stopDaemonInstance } from "../daemon-instance.js";
 import { currentBootId } from "../pid-lock.js";
 import { connectTerminalWorker } from "../../terminal/terminal-worker-client.js";
@@ -405,49 +396,18 @@ describe("terminals across daemon restarts", { timeout: 240_000 }, () => {
     await client.close();
   });
 
-  test("daemon.update.request restarts the daemon and keeps the terminal", async () => {
-    // Fake npm only: `ls` reports this checkout as the global install at the daemon's
-    // version, `install -g` does nothing, and anything else fails so real npm never runs.
-    const fakeBin = mkdtempSync(path.join(tmpdir(), "tw-npm-"));
-    extraDirs.push(fakeBin);
-    const listing = JSON.stringify({
-      path: path.join(fakeBin, "global"),
-      dependencies: {
-        "@getpaseo/cli": {
-          version: resolveDaemonVersion(import.meta.url),
-          path: SERVER_ROOT,
-        },
-      },
-    });
-    const fakeNpm = path.join(fakeBin, "fake-npm.cjs");
-    writeFileSync(
-      fakeNpm,
-      `const args = process.argv.slice(2);
-const has = (...tokens) => tokens.every((token) => args.includes(token));
-if (has("-g", "ls", "@getpaseo/cli", "--json", "--depth=0", "--long")) {
-  process.stdout.write(${JSON.stringify(listing)} + "\\n");
-} else if (args[0] === "install" && has("-g", "@getpaseo/cli@latest")) {
-  // The installed version is already the running one: nothing to do.
-} else {
-  process.stderr.write("unexpected npm call: " + args.join(" ") + "\\n");
-  process.exit(1);
-}
-`,
-    );
-    const npmScript = path.join(fakeBin, "npm");
-    writeFileSync(npmScript, `#!/bin/sh\nexec "${process.execPath}" "${fakeNpm}" "$@"\n`);
-    chmodSync(npmScript, 0o755);
-    writeFileSync(path.join(fakeBin, "npm.cmd"), `@"${process.execPath}" "${fakeNpm}" %*\r\n`);
-    const harness = await startSupervisor({ pathPrefix: fakeBin });
-    let client = await connect(harness);
+  // Swarm turns self-update off (daemon-self-updater.ts), so the request is refused and the
+  // running daemon keeps serving the terminal.
+  test("daemon.update.request is refused and keeps the daemon and the terminal", async () => {
+    const harness = await startSupervisor();
+    const client = await connect(harness);
     const workspaceId = await createWorkspace(client, harness);
     const terminal = await createMarkedTerminal(client, harness, workspaceId, "MARKER-UPDATE");
     const daemonPid = await daemonWorkerPid(client);
 
     const update = await client.updateDaemon();
-    expect(update).toMatchObject({ success: true });
-    await client.close();
-    client = await waitForReplacement(harness, daemonPid);
+    expect(update).toMatchObject({ success: false });
+    expect(await daemonWorkerPid(client)).toBe(daemonPid);
     await expectKept(client, terminal, "MARKER-UPDATE", "update");
     await client.close();
   });
