@@ -555,6 +555,42 @@ export const UserMessage = memo(function UserMessage({
     [showTrailingRow],
   );
 
+  // Images and attachments show above the text or the Swarm envelope card alike.
+  const media = (
+    <>
+      {hasImages ? (
+        <View style={imagePreviewContainerStyle}>
+          {images.map((image) => (
+            <UserMessageImagePill
+              key={image.id}
+              image={image}
+              onOpen={setLightboxMetadata}
+              accessibilityLabel={t("composer.attachments.openImage")}
+            />
+          ))}
+        </View>
+      ) : null}
+      {hasAttachments ? (
+        <View style={attachmentPreviewContainerStyle}>
+          {attachments.map((attachment, index) => {
+            const content = getAgentAttachmentPillContent(attachment, t);
+            return (
+              <AttachmentFrame
+                key={`${attachment.type}:${"number" in attachment ? attachment.number : index}`}
+              >
+                <AttachmentLabel
+                  icon={content.icon}
+                  title={content.title}
+                  subtitle={content.subtitle}
+                />
+              </AttachmentFrame>
+            );
+          })}
+        </View>
+      ) : null}
+    </>
+  );
+
   return (
     <View style={containerStyle} testID="user-message" aria-busy={isPending}>
       <View
@@ -565,43 +601,17 @@ export const UserMessage = memo(function UserMessage({
         {sender ? <MessageSender sender={sender} serverId={serverId} /> : null}
         <View style={bubbleStyle}>
           {envelope ? (
-            <SwarmEnvelopeMessage
-              key={sourceMessage}
-              envelope={envelope}
-              original={sourceMessage}
-            />
+            <>
+              {media}
+              <SwarmEnvelopeMessage
+                key={sourceMessage}
+                envelope={envelope}
+                original={sourceMessage}
+              />
+            </>
           ) : (
             <MessagePreview>
-              {hasImages ? (
-                <View style={imagePreviewContainerStyle}>
-                  {images.map((image) => (
-                    <UserMessageImagePill
-                      key={image.id}
-                      image={image}
-                      onOpen={setLightboxMetadata}
-                      accessibilityLabel={t("composer.attachments.openImage")}
-                    />
-                  ))}
-                </View>
-              ) : null}
-              {hasAttachments ? (
-                <View style={attachmentPreviewContainerStyle}>
-                  {attachments.map((attachment, index) => {
-                    const content = getAgentAttachmentPillContent(attachment, t);
-                    return (
-                      <AttachmentFrame
-                        key={`${attachment.type}:${"number" in attachment ? attachment.number : index}`}
-                      >
-                        <AttachmentLabel
-                          icon={content.icon}
-                          title={content.title}
-                          subtitle={content.subtitle}
-                        />
-                      </AttachmentFrame>
-                    );
-                  })}
-                </View>
-              ) : null}
+              {media}
               {hasText ? (
                 <Text selectable style={userMessageStylesheet.text} dataSet={MESSAGE_TEXT_DATASET}>
                   {message}
