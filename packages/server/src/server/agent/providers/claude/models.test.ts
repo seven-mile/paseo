@@ -363,6 +363,44 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
     ]);
   });
 
+  it("gives an alias's effort levels to the settings model it points at", async () => {
+    vi.stubEnv(
+      "CLAUDE_CONFIG_DIR",
+      await createClaudeConfigDir({
+        env: { ANTHROPIC_DEFAULT_OPUS_MODEL: "gateway/kiro/claude-opus-5-5[1m]" },
+      }),
+    );
+    const client = createCatalogClient("2.1.284", async () => [
+      {
+        value: "opus",
+        resolvedModel: "gateway/kiro/claude-opus-5-5",
+        displayName: "Opus 5.5",
+        description: "Custom Opus model",
+        supportedEffortLevels: ["low", "medium", "high"],
+      },
+    ]);
+
+    const { models } = await client.fetchCatalog({
+      scope: "workspace",
+      cwd: os.tmpdir(),
+      force: true,
+    });
+
+    expect(models.find((model) => model.id === "gateway/kiro/claude-opus-5-5[1m]")).toEqual({
+      provider: "claude",
+      id: "gateway/kiro/claude-opus-5-5[1m]",
+      label: "gateway/kiro/claude-opus-5-5[1m]",
+      description: "From Claude settings.json env.ANTHROPIC_DEFAULT_OPUS_MODEL",
+      defaultThinkingOptionId: "high",
+      thinkingOptions: [
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High", isDefault: true },
+      ],
+    });
+    expect(models.some((model) => model.id === "opus")).toBe(false);
+  });
+
   it("keeps the catalog when Claude Code cannot list its models", async () => {
     vi.stubEnv("CLAUDE_CONFIG_DIR", await createClaudeConfigDir({}));
     const client = createCatalogClient("2.1.284", async () => {

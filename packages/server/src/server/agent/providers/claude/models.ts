@@ -59,7 +59,9 @@ export async function getClaudeModelsWithSettings(
   harnessModels: readonly ModelInfo[] = [],
 ): Promise<AgentModelDefinition[]> {
   const hardcodedModels = getClaudeModels(claudeCodeVersion);
-  const settingsModels = await readClaudeSettingsModels(logger, configDir);
+  const settingsModels = (await readClaudeSettingsModels(logger, configDir)).map((model) =>
+    withAliasEffort(model, harnessModels),
+  );
   const models = [...hardcodedModels];
 
   for (const model of [...buildClaudeHarnessModels(harnessModels), ...settingsModels]) {
@@ -107,7 +109,31 @@ function buildClaudeHarnessModels(harnessModels: readonly ModelInfo[]): AgentMod
 /** An alias row (`opus`) resolves to another model; a `[1m]` row resolves to its own base id. */
 function isClaudeAliasRow(info: ModelInfo): boolean {
   if (info.resolvedModel === undefined) return false;
-  return info.resolvedModel !== info.value.replace(/\[1m\]$/i, "");
+  return info.resolvedModel !== stripContextSuffix(info.value);
+}
+
+/**
+ * Claude Code drops a model from its concrete rows once an alias such as `opus` points at it, and
+ * keeps that model's effort levels only on the alias row. Give them back to the settings model the
+ * alias resolves to, so it stays tunable whichever way the aliases are wired.
+ */
+function withAliasEffort(
+  model: AgentModelDefinition,
+  harnessModels: readonly ModelInfo[],
+): AgentModelDefinition {
+  const target = stripContextSuffix(model.id);
+  const alias = harnessModels.find(
+    (info) => isClaudeAliasRow(info) && info.resolvedModel === target,
+  );
+  const thinkingOptions = alias?.supportedEffortLevels?.length
+    ? buildClaudeEffortThinkingOptions(alias.supportedEffortLevels)
+    : undefined;
+  if (!thinkingOptions) return model;
+  return { ...model, thinkingOptions, defaultThinkingOptionId: CLAUDE_DEFAULT_THINKING_OPTION_ID };
+}
+
+function stripContextSuffix(modelId: string): string {
+  return modelId.replace(/\[1m\]$/i, "");
 }
 
 async function readClaudeSettingsModels(
