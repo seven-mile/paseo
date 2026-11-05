@@ -253,7 +253,7 @@ try {
         error: {
           code: "AGENT_NOT_FOUND",
           message: "Agent not found: no-such-agent",
-          details: 'Use "paseo ls" to list available agents',
+          details: 'Use "paseo-swarm ls" to list available agents',
         },
       });
     } finally {
