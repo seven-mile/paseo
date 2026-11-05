@@ -55,6 +55,7 @@ import {
 import { filterSwarmArtifacts } from "./artifact-model";
 import { DeliveredArtifacts, SwarmArtifactList, useSwarmArtifacts } from "./artifact-views";
 import { SwarmInlineLink } from "./inline-link";
+import { resolveArtifactCopyLink } from "./artifact-links";
 import { useSwarmCanonicalLinkPress } from "./canonical-links";
 import { SwarmCcLine } from "./cc-line";
 import { TaskCloseControl } from "./task-close";
@@ -1671,17 +1672,25 @@ function TaskDetail({
   const openLink = useCallback(
     (uri: string) => {
       if (!/^paseo-swarm:\/\//i.test(uri)) return true;
-      const reference = resolveSwarmTaskReference(uri, board, knownWorkspaceIds);
-      if (!reference) {
-        setReferenceUnavailable(true);
-        return false;
-      }
-      setReferenceUnavailable(false);
-      if (reference.kind === "task" && !reference.workspaceId) onOpenTask(reference.taskId);
-      else onOpenReference?.(reference);
+      const open = (link: string) => {
+        const reference = resolveSwarmTaskReference(link, board, knownWorkspaceIds);
+        if (!reference) {
+          setReferenceUnavailable(true);
+          return;
+        }
+        setReferenceUnavailable(false);
+        if (reference.kind === "task" && !reference.workspaceId) onOpenTask(reference.taskId);
+        else onOpenReference?.(reference);
+      };
+      // A link to an artifact's source opens its copy, as it does from a reply or a seat's results.
+      if (!/^paseo-swarm:\/\/file\//i.test(uri)) open(uri);
+      else
+        void resolveArtifactCopyLink({ serverId, invoke, queryClient }, uri).then((copy) =>
+          open(copy ?? uri),
+        );
       return false;
     },
-    [board, knownWorkspaceIds, onOpenReference, onOpenTask],
+    [board, invoke, knownWorkspaceIds, onOpenReference, onOpenTask, queryClient, serverId],
   );
   const send = useCallback(async () => {
     if (!online || model.getState().pending) return;

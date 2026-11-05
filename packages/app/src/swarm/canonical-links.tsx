@@ -6,7 +6,6 @@ import { useIsCompactFormFactor } from "@/constants/layout";
 import { useToast } from "@/contexts/toast-api-context";
 import { useStableEvent } from "@/hooks/use-stable-event";
 import { pluginRegistry } from "@/plugins/registry";
-import type { InstalledPlugin } from "@/plugins/types";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
 import {
@@ -15,7 +14,7 @@ import {
   useWorkspaceLayoutStore,
 } from "@/stores/workspace-layout-store";
 import { workspaceTabTargetsEqual } from "@/workspace-tabs/identity";
-import { artifactCopyLink, swarmArtifactsSchema } from "./artifact-model";
+import { resolveArtifactCopyLink } from "./artifact-links";
 import { openSwarmReference } from "./navigation";
 import { parseSwarmRead } from "./sync";
 import { resolveSwarmTaskReference, swarmTaskBoardSchema } from "./task-model";
@@ -111,7 +110,7 @@ export function SwarmCanonicalLinkProvider({ children }: { children: ReactNode }
           unavailable();
           return;
         }
-        const resolvedUri = (await artifactCopyFor(plugin, uri)) ?? uri;
+        const resolvedUri = (await resolveArtifactCopyLink(plugin, uri)) ?? uri;
         if (!current()) return;
         const session = useSessionStore.getState().sessions[serverId];
         const reference = session?.hasHydratedWorkspaces
@@ -131,24 +130,6 @@ export function SwarmCanonicalLinkProvider({ children }: { children: ReactNode }
   });
 
   return <CanonicalLinkContext.Provider value={openLink}>{children}</CanonicalLinkContext.Provider>;
-}
-
-// A link to a published artifact's source file opens its copy, which stays after the author's
-// worktree is gone. Hosts from before artifacts have no list to look in.
-async function artifactCopyFor(plugin: InstalledPlugin, uri: string): Promise<string | null> {
-  if (!/^paseo-swarm:\/\/file\//i.test(uri)) return null;
-  try {
-    const { artifacts } = await plugin.queryClient.fetchQuery({
-      queryKey: ["swarm", "canonical-link-artifacts", plugin.serverId],
-      queryFn: async () =>
-        parseSwarmRead(swarmArtifactsSchema, await plugin.invoke("swarm.artifacts.read", {})),
-      staleTime: 0,
-      retry: false,
-    });
-    return artifactCopyLink(artifacts, uri);
-  } catch {
-    return null;
-  }
 }
 
 export function useSwarmCanonicalLinkPress(): ((uri: string) => boolean) | null {
