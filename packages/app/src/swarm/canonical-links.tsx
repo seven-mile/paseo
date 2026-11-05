@@ -14,6 +14,7 @@ import {
   useWorkspaceLayoutStore,
 } from "@/stores/workspace-layout-store";
 import { workspaceTabTargetsEqual } from "@/workspace-tabs/identity";
+import { resolveArtifactCopyLink } from "./artifact-links";
 import { openSwarmReference } from "./navigation";
 import { parseSwarmRead } from "./sync";
 import { resolveSwarmTaskReference, swarmTaskBoardSchema } from "./task-model";
@@ -109,9 +110,11 @@ export function SwarmCanonicalLinkProvider({ children }: { children: ReactNode }
           unavailable();
           return;
         }
+        const resolvedUri = (await resolveArtifactCopyLink(plugin, uri)) ?? uri;
+        if (!current()) return;
         const session = useSessionStore.getState().sessions[serverId];
         const reference = session?.hasHydratedWorkspaces
-          ? resolveSwarmTaskReference(uri, board, [...session.workspaces.keys()])
+          ? resolveSwarmTaskReference(resolvedUri, board, [...session.workspaces.keys()])
           : null;
         if (!reference) {
           unavailable();

@@ -1,11 +1,12 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
-import { Text, View } from "react-native";
+import { ScrollView, Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import {
   Armchair,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Clock,
   SquareArrowOutUpRight,
 } from "lucide-react-native";
@@ -42,6 +43,10 @@ import { SwarmCcLine } from "./cc-line";
 import { openSwarmTasks } from "./navigation";
 import { useSwarmRoster, useSwarmSeat, type SeatDelivery, type SwarmSeat } from "./roster";
 import { useSeatAgentTimeline } from "./seat-agent-timeline";
+import { MarkdownRenderer } from "@/components/markdown/renderer";
+import { DeliveredArtifacts } from "./artifact-views";
+import { SwarmInlineLink } from "./inline-link";
+import { useSwarmCanonicalLinkPress } from "./canonical-links";
 import { sendSeatMail, seatRecipient, useUndeliveredSeatMail } from "./seat-mail";
 import { defaultSwarmCc } from "./task-model";
 import {
@@ -238,7 +243,8 @@ function SeatConversationContent({
 }
 
 // Results the seat delivered to the person, newest first, so a reply the seat did not repeat in
-// its own words is still in reach of its conversation. Each opens its Task, which shows it in full.
+// its own words is still in reach of its conversation. The newest shows; the rest open below it,
+// in a list that scrolls on its own so the conversation keeps its room.
 function SeatDeliveries({
   serverId,
   workspaceId,
@@ -255,68 +261,83 @@ function SeatDeliveries({
   const shown = expanded ? deliveries : deliveries.slice(0, 1);
   return (
     <View style={styles.deliveries} testID="swarm-seat-deliveries">
-      <View style={styles.deliveriesHeader}>
-        <Text style={styles.deliveriesTitle}>{t("swarm.seat.deliveries")}</Text>
-        {deliveries.length > 1 ? (
-          <Button
-            variant="ghost"
-            size="xs"
-            leftIcon={expanded ? ChevronDown : ChevronRight}
-            onPress={toggle}
-          >
-            {String(deliveries.length)}
-          </Button>
-        ) : null}
+      <View style={styles.deliveriesContent}>
+        <View style={styles.deliveriesHeader}>
+          <Text style={styles.deliveriesTitle}>{t("swarm.seat.deliveries")}</Text>
+          <Text style={styles.deliveriesCount}>{deliveries.length}</Text>
+          {deliveries.length > 1 ? (
+            <View style={styles.deliveriesToggle}>
+              <Button
+                variant="ghost"
+                size="xs"
+                leftIcon={expanded ? ChevronUp : ChevronDown}
+                onPress={toggle}
+                testID="swarm-seat-deliveries-toggle"
+              >
+                {expanded ? t("swarm.seat.showLatest") : t("swarm.seat.showAll")}
+              </Button>
+            </View>
+          ) : null}
+        </View>
+        <ScrollView style={styles.deliveriesList} contentContainerStyle={styles.deliveriesRows}>
+          {shown.map((delivery, index) => (
+            <SeatDeliveryRow
+              key={delivery.activityId}
+              serverId={serverId}
+              workspaceId={workspaceId}
+              delivery={delivery}
+              first={index === 0}
+            />
+          ))}
+        </ScrollView>
       </View>
-      {shown.map((delivery) => (
-        <SeatDeliveryRow
-          key={delivery.activityId}
-          serverId={serverId}
-          workspaceId={workspaceId}
-          delivery={delivery}
-        />
-      ))}
     </View>
   );
 }
 
+// One result, whole: its words render as Markdown so its links open, and its Task opens from the
+// line above it.
 function SeatDeliveryRow({
   serverId,
   workspaceId,
   delivery,
+  first,
 }: {
   serverId: string;
   workspaceId: string | null;
   delivery: SeatDelivery;
+  first: boolean;
 }) {
   const { t } = useTranslation();
+  const openLink = useSwarmCanonicalLinkPress();
+  const { taskId } = delivery;
   const open = useCallback(() => {
     if (!workspaceId) return;
-    openSwarmTasks({ serverId, workspaceId, agentName: "", taskId: delivery.taskId });
-  }, [delivery.taskId, serverId, workspaceId]);
+    openSwarmTasks({ serverId, workspaceId, agentName: "", taskId });
+  }, [taskId, serverId, workspaceId]);
+  const rowStyle = useMemo(() => [styles.delivery, !first && styles.deliveryDivided], [first]);
   return (
-    <View style={styles.delivery} testID={`swarm-seat-delivery-${delivery.activityId}`}>
-      <View style={styles.deliveriesHeader}>
+    <View style={rowStyle} testID={`swarm-seat-delivery-${delivery.activityId}`}>
+      <View style={styles.deliveryMeta}>
         <Text style={styles.deliveryLabel}>
           {delivery.taskState === "open" ? t("swarm.tasks.stageResult") : t("swarm.tasks.result")}
           {delivery.as === "cc" ? ` · ${t("swarm.seat.deliveryCopied")}` : ""}
-          {` · ${formatTimeAgo(new Date(delivery.createdAt))}`}
+          {` · ${formatTimeAgo(new Date(delivery.createdAt))} ·`}
         </Text>
-        {workspaceId ? (
-          <Button
-            variant="ghost"
-            size="xs"
-            leftIcon={SquareArrowOutUpRight}
-            onPress={open}
-            testID={`swarm-seat-delivery-open-${delivery.activityId}`}
-          >
-            {t("swarm.seat.openTask", { title: delivery.taskTitle })}
-          </Button>
-        ) : null}
+        <SwarmInlineLink
+          label={delivery.taskTitle}
+          onPress={open}
+          disabled={!workspaceId}
+          accessibilityLabel={t("swarm.seat.openTask", { title: delivery.taskTitle })}
+          testID={`swarm-seat-delivery-open-${delivery.activityId}`}
+        />
       </View>
-      <Text style={styles.deliveryBody} numberOfLines={4}>
-        {delivery.body}
-      </Text>
+      <MarkdownRenderer text={delivery.body} compact onLinkPress={openLink ?? undefined} />
+      <DeliveredArtifacts
+        artifacts={delivery.artifacts}
+        onOpenLink={openLink}
+        testID={`swarm-seat-delivery-artifacts-${delivery.activityId}`}
+      />
     </View>
   );
 }
@@ -799,32 +820,56 @@ const styles = StyleSheet.create((theme) => ({
     paddingBottom: theme.spacing[2],
   },
   deliveries: {
-    gap: theme.spacing[2],
-    paddingHorizontal: theme.spacing[4],
-    paddingVertical: theme.spacing[2],
+    alignItems: "center",
+    paddingHorizontal: { xs: theme.spacing[3], md: theme.spacing[4] },
+    paddingVertical: theme.spacing[3],
     borderBottomWidth: theme.borderWidth[1],
     borderBottomColor: theme.colors.border,
   },
+  // On the conversation's column and inset, so a result reads on the same rail as the messages
+  // under it (agent-stream/view.tsx).
+  deliveriesContent: {
+    width: "100%",
+    maxWidth: theme.contentMaxWidth,
+    paddingHorizontal: theme.spacing[2],
+    gap: theme.spacing[2],
+  },
   deliveriesHeader: {
     flexDirection: "row",
-    flexWrap: "wrap",
     alignItems: "center",
     gap: theme.spacing[2],
+    minHeight: 28,
   },
   deliveriesTitle: {
     color: theme.colors.foreground,
     fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
   },
+  deliveriesCount: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    fontVariant: ["tabular-nums"],
+  },
+  deliveriesToggle: { marginLeft: "auto" },
+  deliveriesList: { maxHeight: 360, flexGrow: 0 },
+  deliveriesRows: { gap: theme.spacing[3] },
   delivery: {
+    gap: theme.spacing[1],
+  },
+  deliveryDivided: {
+    paddingTop: theme.spacing[3],
+    borderTopWidth: theme.borderWidth[1],
+    borderTopColor: theme.colors.border,
+  },
+  deliveryMeta: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
     gap: theme.spacing[1],
   },
   deliveryLabel: {
     flexShrink: 1,
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
-  },
-  deliveryBody: {
-    color: theme.colors.foreground,
     fontSize: theme.fontSize.sm,
   },
   notices: {

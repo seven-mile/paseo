@@ -97,11 +97,15 @@ Project
 │   └── Paseo agent reference
 ├── Paseo Workspace view
 │   └── derived from agent affiliation and hierarchy
-└── Tasks
-    ├── supervisor reference
-    ├── configurable state and data
-    ├── manager + worker names
-    └── Activities
+├── Tasks
+│   ├── supervisor reference
+│   ├── configurable state and data
+│   ├── manager + worker names
+│   └── Activities
+└── Artifacts
+    ├── author + optional "made for" Task
+    ├── source: workspace, path, attachments
+    └── copy in the swarm directory, with its content hash
 ```
 
 Task 的 workset 是动态查询：`managerName = current agent name`。Supervisor 的 Workspace 视图也是动态查询：读取自己和直接 workers 的 Paseo Workspace affiliation 并求并。一个 supervisor 可以管理多个 Task、使用多个 Workspace；Task 直接保存可读的 worker names。
@@ -185,6 +189,26 @@ sequenceDiagram
 ```
 
 并行工作和重试都由 supervisor 通过消息表达，不产生新的 plugin 工作实体。
+
+## 交付与 artifact
+
+每种情况只有一条路径：
+
+- **对话**承载交流，包括没有 Task 的工作的回答和结果。简短回答就是回答；较大的结果在对话里给出简短综合，并链接一个 artifact。它不需要再登记一次“交付”。
+- **Task** 记录值得跟踪的承诺。owner 用 `deliver_task` 交代承诺产出了什么、是否已经兑现，包括承诺仍未完成时有用的阶段结果（`taskState: open`）。交付已经记录并寄送了结果，不必再发消息或追加 Activity 重复它。`deliver_task` 必须给出 `taskId`。
+- **Artifact** 是作者维护、读者会回来看的内容。对话、Task Activity 和交付都可以引用它。
+
+Agent 因此只做两个独立判断：这项工作有没有 Task，内容值不值得做成 artifact。Activity 与交付的区别不看正文是否链接 artifact：Activity 记录有后果的决定、取舍、阻塞或问题，交付呈现读者能理解或使用的结果。日常进展两者都不需要。
+
+`activitySchema.taskId` 仍可为 null：artifact 试玩期间写过不带 Task 的交付。现在没有代码写它们；它们不进看板和 seat 读取，但仍出现在所引用 artifact 的交付列表里。
+
+- **发布。** `swarm_artifact_publish` 记录 Swarm 推不出来的一件事：作者把自己 workspace 中的这个文件当作维护中的结果。它不通知任何人，也不进 Needs you。同一作者再次发布同一路径就是同一个 artifact；`artifactId` 用来改指路径。attachments 是结果离不开的文件或目录（数据集、脚本），不是工作笔记或 worker 报告。
+- **存放位置。** 作者继续在自己的 workspace 里写。Swarm 把文件和 attachments 复制到 swarm 目录的 `artifacts/<id>/`，保留 workspace 内的相对路径，所以它们之间的相对链接仍然有效。复制发生在发布时、交付引用它时、以及作者每个回合结束时（内容 hash 不变就跳过）。来源 workspace 被归档或文件被删时，副本保持最后的样子。worktree 合并后被删除也不影响读者：读者总是打开副本。只保留当前结果，不保留历史版本。
+- **展示。** swarm 的 `artifacts/` 目录登记为项目中的一个 directory workspace（`<swarm> artifacts`），首次发布时创建，被人归档后下次复制时重建。读者用普通文件面板打开副本，但不能编辑：副本在磁盘上是只读的，app 对这个 workspace 也不提供编辑，因为下一次复制会覆盖读者的修改；要改结果，就让作者改源文件。链接形如 `paseo-swarm://file/<artifacts workspace>/<id>/<path>`。
+- **交付引用。** 交付正文链接到副本或作者的源文件时，Activity 的 `artifacts` 记录 artifact id 和交付时的内容 hash（交付前先同步一次）。交付旁的“交付后已更改”就是这个 hash 与当前 hash 不同；它不区分错别字修改，也不意味着通知。Artifact 本身没有“已交付”状态：列表里的“发给你后已更改”只看最近一次发给这位读者的交付，没有这样的交付时只显示修改时间。对话里的普通引用不会变成交付。要不要再次交付由作者判断，`swarm_artifact_read` 列出每次交付到达了谁。
+- **来源 Task。** artifact 的 `taskId` 只说明它为哪个 Task 而做，不表示归属：它可以服务多个 Task，也可以比它们活得久。Task 的当前结果仍然来自交付。
+
+链接到 artifact 以外的文件只在其 workspace 存在时有效，这是有意的：只有作者声明过的结果才承诺长期可读。
 
 ## Activity 与人工交互
 

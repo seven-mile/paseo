@@ -225,12 +225,15 @@ export function FilePane({
   workspaceRoot,
   location,
   navigationRevision,
+  readOnly = false,
   onOpenWorkspaceFile,
 }: {
   serverId: string;
   workspaceRoot: string;
   location: WorkspaceFileLocation;
   navigationRevision: number;
+  // A file the reader may preview but not edit, such as a copy something else keeps current.
+  readOnly?: boolean;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const { t } = useTranslation();
@@ -284,10 +287,12 @@ export function FilePane({
   const { file: preview, imageAttachment } = resolveFilePreviewLifecycle(previewLifecycle);
   const imagePreviewUri = useAttachmentPreviewUrl(imageAttachment);
   const isRenderable = isRenderablePreview(preview, location.path);
-  const editable = isEditableTextFile({
-    preview,
-    supportsEditing,
-  });
+  const editable =
+    !readOnly &&
+    isEditableTextFile({
+      preview,
+      supportsEditing,
+    });
   const canTogglePreviewMode = isRenderable && !location.lineStart;
   const lineCount =
     preview?.kind === "text" ? (preview.content ?? "").split("\n").length : undefined;

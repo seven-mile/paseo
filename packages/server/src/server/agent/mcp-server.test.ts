@@ -1061,9 +1061,21 @@ describe("Swarm MCP coordination", () => {
         if (roleClass === "worker") {
           expect(lookupTool(server, "swarm_task_update")).toBeUndefined();
           expect(lookupTool(server, "swarm_task_deliver")).toBeUndefined();
+          expect(lookupTool(server, "swarm_artifact_publish")).toBeUndefined();
           expect(lookupTool(server, "swarm_seat_create")).toBeUndefined();
           return;
         }
+        await invokeToolWithParsedInput(registeredTool(server, "swarm_artifact_publish"), {
+          path: "reports/api.md",
+          title: "API review",
+        });
+        expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.artifact.publish", {
+          swarmId: "swarm",
+          path: "reports/api.md",
+          title: "API review",
+          attachments: [],
+          actorName: "planner.supervisor",
+        });
         await invokeToolWithParsedInput(registeredTool(server, "swarm_task_deliver"), {
           taskId: "review-api",
           result: "The API review found no blocking issues.",

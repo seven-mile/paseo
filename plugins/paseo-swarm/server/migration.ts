@@ -8,6 +8,7 @@ import {
   agentRecordSchema,
   emptyState,
   mailboxMessageSchema,
+  artifactSchema,
   specIntentSchema,
   stateSchema,
   swarmRecordSchema,
@@ -50,6 +51,7 @@ const v1Records = {
   activities: activitySchema.extend({ swarmId: z.string().optional() }),
   messages: mailboxMessageSchema,
   intents: specIntentSchema,
+  artifacts: artifactSchema,
 } satisfies Record<CollectionName, z.ZodTypeAny>;
 
 const v1StateSchema = stateSchema.extend({

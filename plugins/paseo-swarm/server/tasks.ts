@@ -8,6 +8,7 @@ import {
   type Activity,
   type AgentRecord,
   type AudienceEntry,
+  type DeliveredArtifact,
   type SwarmState,
   type Task,
 } from "../shared/models";
@@ -18,6 +19,7 @@ import {
   deliverTaskRpc,
   updateTaskRpc,
 } from "../shared/swarm";
+import { carriedArtifacts } from "./artifacts";
 import { newMessage } from "./mail";
 import { flushMailbox } from "./mailbox";
 import { resolveAudience, type Audience } from "./audience";
@@ -141,6 +143,7 @@ interface ActivityInput {
   body: string;
   data: Record<string, unknown>;
   audience?: AudienceEntry[];
+  artifacts?: DeliveredArtifact[];
 }
 
 export function makeActivity(input: ActivityInput, state: Readonly<SwarmState>): Activity {
@@ -158,6 +161,7 @@ export function makeActivity(input: ActivityInput, state: Readonly<SwarmState>):
     data: input.data,
     refs: resolveActivityRefs(input.body, state, input.swarmId),
     ...(input.audience?.length ? { audience: input.audience } : {}),
+    ...(input.artifacts?.length ? { artifacts: input.artifacts } : {}),
     createdAt: now(),
   };
 }
@@ -915,6 +919,7 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
       const actor = findAgent(swarmId, input.actorName);
       const actorName = agentQualifiedName(actor);
       assertOnLine(task, actor, "deliver on");
+      const taskState = input.taskState;
       const deliveries = store
         .read()
         .activities.filter(
@@ -932,6 +937,11 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
       }
       const retried = retriedDelivery(swarmId, task.id, actorName, input);
       if (retried) return { task: findTask(swarmId, task.id), activity: retried, duplicate: true };
+      const artifacts = await carriedArtifacts(
+        swarmId,
+        resolveActivityRefs(input.result, store.read(), swarmId),
+        context,
+      );
 
       let result!: { task: Task; activity: Activity };
       await store.commit((state) => {
@@ -945,13 +955,13 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
         // A delivery by the owner confirms the brief it worked from.
         if (actorName === current.managerName) delete next.briefUnconfirmedBy;
         const audience = deliveryAudience(state, current, actorName, input);
-        const reopened = input.taskState === "open" && current.resolution !== undefined;
+        const reopened = taskState === "open" && current.resolution !== undefined;
         delete next.resolution;
         delete next.resolvedAt;
         delete next.resolvedBy;
         delete next.duplicateOf;
         delete next.supersededBy;
-        if (input.taskState === "done") {
+        if (taskState === "done") {
           const already = current.resolution === "done";
           next.resolution = "done";
           next.resolvedAt = already ? current.resolvedAt : timestamp;
@@ -969,7 +979,7 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
             kind: DELIVERY,
             body: input.result,
             data: {
-              taskState: input.taskState,
+              taskState,
               ...(reopened ? { reopened: current.resolution } : {}),
               ...(input.status !== undefined ? { status: input.status } : {}),
               ...(input.status !== undefined && input.status !== current.status
@@ -978,6 +988,7 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
               ...(input.revises ? { revises: input.revises } : {}),
             },
             audience: audience.entries,
+            artifacts,
           },
           state,
         );
@@ -994,7 +1005,7 @@ export function registerTasks(server: Pick<PluginServerContext, "handle">): void
             body: input.result,
             attributes: {
               activity: activity.id,
-              "task-state": input.taskState,
+              "task-state": taskState,
               reopened: reopened ? current.resolution : undefined,
               status: next.status,
               revises: input.revises,

@@ -6,9 +6,11 @@ import {
 } from "../shared/refs";
 import { agentQualifiedName, type SwarmState } from "../shared/models";
 
+// A workspace of the swarm: a seat's, or the one that shows its artifacts.
 function workspaceExists(state: SwarmState, swarmId: string, workspaceId: string): boolean {
-  return state.agents.some(
-    (agent) => agent.swarmId === swarmId && agent.workspaceId === workspaceId,
+  return (
+    state.agents.some((agent) => agent.swarmId === swarmId && agent.workspaceId === workspaceId) ||
+    state.swarms.some((swarm) => swarm.id === swarmId && swarm.artifactsWorkspaceId === workspaceId)
   );
 }
 

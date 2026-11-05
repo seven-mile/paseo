@@ -19,6 +19,7 @@ import {
 import type { TurnSummary } from "./turns";
 import { enqueueMessage, flushMailbox, sendThroughMailbox } from "./mailbox";
 import { makeActivity, registerTasks } from "./tasks";
+import { artifactsView, artifactView, findArtifact, publishArtifact } from "./artifacts";
 import { store } from "./state";
 import { readPwaSource } from "./source";
 import {
@@ -51,7 +52,10 @@ import {
 } from "./spec";
 import {
   appendHumanActivityRpc,
+  artifactsReadRpc,
   boardReadRpc,
+  publishArtifactRpc,
+  readArtifactRpc,
   rosterReadRpc,
   seatReadRpc,
   taskReadRpc,
@@ -471,7 +475,8 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
         .filter((agent) => agent.paseoAgentId !== null || includeReserved === true)
         .map(seatView),
       tasks: scoped(saved.tasks),
-      activities: scoped(saved.activities),
+      // Deliveries without a Task, from the artifacts playtest, stay off the board.
+      activities: scoped(saved.activities).filter((activity) => activity.taskId !== null),
       swarms: swarms.map((swarm) => ({
         id: swarm.id,
         name: swarm.name,
@@ -487,6 +492,27 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
     return { ...board, statuses: readPwa(files, planner.role).statuses };
   });
   server.handle(rosterReadRpc, ({ etag }) => conditionalView("roster", etag, rosterView));
+  server.handle(publishArtifactRpc, (input, context) => publishArtifact(input, context));
+  server.handle(readArtifactRpc, ({ swarmId, actorName, artifactId }) => {
+    const swarm = actorName && !swarmId ? swarmOfSeatName(actorName) : resolveSwarm({ swarmId });
+    const state = store.read();
+    return artifactView(state, findArtifact(state, swarm.id, artifactId));
+  });
+  server.handle(artifactsReadRpc, async ({ projectId, swarmId, etag }, context) => {
+    if (projectId) await projectRoot(projectId, context);
+    const swarmIds = new Set(
+      store
+        .read()
+        .swarms.filter(
+          (swarm) =>
+            (!swarmId || swarm.id === swarmId) && (!projectId || swarm.projectId === projectId),
+        )
+        .map((swarm) => swarm.id),
+    );
+    return conditionalView(`artifacts:${projectId ?? ""}:${swarmId ?? ""}`, etag, (state) =>
+      artifactsView(state, swarmIds),
+    );
+  });
   server.handle(seatReadRpc, ({ seatId, etag }) =>
     conditionalValue(seatReadView(store.read(), seatId), etag),
   );

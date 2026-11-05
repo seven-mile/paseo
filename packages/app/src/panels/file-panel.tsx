@@ -6,6 +6,7 @@ import { FilePane } from "@/file-pane/pane";
 import { usePaneContext } from "@/panels/pane-context";
 import { definePanel } from "@/panels/panel-registry";
 import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
+import { useIsSwarmArtifactsWorkspace } from "@/swarm/roster";
 import { createMaterialFileIcon } from "@/components/material-file-icon";
 
 const CENTERED_PADDED_STYLE = {
@@ -33,6 +34,7 @@ function FilePanel() {
   const { serverId, workspaceId, target, fileNavigationRevision, openFileInWorkspace } =
     usePaneContext();
   const workspaceDirectory = useWorkspaceDirectory(serverId, workspaceId);
+  const readOnly = useIsSwarmArtifactsWorkspace(serverId, workspaceId);
   invariant(target.kind === "file", "FilePanel requires file target");
   if (!workspaceDirectory) {
     return (
@@ -47,6 +49,7 @@ function FilePanel() {
       workspaceRoot={workspaceDirectory}
       location={target}
       navigationRevision={fileNavigationRevision ?? 0}
+      readOnly={readOnly}
       onOpenWorkspaceFile={openFileInWorkspace}
     />
   );
