@@ -12,7 +12,7 @@ import {
 } from "lucide-react-native";
 import { useShallow } from "zustand/shallow";
 import { Button } from "@/components/ui/button";
-import { buttonControlHeight } from "@/components/ui/control-geometry";
+import { CONTROL_HEIGHTS } from "@/components/ui/control-geometry";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -269,7 +269,7 @@ function SeatDeliveries({
             <View style={styles.deliveriesToggle}>
               <Button
                 variant="ghost"
-                size="xs"
+                size="sm"
                 leftIcon={expanded ? ChevronUp : ChevronDown}
                 onPress={toggle}
                 testID="swarm-seat-deliveries-toggle"
@@ -447,7 +447,7 @@ function SeatHeader({
       {shown ? (
         <Button
           variant="ghost"
-          size="xs"
+          size="sm"
           leftIcon={SquareArrowOutUpRight}
           accessibilityLabel={t("swarm.seat.openAgentTab", { occupant: occupantLabel(t, shown) })}
           onPress={openAgentTab}
@@ -515,14 +515,14 @@ function HandoverRow({
       <View style={styles.handoverActions}>
         <Button
           variant="ghost"
-          size="xs"
+          size="sm"
           leftIcon={expanded ? ChevronDown : ChevronRight}
           onPress={toggle}
           testID="swarm-seat-handover-toggle"
         >
           {t("swarm.seat.handover.given")}
         </Button>
-        <Button variant="ghost" size="xs" onPress={showPrevious}>
+        <Button variant="ghost" size="sm" onPress={showPrevious}>
           {t("swarm.seat.handover.showPrevious", { from: handover.from })}
         </Button>
       </View>
@@ -752,14 +752,14 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
   },
-  // As tall as the xs button beside it, so the row reads as one line of controls. A long provider
+  // As tall as the sm button beside it, so the row reads as one line of controls. A long provider
   // name shrinks the label, not the seat name.
   occupantsTrigger: {
     flexDirection: "row",
     alignItems: "center",
     flexShrink: 1,
     maxWidth: "50%",
-    minHeight: buttonControlHeight.xs,
+    minHeight: CONTROL_HEIGHTS.sm,
     gap: theme.spacing[1],
     paddingHorizontal: theme.spacing[2],
     borderRadius: theme.borderRadius.md,

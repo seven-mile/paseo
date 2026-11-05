@@ -31,7 +31,6 @@ import {
 import { openSwarmTasks } from "@/swarm/navigation";
 
 const WORKSPACE_KEY = "server-1:ws-main";
-const CHECKOUT = { serverId: "server-1", cwd: "/tmp/repo", isGit: true };
 
 beforeEach(() => {
   useWorkspaceLayoutStore.setState({
@@ -42,40 +41,35 @@ beforeEach(() => {
   });
   usePanelStore.setState({
     mobilePanel: { target: "agent", revision: 0 },
-    explorerTab: "files",
-    explorerTabByCheckout: {},
   });
 });
 
 describe("Explorer sidebar", () => {
-  it("selects the Explorer shell from layout and split capabilities", () => {
+  it("selects the Explorer shell from the form factor", () => {
     expect(resolveExplorerSidebarPresentation({ isCompact: true })).toBe("overlay");
-    expect(
-      resolveExplorerSidebarPresentation({ isCompact: false, supportsPaneSplits: false }),
-    ).toBe("dock");
-    expect(resolveExplorerSidebarPresentation({ isCompact: false, supportsPaneSplits: true })).toBe(
-      "pane",
-    );
+    expect(resolveExplorerSidebarPresentation({ isCompact: false })).toBe("dock");
   });
 
-  it("uses the compact explorer without creating a desktop pane", () => {
+  it("uses the same Explorer pane inside the compact overlay", () => {
     openExplorerSidebarView({
       isCompact: true,
       workspaceKey: WORKSPACE_KEY,
-      checkout: CHECKOUT,
       view: "changes",
     });
 
     expect(usePanelStore.getState().mobilePanel.target).toBe("file-explorer");
-    expect(useWorkspaceLayoutStore.getState().layoutByWorkspace[WORKSPACE_KEY]).toBeUndefined();
+    const state = useWorkspaceLayoutStore.getState();
+    const layout = state.layoutByWorkspace[WORKSPACE_KEY];
+    const pane = findPaneById(layout.root, selectExplorerSidebarPaneId(state, WORKSPACE_KEY)!);
+    expect(
+      collectAllTabs(layout.root).find((tab) => tab.tabId === pane?.focusedTabId)?.target.kind,
+    ).toBe("changes_tree");
   });
 
   it("creates a dedicated desktop Explorer containing only its requested tree", () => {
     openExplorerSidebarView({
       isCompact: false,
-      supportsPaneSplits: true,
       workspaceKey: WORKSPACE_KEY,
-      checkout: CHECKOUT,
       view: "files",
     });
 
@@ -94,9 +88,7 @@ describe("Explorer sidebar", () => {
     });
     openExplorerSidebarView({
       isCompact: false,
-      supportsPaneSplits: true,
       workspaceKey: WORKSPACE_KEY,
-      checkout: CHECKOUT,
       view: "tasks",
     });
     const state = useWorkspaceLayoutStore.getState();
@@ -121,9 +113,7 @@ describe("Explorer sidebar", () => {
     });
     openExplorerSidebarView({
       isCompact: false,
-      supportsPaneSplits: true,
       workspaceKey: WORKSPACE_KEY,
-      checkout: CHECKOUT,
       view: "tasks",
     });
 
@@ -139,27 +129,10 @@ describe("Explorer sidebar", () => {
     expect(layout.focusedPaneId).toBe("main");
   });
 
-  it("selects Tasks in the native Explorer dock and keeps that view when toggled", () => {
-    const input = {
-      isCompact: false,
-      supportsPaneSplits: false,
-      workspaceKey: WORKSPACE_KEY,
-      checkout: CHECKOUT,
-    };
-    openExplorerSidebarView({ ...input, view: "tasks" });
-    toggleExplorerSidebar(input);
-    toggleExplorerSidebar(input);
-    expect(usePanelStore.getState().mobilePanel.target).toBe("file-explorer");
-    expect(usePanelStore.getState().explorerTab).toBe("tasks");
-    expect(useWorkspaceLayoutStore.getState().layoutByWorkspace[WORKSPACE_KEY]).toBeUndefined();
-  });
-
   it("toggles the desktop Explorer independently of ordinary panes", () => {
     const input = {
       isCompact: false,
-      supportsPaneSplits: true,
       workspaceKey: WORKSPACE_KEY,
-      checkout: CHECKOUT,
     };
     openExplorerSidebarView({ ...input, view: "files" });
     toggleExplorerSidebar(input);
@@ -180,24 +153,29 @@ describe("Explorer sidebar", () => {
   });
 
   it("toggles the compact Explorer without changing its selected view", () => {
-    usePanelStore.getState().setExplorerTabForCheckout({ ...CHECKOUT, tab: "files" });
     const input = {
       isCompact: true,
       workspaceKey: WORKSPACE_KEY,
-      checkout: CHECKOUT,
     };
 
     toggleExplorerSidebar(input);
 
     expect(isExplorerSidebarOpen(input)).toBe(true);
-    expect(usePanelStore.getState().explorerTab).toBe("files");
   });
 });
 
 describe("planner board activation", () => {
   beforeEach(() => {
     vi.mocked(navigateToHostWorkspaceRoute).mockClear();
-    useSessionStore.setState({ sessions: {} });
+    // Navigation opens tabs at once only for a workspace the session knows; otherwise it defers.
+    useSessionStore.setState({
+      sessions: {
+        "server-1": {
+          workspaces: new Map([["ws-main", { id: "ws-main" }]]),
+          agents: new Map(),
+        },
+      } as never,
+    });
   });
 
   it("reactivates the same board with its raw hierarchy and selection while isolating other instances", () => {

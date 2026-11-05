@@ -370,7 +370,7 @@ function SwarmTasksPanel() {
       serverId={serverId}
       workspaceId={workspaceId}
       tabId={tabId}
-      presentation={host}
+      presentation={host === "explorer" ? "explorer" : "main"}
     />
   );
 }

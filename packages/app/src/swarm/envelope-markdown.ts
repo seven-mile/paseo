@@ -1,4 +1,3 @@
-import { createMarkdownParser } from "@/utils/markdown-parser";
 import type { SwarmEnvelope } from "./system-envelope";
 
 const slug = "[a-z0-9]+(?:-[a-z0-9]+)*";
@@ -25,42 +24,46 @@ const runtimeFields = [
   },
 ] as const;
 
-export function createSwarmEnvelopeMarkdownParser(kind: SwarmEnvelope["kind"]) {
-  const parser = createMarkdownParser({ linkify: false });
-  if (kind !== "team" && kind !== "runtime") return parser;
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const QUOTE = /^ {0,3}>/;
+
+/**
+ * Links the Task and agent names in a team or runtime envelope's fixed field lines to the Swarm
+ * references they name. Only whole lines match, outside fences and quotes, so text an agent quoted
+ * or wrote in a code block stays as written.
+ */
+export function linkSwarmEnvelopeFields(kind: SwarmEnvelope["kind"], body: string): string {
+  if (kind !== "team" && kind !== "runtime") return body;
   const fields = kind === "team" ? teamFields : runtimeFields;
-  parser.core.ruler.after("inline", "swarm_envelope_fields", (state) => {
-    let quoteDepth = 0;
-    for (const block of state.tokens) {
-      if (block.type === "blockquote_open") quoteDepth += 1;
-      if (block.type === "blockquote_close") quoteDepth -= 1;
-      if (quoteDepth !== 0) continue;
-      if (block.type !== "inline" || !block.children) continue;
-      let lineStart = true;
-      let linkDepth = 0;
-      block.children = block.children.flatMap((token) => {
-        const atLineStart = lineStart;
-        lineStart = token.type === "softbreak" || token.type === "hardbreak";
-        if (token.type === "link_open") linkDepth += 1;
-        if (token.type === "link_close") linkDepth -= 1;
-        if (!atLineStart || linkDepth !== 0 || token.type !== "text") return [token];
-        for (const field of fields) {
-          const match = field.pattern.exec(token.content);
-          if (!match) continue;
-          if (field.kind === "task" && match[2] === "none") return [token];
-          return match.slice(1).flatMap((content, index) => {
-            const text = new state.Token("text", "", 0);
-            text.content = content;
-            if (index % 2 === 0) return [text];
-            const open = new state.Token("link_open", "a", 1);
-            open.attrSet("href", `paseo-swarm://${field.kind}/${encodeURIComponent(content)}`);
-            open.attrSet("data-swarm-envelope-reference", "true");
-            return [open, text, new state.Token("link_close", "a", -1)];
-          });
-        }
-        return [token];
-      });
-    }
-  });
-  return parser;
+  let fence: string | null = null;
+  return body
+    .split(/(\r?\n)/)
+    .map((line, index) => {
+      if (index % 2 === 1) return line;
+      const marker = FENCE.exec(line)?.[1];
+      if (fence) {
+        if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
+        return line;
+      }
+      if (marker) {
+        fence = marker;
+        return line;
+      }
+      if (QUOTE.test(line)) return line;
+      for (const field of fields) {
+        const match = field.pattern.exec(line);
+        if (!match) continue;
+        if (field.kind === "task" && match[2] === "none") return line;
+        return match
+          .slice(1)
+          .map((content, part) =>
+            part % 2 === 0
+              ? content
+              : `[${content}](paseo-swarm://${field.kind}/${encodeURIComponent(content)})`,
+          )
+          .join("");
+      }
+      return line;
+    })
+    .join("");
 }

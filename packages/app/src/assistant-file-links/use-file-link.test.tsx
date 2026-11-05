@@ -25,8 +25,8 @@ import { SwarmCanonicalLinkProvider, useMarkdownLinkPress } from "@/swarm/canoni
 import { openSwarmReference } from "@/swarm/navigation";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { i18n } from "@/i18n/i18next";
-import { MarkdownLinkText } from "@/components/markdown/link-text";
-import { createSwarmEnvelopeMarkdownParser } from "@/swarm/envelope-markdown";
+import { linkSwarmEnvelopeFields } from "@/swarm/envelope-markdown";
+import { createMarkdownParser } from "@/utils/markdown-parser";
 import { parseSwarmEnvelope } from "@/swarm/system-envelope";
 
 vi.stubGlobal("React", React);
@@ -59,7 +59,6 @@ const SOURCE = {
   text: "dumm.md",
   markup: "linkify",
 };
-const ENVELOPE_LINK_STYLE = {};
 
 function resolvedSuggestions(
   entries: DirectorySuggestionResult["entries"],
@@ -233,6 +232,8 @@ describe("canonical assistant links", () => {
       "server-1",
       ["source", "destination"].map((id) => ({
         id,
+        createdAt: null,
+        lastUserMessageAt: null,
         projectId: "project",
         projectDisplayName: "Project",
         projectRootPath: "/repo",
@@ -302,13 +303,16 @@ describe("canonical assistant links", () => {
   }) {
     const onLinkPress = useMarkdownLinkPress();
     const handlePress = useCallback(
-      () => presses.push({ uri: href, allowDefault: onLinkPress(href) }),
+      (event: { preventDefault(): void }) => {
+        event.preventDefault();
+        presses.push({ uri: href, allowDefault: onLinkPress(href) });
+      },
       [href, onLinkPress, presses],
     );
     return (
-      <MarkdownLinkText style={ENVELOPE_LINK_STYLE} onPress={handlePress}>
+      <a href={href} onClick={handlePress}>
         {label}
-      </MarkdownLinkText>
+      </a>
     );
   }
 
@@ -321,13 +325,16 @@ describe("canonical assistant links", () => {
   }) {
     const envelope = parseSwarmEnvelope(original);
     if (!envelope) throw new Error("The real tagged envelope fixture must parse");
-    const tokens = createSwarmEnvelopeMarkdownParser(envelope.kind).parse(envelope.body, {});
+    const tokens = createMarkdownParser({ linkify: false }).parse(
+      linkSwarmEnvelopeFields(envelope.kind, envelope.body),
+      {},
+    );
     const links: ReactNode[] = [];
     for (const block of tokens) {
       const children = block.children ?? [];
       for (let index = 0; index < children.length; index += 1) {
         const token = children[index];
-        if (token.type !== "link_open" || token.attrGet("data-swarm-envelope-reference") !== "true")
+        if (token.type !== "link_open" || !token.attrGet("href")?.startsWith("paseo-swarm://"))
           continue;
         const href = token.attrGet("href");
         const text = children[index + 1];
@@ -562,6 +569,12 @@ describe("canonical assistant links", () => {
 });
 
 describe("useFileLink", () => {
+  // Lookups resolve after a test's last assertion; an unmounted hook cannot re-render
+  // once jsdom is torn down.
+  afterEach(() => {
+    cleanup();
+  });
+
   it("returns the same object across no-op parent rerenders", () => {
     const getDirectorySuggestions = vi.fn(async () => resolvedSuggestions([]));
     const queryClient = createQueryClient();

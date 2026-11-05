@@ -63,8 +63,9 @@ export async function seedSidebarFooterPreferences(
 ): Promise<void> {
   await page.addInitScript(
     ({ key, sidebarFooterItems }) => {
-      if (localStorage.getItem(key)) return;
-      localStorage.setItem(key, JSON.stringify({ sidebarFooterItems }));
+      const settings = JSON.parse(localStorage.getItem(key) ?? "{}");
+      if (settings.sidebarFooterItems) return;
+      localStorage.setItem(key, JSON.stringify({ ...settings, sidebarFooterItems }));
     },
     { key: APP_SETTINGS_KEY, sidebarFooterItems: preferences },
   );
@@ -244,35 +245,26 @@ const FOOTER_GEOMETRY_TOLERANCE = 0.01;
  * Settings together at the end.
  */
 export async function expectFooterIconRow(page: Page): Promise<void> {
-  // A compact drawer translates while opening. Read every icon in one layout
-  // snapshot; separate boundingBox RPCs can sample different animation frames.
-  await expect(async () => {
-    const boxes = await page
-      .locator('[data-testid="sidebar-footer-bottom-line"]:visible')
-      .first()
-      .evaluate(
-        (footer, testIDs) =>
-          testIDs.map((testID) => {
-            const element = footer.querySelector(`[data-testid="${testID}"]`);
-            if (!element) throw new Error(`Missing footer icon: ${testID}`);
-            const { x, y, width, height } = element.getBoundingClientRect();
-            return { x, y, width, height };
-          }),
-        FOOTER_ICON_TEST_IDS,
-      );
-    const [first] = boxes;
-    for (const box of boxes) {
-      expect(Math.abs(box.y + box.height / 2 - first!.y - first!.height / 2)).toBeLessThan(2);
-      expect(Math.abs(box.width - first!.width)).toBeLessThan(FOOTER_GEOMETRY_TOLERANCE);
-    }
-    const gaps = boxes
-      .slice(1)
-      .map((box, index) => box.x - (boxes[index]!.x + boxes[index]!.width));
-    for (const index of [0, 1, 3]) {
-      expect(Math.abs(gaps[index]!)).toBeLessThan(FOOTER_GEOMETRY_TOLERANCE);
-    }
-    expect(gaps[2]).toBeGreaterThan(first!.width);
-  }).toPass({ timeout: 10_000 });
+  // Read one browser-frame snapshot: the compact drawer can translate between separate RPCs.
+  const boxes = await page
+    .locator(FOOTER_ICON_TEST_IDS.map((testID) => `[data-testid="${testID}"]:visible`).join(","))
+    .evaluateAll((elements) =>
+      elements.map((element) => {
+        const { x, y, width, height } = element.getBoundingClientRect();
+        return { testID: element.getAttribute("data-testid"), x, y, width, height };
+      }),
+    );
+  expect(boxes.map((box) => box.testID)).toEqual(FOOTER_ICON_TEST_IDS);
+  const [first] = boxes;
+  for (const box of boxes) {
+    expect(Math.abs(box.y + box.height / 2 - first!.y - first!.height / 2)).toBeLessThan(2);
+    expect(Math.abs(box.width - first!.width)).toBeLessThan(FOOTER_GEOMETRY_TOLERANCE);
+  }
+  const gaps = boxes.slice(1).map((box, index) => box.x - (boxes[index]!.x + boxes[index]!.width));
+  for (const index of [0, 1, 3]) {
+    expect(Math.abs(gaps[index]!)).toBeLessThan(FOOTER_GEOMETRY_TOLERANCE);
+  }
+  expect(gaps[2]).toBeGreaterThan(first!.width);
 }
 
 export async function expectFooterSeparator(page: Page, shown: boolean): Promise<void> {

@@ -59,10 +59,10 @@ import { useCreateFlowStore } from "@/stores/create-flow-store";
 import {
   applyStoredOrdering,
   areSidebarWorkspaceSessionsEqual,
-  deriveEffectiveWorkspaceStatus,
   selectSidebarWorkspaceSessions,
   type SidebarWorkspaceEntry,
 } from "@/hooks/sidebar-workspaces-view-model";
+import { deriveEffectiveWorkspaceStatus } from "@/workspace-status";
 import { WorkspaceStatusIndicator } from "@/components/sidebar/sidebar-workspace-row-content";
 import { resolveWorkspaceMapKeyByIdentity } from "@/utils/workspace-identity";
 import { DraggableList, type DraggableRenderItemInfo } from "@/components/draggable-list";
@@ -785,7 +785,7 @@ function RosterEntry({
       </Pressable>
       <Button
         variant="ghost"
-        size={isCompact ? "md" : "xs"}
+        size={isCompact ? "md" : "sm"}
         style={styles.rosterTasks}
         onPress={handleTasks}
         accessibilityRole="menuitem"
@@ -1065,7 +1065,7 @@ export function SwarmSidebar({
           }))}
           value={mode}
           onValueChange={setMode}
-          size="xs"
+          size="sm"
           testID="swarm-sidebar-mode"
         />
       </View>

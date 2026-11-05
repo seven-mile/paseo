@@ -24,7 +24,7 @@ import { isNative } from "@/constants/platform";
 import { useContainerWidthBelow } from "@/hooks/use-container-width";
 import { useKeyboardShiftStyle } from "@/keyboard/shift";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
-import { createSharedMarkdownRules, MarkdownRenderer } from "@/components/markdown/renderer";
+import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { Button } from "@/components/ui/button";
 import { SurfaceCard } from "@/components/ui/scrollable-code-surface";
@@ -1765,7 +1765,7 @@ function TaskDetail({
   const cancelReply = useMemo(
     () =>
       reply.replyTo ? (
-        <Button variant="ghost" size="xs" disabled={reply.pending} onPress={model.cancelReply}>
+        <Button variant="ghost" size="sm" disabled={reply.pending} onPress={model.cancelReply}>
           {t("swarm.tasks.cancelReply")}
         </Button>
       ) : null,
@@ -1960,7 +1960,7 @@ function ActivityRow({
         <View style={styles.activityTrailing}>
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             disabled={pending}
             onPress={reply}
             accessibilityLabel={t("swarm.tasks.replyAccessibility", { actor: activity.actorName })}
@@ -2197,7 +2197,7 @@ function TaskRelation({
 function TaskLinkButton({ id, onOpen }: { id: string; onOpen: (id: string) => void }) {
   const open = useCallback(() => onOpen(id), [onOpen, id]);
   return (
-    <Button variant="ghost" size="xs" onPress={open} testID={`swarm-task-relation-${id}`}>
+    <Button variant="ghost" size="sm" onPress={open} testID={`swarm-task-relation-${id}`}>
       {id}
     </Button>
   );
@@ -2273,17 +2273,14 @@ function AuthoredMarkdown({
   const seat = authors ? findSwarmTaskAgent(authors.agents, author) : undefined;
   const workspaceId = seat?.workspaceId ?? null;
   const workspaceRoot = useWorkspaceDirectory(authors?.serverId ?? null, workspaceId);
-  const rules = useMemo(
-    () =>
-      workspaceId
-        ? createSharedMarkdownRules({
-            inlineCodeHref: (content) => swarmArtifactHref(content, { workspaceId, workspaceRoot }),
-            onLinkPress,
-          })
-        : undefined,
-    [workspaceId, workspaceRoot, onLinkPress],
+  const inlineCodeHref = useCallback(
+    (content: string) =>
+      workspaceId ? swarmArtifactHref(content, { workspaceId, workspaceRoot }) : null,
+    [workspaceId, workspaceRoot],
   );
-  return <TaskMarkdown text={text} compact rules={rules} onLinkPress={onLinkPress} />;
+  return (
+    <TaskMarkdown text={text} compact inlineCodeHref={inlineCodeHref} onLinkPress={onLinkPress} />
+  );
 }
 
 function ResolutionBadge({ resolution }: { resolution: string }) {

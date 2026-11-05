@@ -120,7 +120,13 @@ export function SwarmCanonicalLinkProvider({ children }: { children: ReactNode }
           unavailable();
           return;
         }
-        openSwarmReference({ serverId, workspaceId, reference, isCompact, host });
+        openSwarmReference({
+          serverId,
+          workspaceId,
+          reference,
+          isCompact,
+          host: host === "explorer" ? "explorer" : "main",
+        });
       } catch {
         if (current()) unavailable();
       }

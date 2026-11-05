@@ -112,6 +112,11 @@ export async function resolveSeatAccess(input: {
   }
 }
 
+/** The role class whose Swarm tools the caller receives, or null when it receives none. */
+export function swarmRoleOf(access: SeatAccess): SeatRoleClass | null {
+  return access === "unresolved" ? null : access;
+}
+
 export function seatToolAllowed(access: SeatAccess, name: string): boolean {
   if (!access) return true;
   if (name.startsWith("swarm_") || name.startsWith("browser_") || SEAT_WORK_TOOLS.has(name)) {

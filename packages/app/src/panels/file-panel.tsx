@@ -31,8 +31,7 @@ function useFilePanelDescriptor(target: { kind: "file"; path: string }) {
 
 function FilePanel() {
   const { t } = useTranslation();
-  const { serverId, workspaceId, target, fileNavigationRevision, openFileInWorkspace } =
-    usePaneContext();
+  const { serverId, workspaceId, target, panelRevision } = usePaneContext();
   const workspaceDirectory = useWorkspaceDirectory(serverId, workspaceId);
   const readOnly = useIsSwarmArtifactsWorkspace(serverId, workspaceId);
   invariant(target.kind === "file", "FilePanel requires file target");
@@ -48,9 +47,8 @@ function FilePanel() {
       serverId={serverId}
       workspaceRoot={workspaceDirectory}
       location={target}
-      navigationRevision={fileNavigationRevision ?? 0}
+      navigationRevision={panelRevision ?? 0}
       readOnly={readOnly}
-      onOpenWorkspaceFile={openFileInWorkspace}
     />
   );
 }

@@ -145,7 +145,6 @@ function PwaFormSheet({ snapshot, onClose }: { snapshot: PwaFormSnapshot; onClos
       onClose={close}
       footer={footer}
       desktopMaxWidth={440}
-      sizeContentToCurrentSnapPoint
       testID="project-pwa-sheet"
     >
       <Field
