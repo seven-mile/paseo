@@ -2,12 +2,14 @@ import { validateProviderOptions } from "../../provider-options.js";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import { promises } from "node:fs";
 import path from "node:path";
 import {
   type AgentDefinition,
   type CanUseTool,
   type McpServerConfig as ClaudeSdkMcpServerConfig,
+  type ModelInfo,
   type PermissionMode,
   type PermissionResult,
   type PermissionUpdate,
@@ -133,7 +135,10 @@ import {
   type ToolCallDetail,
 } from "../../agent-sdk-types.js";
 import { importSessionFromPersistence } from "../../provider-session-import.js";
-import { runProviderRefreshActivity } from "../../provider-refresh-deadline.js";
+import {
+  raceProviderRefreshAbort,
+  runProviderRefreshActivity,
+} from "../../provider-refresh-deadline.js";
 import {
   checkProviderLaunchAvailable,
   createProviderEnv,
@@ -490,6 +495,15 @@ function isClaudeThinkingOption(value: string | null | undefined): value is Clau
     value === CLAUDE_ULTRACODE_THINKING_OPTION_ID ||
     isClaudeThinkingEffort(value)
   );
+}
+
+/** A prompt stream that stays open without sending anything, until the signal aborts. */
+async function* neverYieldingPrompt(signal: AbortSignal): AsyncGenerator<SDKUserMessage> {
+  await new Promise<void>((resolve) => {
+    if (signal.aborted) resolve();
+    else signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+  yield* [];
 }
 
 function assertClaudeThinkingOptionSupported(
@@ -1598,14 +1612,62 @@ export class ClaudeAgentClient implements AgentClient {
       this.logger.warn({ err: error }, "Failed to resolve Claude Code version for model catalog");
     }
     const env = this.buildProviderEnv();
+    let harnessModels: ModelInfo[] = [];
+    try {
+      harnessModels = await runProviderRefreshActivity(context, "supportedModels", () =>
+        this.fetchHarnessModels(env, context?.signal),
+      );
+    } catch (error) {
+      if (context?.signal.aborted) throw error;
+      this.logger.warn({ err: error }, "Failed to read models from Claude Code");
+    }
     const models = await runProviderRefreshActivity(context, "settings", () =>
-      getClaudeModelsWithSettings(this.logger, claudeConfigDir(env), claudeCodeVersion),
+      getClaudeModelsWithSettings(
+        this.logger,
+        claudeConfigDir(env),
+        claudeCodeVersion,
+        harnessModels,
+      ),
     );
     const modeCatalog = claudeModeCatalog(env);
     return {
       models,
       ...modeCatalog,
     };
+  }
+
+  /**
+   * Ask Claude Code for the models its `/model` picker offers, which include gateway models the
+   * manifest cannot know. Uses a throwaway query that never sends a prompt, so no inference runs.
+   */
+  private async fetchHarnessModels(
+    env: NodeJS.ProcessEnv,
+    signal?: AbortSignal,
+  ): Promise<ModelInfo[]> {
+    const abortController = new AbortController();
+    const handleAbort = () => abortController.abort(signal?.reason);
+    signal?.addEventListener("abort", handleAbort, { once: true });
+    const query = claudeQuery(
+      {
+        prompt: neverYieldingPrompt(abortController.signal),
+        options: {
+          cwd: os.homedir(),
+          env,
+          pathToClaudeCodeExecutable: await this.resolveBinary(),
+          persistSession: false,
+          settingSources: CLAUDE_SETTING_SOURCES,
+          abortController,
+        },
+      },
+      { runtimeSettings: this.runtimeSettings, queryFactory: this.queryFactory },
+    );
+    try {
+      return await raceProviderRefreshAbort(signal, query.supportedModels());
+    } finally {
+      signal?.removeEventListener("abort", handleAbort);
+      abortController.abort();
+      query.close();
+    }
   }
 
   async resolveDefaultModeId({ env: launchEnv }: ResolveAgentDefaultModeInput): Promise<string> {

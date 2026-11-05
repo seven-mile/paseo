@@ -2,8 +2,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Logger } from "pino";
 
+import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
+
 import type { AgentModelDefinition } from "../../agent-sdk-types.js";
 import {
+  buildClaudeEffortThinkingOptions,
+  CLAUDE_DEFAULT_THINKING_OPTION_ID,
   getClaudeCustomModelThinkingOptions,
   getClaudeManifestModels,
   normalizeClaudeManifestModelId,
@@ -52,16 +56,13 @@ export async function getClaudeModelsWithSettings(
   logger: Logger,
   configDir: string,
   claudeCodeVersion?: string,
+  harnessModels: readonly ModelInfo[] = [],
 ): Promise<AgentModelDefinition[]> {
   const hardcodedModels = getClaudeModels(claudeCodeVersion);
   const settingsModels = await readClaudeSettingsModels(logger, configDir);
-  if (settingsModels.length === 0) {
-    return hardcodedModels;
-  }
-
   const models = [...hardcodedModels];
 
-  for (const model of settingsModels) {
+  for (const model of [...buildClaudeHarnessModels(harnessModels), ...settingsModels]) {
     const existingIndex = models.findIndex((candidate) => candidate.id === model.id);
     if (existingIndex !== -1) {
       const existing = models[existingIndex];
@@ -74,6 +75,39 @@ export async function getClaudeModelsWithSettings(
   }
 
   return models;
+}
+
+/**
+ * Concrete models from Claude Code's own model list (`supportedModels()`, what `/model` shows).
+ * Alias rows such as `default` or `opus` resolve to another model and are skipped.
+ */
+function buildClaudeHarnessModels(harnessModels: readonly ModelInfo[]): AgentModelDefinition[] {
+  const models: AgentModelDefinition[] = [];
+  for (const info of harnessModels) {
+    const id = info.value.trim();
+    if (!id || isClaudeAliasRow(info)) continue;
+    const model: AgentModelDefinition = {
+      provider: "claude",
+      id,
+      label: info.displayName || id,
+      description: info.description,
+    };
+    const thinkingOptions = info.supportedEffortLevels?.length
+      ? buildClaudeEffortThinkingOptions(info.supportedEffortLevels)
+      : undefined;
+    if (thinkingOptions) {
+      model.thinkingOptions = thinkingOptions;
+      model.defaultThinkingOptionId = CLAUDE_DEFAULT_THINKING_OPTION_ID;
+    }
+    models.push(model);
+  }
+  return models;
+}
+
+/** An alias row (`opus`) resolves to another model; a `[1m]` row resolves to its own base id. */
+function isClaudeAliasRow(info: ModelInfo): boolean {
+  if (info.resolvedModel === undefined) return false;
+  return info.resolvedModel !== info.value.replace(/\[1m\]$/i, "");
 }
 
 async function readClaudeSettingsModels(
