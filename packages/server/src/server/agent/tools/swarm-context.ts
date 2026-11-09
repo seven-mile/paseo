@@ -293,3 +293,74 @@ export function activityPreviews(board: SwarmBoard, taskId: string) {
       truncated: activity.body.length > ACTIVITY_PREVIEW_LIMIT,
     }));
 }
+
+// Who a Swarm write reached, as the plugin records it.
+export interface SwarmAudienceEntry {
+  name: string;
+  as: "to" | "cc";
+  why: string;
+}
+
+type SwarmWrittenTask = SwarmTask & {
+  requester?: string;
+  audience?: SwarmAudienceEntry[];
+};
+
+type SwarmWrittenActivity = Pick<SwarmActivity, "id" | "taskId" | "kind" | "createdAt"> & {
+  audience?: SwarmAudienceEntry[];
+};
+
+// Write tools answer with a receipt: what the write identified and changed, and who it reached.
+// The caller already holds what it sent, so the record is not repeated back.
+export function taskReceipt(task: SwarmWrittenTask) {
+  return {
+    taskId: task.id,
+    title: task.title,
+    status: task.status,
+    resolution: task.resolution ?? null,
+    owner: task.managerName,
+    ...(task.requester ? { requester: task.requester } : {}),
+    briefUpdatedAt: task.briefUpdatedAt ?? null,
+    updatedAt: task.updatedAt,
+    audience: task.audience ?? [],
+  };
+}
+
+export function deliveryReceipt(delivery: {
+  task: SwarmTask;
+  activity: SwarmWrittenActivity;
+  duplicate: boolean;
+}) {
+  return {
+    taskId: delivery.task.id,
+    activityId: delivery.activity.id,
+    duplicate: delivery.duplicate,
+    status: delivery.task.status,
+    resolution: delivery.task.resolution ?? null,
+    createdAt: delivery.activity.createdAt,
+    audience: delivery.activity.audience ?? [],
+  };
+}
+
+export function activityReceipt(activity: SwarmWrittenActivity) {
+  return {
+    activityId: activity.id,
+    taskId: activity.taskId,
+    kind: activity.kind,
+    createdAt: activity.createdAt,
+    audience: activity.audience ?? [],
+  };
+}
+
+// A Task as agents read it. Stored Task data stays on the record but is not shown to agents: the
+// brief holds the agreement, and Activities, deliveries and artifacts hold its history.
+export function taskDetail(board: SwarmBoard, task: SwarmTask) {
+  const { managerName, data: _data, ...rest } = task;
+  return {
+    ...rest,
+    owner: managerName,
+    activityCount: (board.activities ?? []).filter((activity) => activity.taskId === task.id)
+      .length,
+    notesSinceBrief: notesSinceBrief(board, task),
+  };
+}
