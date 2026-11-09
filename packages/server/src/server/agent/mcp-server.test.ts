@@ -1145,7 +1145,7 @@ describe("Swarm MCP coordination", () => {
     },
   );
 
-  it("answers Task writes with receipts and keeps Task data out of agent tools", async () => {
+  it("answers Task writes with receipts", async () => {
     const audience = [{ name: "human", as: "to", why: "requester" }];
     const task = {
       id: "review-api",
@@ -1217,17 +1217,13 @@ describe("Swarm MCP coordination", () => {
           title: "Review API",
           brief: "Review the API",
           status: "review",
-          data: { ignored: true },
         }),
       ).toEqual({ ...receipt, status: "review", resolution: null });
-      expect(invokePlugin).toHaveBeenLastCalledWith(
-        "paseo-swarm",
-        "swarm.task.create",
-        expect.not.objectContaining({ data: expect.anything() }),
-      );
-      expect(
-        await call("swarm_task_update", { taskId: "review-api", data: { ignored: true } }),
-      ).toEqual({ ...receipt, status: "done", resolution: "wont-do" });
+      expect(await call("swarm_task_update", { taskId: "review-api" })).toEqual({
+        ...receipt,
+        status: "done",
+        resolution: "wont-do",
+      });
       expect(invokePlugin).toHaveBeenLastCalledWith("paseo-swarm", "swarm.task.update", {
         swarmId: "swarm",
         taskId: "review-api",
@@ -1258,6 +1254,71 @@ describe("Swarm MCP coordination", () => {
         audience,
       });
     } finally {
+      await server.close();
+    }
+  });
+
+  it("refuses Task data on every call path and passes on only declared Task fields", async () => {
+    const { server, invokePlugin } = await swarmServer(
+      "lead-agent",
+      [seat("lead", "supervisor", "lead-agent")],
+      () => ({ id: "review-api", title: "Review API", status: "review", managerName: "lead" }),
+    );
+    const writes = () =>
+      invokePlugin.mock.calls.filter(([, method]) => method.startsWith("swarm.task."));
+    const client = await connectInMemoryMcpClient(server);
+    try {
+      const create = {
+        id: "review-api",
+        title: "Review API",
+        brief: "Review the API",
+        status: "review",
+      };
+      // MCP clients: the schema reports data instead of dropping it.
+      for (const [name, args] of [
+        ["swarm_task_create", { ...create, data: { notes: "x" } }],
+        ["swarm_task_update", { taskId: "review-api", status: "done", data: { notes: "x" } }],
+      ] as const) {
+        const result = await client.callTool({ name, arguments: args });
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result.content)).toContain("Task data is no longer writable");
+      }
+      // Providers that call the tool catalog directly, such as OpenCode and OMP.
+      await expect(
+        registeredTool(server, "swarm_task_update").handler({
+          taskId: "review-api",
+          status: "done",
+          data: { notes: "x" },
+        }),
+      ).rejects.toThrow("Task data is no longer writable");
+      expect(writes()).toEqual([]);
+
+      await registeredTool(server, "swarm_task_update").handler({
+        taskId: "review-api",
+        status: "done",
+        swarmId: "another-swarm",
+        managerName: "someone-else",
+      });
+      expect(invokePlugin).toHaveBeenLastCalledWith("paseo-swarm", "swarm.task.update", {
+        swarmId: "swarm",
+        taskId: "review-api",
+        status: "done",
+        actorName: "lead",
+      });
+      await registeredTool(server, "swarm_task_create").handler({
+        ...create,
+        swarmId: "another-swarm",
+        createdBy: "someone-else",
+      });
+      expect(invokePlugin).toHaveBeenLastCalledWith("paseo-swarm", "swarm.task.create", {
+        swarmId: "swarm",
+        ...create,
+        managerName: "lead",
+        createdBy: "lead",
+        workerNames: [],
+      });
+    } finally {
+      await client.close();
       await server.close();
     }
   });

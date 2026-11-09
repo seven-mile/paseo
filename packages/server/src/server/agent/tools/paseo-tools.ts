@@ -922,6 +922,54 @@ async function createToolCatalog(
         limit: z.number().int().min(1).max(50).default(20),
         cursor: z.string().optional().describe("nextCursor from the previous page"),
       };
+      // Task create and update refuse Task data by name rather than dropping it, so an agent that
+      // still sends it learns the write did not happen. The schema keeps unknown keys for that
+      // check on every path (MCP strips them otherwise), and taskFields passes on only the
+      // declared ones.
+      const taskWriteInput = <Shape extends z.ZodRawShape>(shape: Shape) =>
+        z
+          .object(shape)
+          .passthrough()
+          .superRefine((value, context) => {
+            if ("data" in value) {
+              context.addIssue({
+                code: "custom",
+                path: ["data"],
+                message:
+                  "Task data is no longer writable. Put the agreement in brief, and decisions, results and history in Activities, deliveries or artifacts. Nothing was written; retry without data.",
+              });
+            }
+          });
+      const taskFields = <Shape extends z.ZodRawShape>(
+        shape: Shape,
+        input: Record<string, unknown>,
+      ) =>
+        Object.fromEntries(
+          Object.entries(input).filter(([key]) => Object.hasOwn(shape, key)),
+        ) as z.infer<z.ZodObject<Shape>>;
+      const taskCreateShape = {
+        id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+        title: z.string().min(1),
+        brief: z.string().min(1).optional(),
+        status: z.string().min(1),
+        owner: z.string().min(1).optional(),
+        requester: z.string().min(1).optional(),
+        assign: z.boolean().optional(),
+        workerNames: z.array(z.string()).optional(),
+      };
+      const taskUpdateShape = {
+        taskId: z.string(),
+        status: z.string().min(1).optional(),
+        title: z.string().min(1).optional(),
+        brief: z.string().min(1).optional(),
+        owner: z.string().min(1).optional(),
+        resolution: z.enum(["wont-do", "duplicate", "superseded"]).nullable().optional(),
+        duplicateOf: z.string().optional(),
+        supersededBy: z.string().optional(),
+        reason: z.string().min(1).optional(),
+        briefBasedOn: z.string().min(1).optional(),
+        workerNames: z.array(z.string()).optional(),
+      };
       registerTool(
         "swarm_seat_read",
         {
@@ -1184,20 +1232,11 @@ async function createToolCatalog(
           {
             description:
               "Create a Swarm Task: a project-level commitment on the board, with one owner and an understood outcome. The planner decides what goes on the board; owning work is no reason to create a Task for it. owner defaults to you; name a seat below you to give it the Task, and that is its assignment: the owner receives the brief, so don't send it again. To record work the owner already started, pass assign: false: the owner gets a record notice, not an assignment, and brief may be left out when you know too little, for the owner to write. Recording preserves the existing agreement, including conditions still open; it does not authorize a smaller outcome. requester is whoever asked for the work (human, or a seat) and defaults to you; deliveries go to it. Delegating part of your own work to a worker needs no Task of its own; message the worker with your taskId. The brief records the agreement: objective, scope, constraints, acceptance criteria, and conditions still open. workerNames optionally records workers on the owner's team; it grants nothing. The result is a receipt: the Task's id, status, owner and requester, and who the assignment or record notice reached.",
-            inputSchema: {
-              id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-              title: z.string().min(1),
-              brief: z.string().min(1).optional(),
-              status: z.string().min(1),
-              owner: z.string().min(1).optional(),
-              requester: z.string().min(1).optional(),
-              assign: z.boolean().optional(),
-              workerNames: z.array(z.string()).optional(),
-            },
+            inputSchema: taskWriteInput(taskCreateShape),
           },
           async (input) => {
             const { seats, actor, name, swarmScope } = await readSwarm();
-            const { owner, ...fields } = input;
+            const { owner, ...fields } = taskFields(taskCreateShape, input);
             const created = (await invokePlugin("paseo-swarm", "swarm.task.create", {
               ...swarmScope,
               ...fields,
@@ -1213,23 +1252,11 @@ async function createToolCatalog(
           {
             description:
               "Update a Swarm Task. Its owner and every seat above the owner can; the owner keeps the record current, and seats above it steer by message and edit only to escalate. The owner is told of changes it did not make. Rewrite brief to record an agreed change, such as a smaller outcome the requester, a seat above the owner or the human agreed to (name who in reason), not to log progress; the requester and the owner's manager get a copy; each field you supply replaces that field, so read the Task first. If you are not the owner, pass the briefUpdatedAt you read as briefBasedOn; a brief rewritten since is not overwritten. The owner confirms a brief another seat wrote by writing it, even unchanged. owner reassigns the Task to you or a seat below you, and the new owner receives it as an assignment. resolution closes it without a result: wont-do, duplicate (with duplicateOf), or superseded (with supersededBy when a Task replaces it), each with a reason; null reopens it with a reason. A Task that produced its result is completed with swarm_task_deliver instead. Swarm records owner, status, resolution, title and brief changes in the Task's history itself. The result is a receipt: the Task's resulting status, resolution, owner and briefUpdatedAt, and who the change reached.",
-            inputSchema: {
-              taskId: z.string(),
-              status: z.string().min(1).optional(),
-              title: z.string().min(1).optional(),
-              brief: z.string().min(1).optional(),
-              owner: z.string().min(1).optional(),
-              resolution: z.enum(["wont-do", "duplicate", "superseded"]).nullable().optional(),
-              duplicateOf: z.string().optional(),
-              supersededBy: z.string().optional(),
-              reason: z.string().min(1).optional(),
-              briefBasedOn: z.string().min(1).optional(),
-              workerNames: z.array(z.string()).optional(),
-            },
+            inputSchema: taskWriteInput(taskUpdateShape),
           },
           async (input) => {
             const { seats, actor } = await readSwarm();
-            const { owner, ...fields } = input;
+            const { owner, ...fields } = taskFields(taskUpdateShape, input);
             const updated = (await invokeSwarm("swarm.task.update", {
               ...fields,
               ...(owner ? { managerName: seatName(resolveSeat(seats, owner, actor)) } : {}),
