@@ -57,6 +57,7 @@ import type {
 } from "./agent-sdk-types.js";
 import type { PaseoToolCatalog } from "./tools/types.js";
 import type { ProviderDefinition } from "./provider-registry.js";
+import { PASEO_MCP_TOOL_TIMEOUT_SEC } from "./runtime-mcp-config.js";
 
 const DESKTOP_OPEN_AGENT_TAB_LABEL = getOpenAgentTabLabel("desktop-client");
 const MOBILE_OPEN_AGENT_TAB_LABEL = getOpenAgentTabLabel("mobile-client");
@@ -3335,6 +3336,7 @@ test("createAgent injects paseo MCP server only into provider launch config", as
       type: "http",
       url: `http://127.0.0.1:6767/mcp/agents?callerAgentId=${snapshot.id}`,
       alwaysLoad: true,
+      toolTimeoutSec: PASEO_MCP_TOOL_TIMEOUT_SEC,
     },
     custom: {
       type: "stdio",
@@ -3637,6 +3639,7 @@ test("createAgent allows best-effort internal MCP when the provider session repo
     type: "http",
     url: `http://127.0.0.1:6767/mcp/agents?callerAgentId=${snapshot.id}`,
     alwaysLoad: true,
+    toolTimeoutSec: PASEO_MCP_TOOL_TIMEOUT_SEC,
     headers: { Authorization: "Bearer cap-token" },
   });
 
@@ -3777,6 +3780,7 @@ test("keeps the global Paseo-tools gate outside provider policy and MCP injectio
     type: "http",
     url: `http://127.0.0.1:6767/mcp/agents?callerAgentId=${enabledAgent.id}`,
     alwaysLoad: true,
+    toolTimeoutSec: PASEO_MCP_TOOL_TIMEOUT_SEC,
   });
 
   const disabledClient = new McpClient();
@@ -3847,6 +3851,7 @@ test("resumeAgentFromPersistence replaces stored internal paseo MCP with current
       type: "http",
       url: `http://127.0.0.1:6768/mcp/agents?callerAgentId=${snapshot.id}`,
       alwaysLoad: true,
+      toolTimeoutSec: PASEO_MCP_TOOL_TIMEOUT_SEC,
     },
     custom: {
       type: "stdio",
