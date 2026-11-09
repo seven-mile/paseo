@@ -298,6 +298,11 @@ export function unansweredChoices<
 export const messageKindSchema = z.enum(["team", "runtime", "human_activity"]);
 export type MessageKind = z.infer<typeof messageKindSchema>;
 
+export const mailImageSchema = z.object({ file: z.string().min(1), mimeType: z.string().min(1) });
+export type MailImage = z.infer<typeof mailImageSchema>;
+export const mailAttachmentSchema = z.looseObject({ type: z.string().min(1) });
+export type MailAttachment = z.infer<typeof mailAttachmentSchema>;
+
 export const mailboxMessageSchema = z.object({
   id: z.string(),
   recipientAgentId: z.string(),
@@ -315,6 +320,11 @@ export const mailboxMessageSchema = z.object({
   failedAt: z.string().nullable(),
   // Turn rows delivered together as one digest share this id, which is also the daemon messageId.
   batchId: z.string().optional(),
+  // The person's images and attachments, sent with the prompt. The event log appends every change
+  // to a message, so an image's bytes live in a file under mail-images and the row names it.
+  images: z.array(mailImageSchema).optional(),
+  // Paseo agent attachments (files, PRs, review comments, text). The daemon validates them on send.
+  attachments: z.array(mailAttachmentSchema).optional(),
 });
 export type MailboxMessage = z.infer<typeof mailboxMessageSchema>;
 

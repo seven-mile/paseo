@@ -2,8 +2,9 @@ import type { ComposerAttachment } from "@/attachments/types";
 import type { ReviewDraftComment } from "../state";
 import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-types";
 
+/** An open agent or Swarm seat tab that can take the feedback; `id` is unique among them. */
 export interface FeedbackRecipient {
-  agentId: string;
+  id: string;
   tab: WorkspaceTabDescriptor;
 }
 export type FeedbackAttachment = Extract<ComposerAttachment, { kind: "review" }>;
@@ -93,10 +94,10 @@ function createFeedbackView(
     state = deriveState(ports.read(), getPhase());
     listeners.forEach((listener) => listener());
   }
-  async function send(agentId: string) {
+  async function send(recipientId: string) {
     const snapshot = ports.read();
     const current = deriveState(snapshot, workflow.getPhase());
-    const recipient = snapshot.recipients.find((candidate) => candidate.agentId === agentId);
+    const recipient = snapshot.recipients.find((candidate) => candidate.id === recipientId);
     if (!current.canSend || !recipient || !snapshot.attachment) return;
     const attachment = snapshot.attachment;
     const sentComments = snapshot.comments.filter((comment) =>
@@ -144,7 +145,7 @@ function createFeedbackView(
       const snapshot = ports.read();
       if (!deriveState(snapshot, workflow.getPhase()).canSend) return;
       if (snapshot.recipients.length === 1) {
-        await send(snapshot.recipients[0]!.agentId);
+        await send(snapshot.recipients[0]!.id);
       } else {
         choosing = true;
         publish();

@@ -87,6 +87,8 @@ export function latestHandover(seat: SwarmSeat): SeatHandover | null {
 export interface SeatMail {
   id: string;
   words: string;
+  // Images and attachments sent with the words.
+  attachmentCount: number;
   status: "queued" | "delivered" | "consumed" | "failed";
   createdAt: string;
   lastError: string | null;

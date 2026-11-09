@@ -50,8 +50,9 @@ export const fr: TranslationResources = {
       pending: "S'applique à votre prochain message : {{reason}}",
       mailQueued: "En file : remis quand l'occupant est libre",
       mailFailed: "Non remis : {{reason}}",
-      textOnly:
-        "Les messages au poste ne contiennent que du texte. Retirez les pièces jointes pour envoyer.",
+      attachmentsNeedUpdate: "Mettez à jour cet hôte pour envoyer des pièces jointes à un poste.",
+      mailAttachments_one: "{{count}} pièce jointe",
+      mailAttachments_other: "{{count}} pièces jointes",
       deliveries: "Résultats pour vous",
       deliveryCopied: "Copie pour vous",
       openTask: "Ouvrir {{title}}",

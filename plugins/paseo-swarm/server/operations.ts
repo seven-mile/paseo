@@ -18,6 +18,7 @@ import {
 } from "./seats";
 import type { TurnSummary } from "./turns";
 import { enqueueMessage, flushMailbox, sendThroughMailbox } from "./mailbox";
+import { storeMailImages } from "./mail-images";
 import { makeActivity, registerTasks } from "./tasks";
 import { artifactsView, artifactView, findArtifact, publishArtifact } from "./artifacts";
 import { store } from "./state";
@@ -83,6 +84,7 @@ import type {
   AgentRecord,
   AudienceEntry,
   MailboxMessage,
+  MailAttachment,
   MessageKind,
   SwarmRecord,
   Task,
@@ -408,6 +410,8 @@ async function sendWithCopies(
     body: string;
     attributes?: Record<string, string | null | undefined>;
     recipientWhy?: AudienceEntry["why"];
+    images?: readonly { data: string; mimeType: string }[];
+    attachments?: readonly MailAttachment[];
   },
   context: PluginHandlerContext,
 ): Promise<{ message: MailboxMessage; copies: MailboxMessage[]; audience: AudienceEntry[] }> {
@@ -423,6 +427,7 @@ async function sendWithCopies(
     ).values(),
   ];
   const cc = copiedSeats.map(agentQualifiedName);
+  const images = storeMailImages(input.images ?? []);
   const queue = (seat: AgentRecord) =>
     enqueueMessage({
       recipientAgentId: seat.id,
@@ -441,6 +446,8 @@ async function sendWithCopies(
           taskId: input.taskId,
           attributes: input.attributes,
         }),
+      images,
+      attachments: input.attachments,
     });
   const message = await queue(input.recipient);
   const copies = [];
@@ -799,6 +806,8 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
           taskId: input.taskId,
           kind: "team",
           body: input.body,
+          images: input.images,
+          attachments: input.attachments,
         },
         context,
       );

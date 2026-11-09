@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -20,7 +20,8 @@ import {
 } from "../server/mailbox";
 import { registerOperations } from "../server/operations";
 import { pwaFilesRevision } from "../server/pwa";
-import { StateStore, store } from "../server/state";
+import { MAIL_IMAGE_SWEEP_AGE_MS, sweepMailImages } from "../server/mail-images";
+import { getDataDirectory, StateStore, store } from "../server/state";
 import { swarmOf } from "../server/swarms";
 import { seed as seedRecords, type Seeded } from "./fixtures";
 import { mailboxMessageStatus, type AgentRecord } from "../shared/models";
@@ -63,6 +64,8 @@ interface Send {
   agentId: string;
   text: string;
   messageId: string;
+  images?: { data: string; mimeType: string }[];
+  attachments?: unknown[];
 }
 
 function fakePaseo() {
@@ -74,8 +77,14 @@ function fakePaseo() {
       agents: {
         ref(agentId: string) {
           return {
-            async send(text: string, options: { messageId: string }) {
-              sends.push({ agentId, text, messageId: options.messageId });
+            async send(text: string, options: Pick<Send, "messageId" | "images" | "attachments">) {
+              sends.push({
+                agentId,
+                text,
+                messageId: options.messageId,
+                ...(options.images ? { images: options.images } : {}),
+                ...(options.attachments ? { attachments: options.attachments } : {}),
+              });
               const failure = failures.get(agentId);
               if (failure) throw new Error(failure);
             },
@@ -160,7 +169,12 @@ function setup(t: { after(fn: () => void): void }) {
       }) as never,
       context,
     ) as Promise<ReturnType<typeof sendMessageRpc.output.parse>>;
-  return { turnStarted, turnEnded, send, sendTo, readMailbox };
+  const sendInput = (context: PluginHandlerContext, input: Record<string, unknown>) =>
+    handlers.get(sendMessageRpc.name)!(
+      sendMessageRpc.input.parse(input) as never,
+      context,
+    ) as Promise<ReturnType<typeof sendMessageRpc.output.parse>>;
+  return { turnStarted, turnEnded, send, sendTo, sendInput, readMailbox };
 }
 
 async function seed(agents: Seeded["agents"]) {
@@ -581,4 +595,43 @@ test("rows held past the limit are steered into a manager whose turn end was nev
   await flushMailbox(context);
   assert.equal(sends.length, 1);
   assert.match(sends[0].messageId, /^digest-/);
+});
+
+test("a person's images and attachments reach the recipient and its Cc seats, and the image file goes once delivered", async (t) => {
+  const { sendInput } = setup(t);
+  const { sends, failures, context } = fakePaseo();
+  await seed([manager, worker, reviewer]);
+  failures.set(worker.paseoAgentId, "Agent is offline");
+  const image = { data: Buffer.from("png bytes").toString("base64"), mimeType: "image/png" };
+  const attachment = { type: "text", mimeType: "text/plain", title: "Notes", text: "Look here" };
+  const result = await sendInput(context, {
+    recipientName: "manager.worker",
+    senderName: "human",
+    cc: ["manager.reviewer"],
+    body: "See the screenshot",
+    images: [image],
+    attachments: [attachment],
+  });
+  assert.equal(result.status, "queued");
+  // The reviewer's copy went out with the same image and attachment.
+  const copy = sends.find((entry) => entry.agentId === reviewer.paseoAgentId);
+  assert.deepEqual(copy?.images, [image]);
+  assert.deepEqual(copy?.attachments, [attachment]);
+  // The worker's message is still queued, so its image stays on disk and the rows hold only its name.
+  const row = new StateStore().read().messages.find((message) => message.id === result.messageId)!;
+  assert.equal(row.images?.length, 1);
+  assert.doesNotMatch(JSON.stringify(row), /cG5nIGJ5dGVz/);
+  const imageDirectory = join(getDataDirectory(), "mail-images");
+  sweepMailImages(store.read().messages, Date.now() + MAIL_IMAGE_SWEEP_AGE_MS + 1000);
+  assert.ok(existsSync(join(imageDirectory, row.images![0].file)));
+
+  failures.delete(worker.paseoAgentId);
+  await flushMailbox(context);
+  const delivered = sends.findLast((entry) => entry.agentId === worker.paseoAgentId);
+  assert.deepEqual(delivered?.images, [image]);
+  assert.deepEqual(delivered?.attachments, [attachment]);
+  // A fresh file survives the sweep until it is old enough to belong to no pending send.
+  assert.equal(readdirSync(imageDirectory).length, 1);
+  sweepMailImages(store.read().messages, Date.now() + MAIL_IMAGE_SWEEP_AGE_MS + 1000);
+  assert.equal(readdirSync(imageDirectory).length, 0);
 });
