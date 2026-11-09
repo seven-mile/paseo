@@ -1228,6 +1228,50 @@ describe("Swarm MCP coordination", () => {
     }
   });
 
+  it("waits on the caller's direct reports by default and returns its mail as envelopes", async () => {
+    const envelope =
+      '<paseo-swarm-team-message id="m1" from="lead.scout" to="lead">Found it</paseo-swarm-team-message>';
+    const { server, invokePlugin } = await swarmServer(
+      "lead-agent",
+      [
+        seat("lead", "supervisor", "lead-agent"),
+        seat("lead.scout", "worker", "scout-agent"),
+        seat("lead.review", "worker", null),
+        seat("other", "supervisor", "other-agent"),
+      ],
+      (method) => {
+        if (method === "swarm.wait.start") return { waitId: "wait-1" };
+        if (method === "swarm.wait.poll") {
+          return { expired: false, mail: [envelope], messageIds: ["m1"], events: [] };
+        }
+        return { canceled: true };
+      },
+    );
+    try {
+      const result = await invokeToolWithParsedInput(registeredTool(server, "swarm_wait"), {});
+      expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.wait.start", {
+        paseoAgentId: "lead-agent",
+        seats: ["lead.scout", "lead.review"],
+      });
+      expect(invokePlugin).toHaveBeenCalledWith("paseo-swarm", "swarm.wait.cancel", {
+        waitId: "wait-1",
+        release: [],
+      });
+      expect(result.content[0]).toEqual({ type: "text", text: envelope });
+      expect(result.structuredContent).toMatchObject({
+        reason: "mail",
+        mail: [envelope],
+        events: [],
+        seats: expect.arrayContaining([
+          { seat: "lead.review", state: "empty" },
+          expect.objectContaining({ seat: "lead.scout" }),
+        ]),
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("lists a seat's transcript as the caller, defaulting to the caller's own seat", async () => {
     const history = {
       seat: "planner.supervisor.scout",

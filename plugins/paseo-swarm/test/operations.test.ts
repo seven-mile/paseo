@@ -493,7 +493,7 @@ test("seats are placed when their first agent starts: supervisors in worktrees o
     const initialSends = sends.length;
     await notifyManager(
       { id: workerAgent },
-      { outcome: "completed", detail: null, report: "Findings", filesChanged: 0 },
+      { outcome: "failed", detail: "provider failed", report: "Findings", filesChanged: 0 },
       context,
     );
     await invoke(
@@ -630,19 +630,11 @@ test("turn notifications use current-turn text without falling back to history",
   }> = [
     {
       name: "historical response is not repeated when the current turn has no output",
-      event: { turnId: "current", outcome: { kind: "completed" }, turnTimeline: [] },
-    },
-    {
-      name: "canceled turn includes only its incomplete assistant peek",
       event: {
         turnId: "current",
-        outcome: { kind: "canceled", reason: "stopped" },
-        turnTimeline: [
-          { type: "assistant_message", text: "PA" },
-          { type: "assistant_message", text: "RTIAL" },
-        ],
+        outcome: { kind: "failed", error: { message: "provider failed" } },
+        turnTimeline: [],
       },
-      expectedOutput: "PARTIAL",
     },
     {
       name: "failed turn includes only its incomplete assistant peek",
@@ -664,7 +656,10 @@ test("turn notifications use current-turn text without falling back to history",
   try {
     await seed({ ...emptyState(), agents: [manager, worker] });
     contribute(server as PluginServerContext);
-    assert.deepEqual([...hooks.keys()], ["agent.turn_started", "agent.turn_ended"]);
+    assert.deepEqual(
+      [...hooks.keys()],
+      ["agent.turn_started", "agent.turn_ended", "agent.permission_requested"],
+    );
     for (const scenario of cases) {
       await t.test(scenario.name, async () => {
         sends.length = 0;

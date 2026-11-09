@@ -1,4 +1,5 @@
 import { validateProviderOptions } from "../provider-options.js";
+import { isInternalPaseoMcpServer, PASEO_MCP_TOOL_TIMEOUT_SEC } from "../runtime-mcp-config.js";
 import {
   getAgentStreamEventTurnId,
   type AgentPermissionAction,
@@ -901,7 +902,16 @@ interface CodexMcpServerConfig {
   tool_timeout_sec?: number;
 }
 
+// Codex cuts MCP tool calls off after 60 seconds by default, which would end swarm_wait early. The
+// timeout is set only here: McpServerConfig travels to clients, whose schema rejects new keys.
 function toCodexMcpConfig(config: McpServerConfig): CodexMcpServerConfig {
+  const timeout = isInternalPaseoMcpServer(config)
+    ? { tool_timeout_sec: PASEO_MCP_TOOL_TIMEOUT_SEC }
+    : {};
+  return { ...toCodexMcpTransport(config), ...timeout };
+}
+
+function toCodexMcpTransport(config: McpServerConfig): CodexMcpServerConfig {
   switch (config.type) {
     case "stdio":
       return {

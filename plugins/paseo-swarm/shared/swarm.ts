@@ -660,3 +660,56 @@ export const artifactsReadRpc = defineRpc({
   input: z.object({ ...swarmScopeSchema, ...etagInputSchema }),
   output: conditionalOutput(z.object({ artifacts: z.array(artifactViewSchema) })),
 });
+
+// swarm_wait's long-poll: the daemon's tool registers a wait, polls it in windows until mail or an
+// event of a waited seat arrives or its own deadline passes, and cancels it when it returns. Mail
+// is marked delivered only in the poll answer that carries it; release returns mail an answer
+// claimed after the tool call was canceled.
+export const waitStartRpc = defineRpc({
+  name: "swarm.wait.start",
+  input: z.object({
+    paseoAgentId: z.string().min(1),
+    seats: z.array(z.string().min(1)).default([]),
+  }),
+  output: z.object({ waitId: z.string() }),
+});
+
+const waitEventSchema = z.discriminatedUnion("kind", [
+  z.object({
+    seat: z.string(),
+    kind: z.literal("turn-ended"),
+    outcome: z.enum(["completed", "canceled", "failed"]),
+    detail: z.string().nullable(),
+    files: z.number(),
+    report: z.string().nullable(),
+    truncated: z.boolean(),
+    occupant: z.number(),
+  }),
+  z.object({ seat: z.string(), kind: z.literal("permission"), request: z.string() }),
+  z.object({ seat: z.string(), kind: z.literal("retired") }),
+  z.object({ seat: z.string(), kind: z.literal("replaced"), occupant: z.number() }),
+  z.object({ seat: z.string(), kind: z.literal("seat-change"), reason: z.string() }),
+]);
+
+export const waitPollRpc = defineRpc({
+  name: "swarm.wait.poll",
+  input: z.object({
+    waitId: z.string().min(1),
+    windowMs: z.number().int().nonnegative(),
+  }),
+  output: z.object({
+    expired: z.boolean(),
+    mail: z.array(z.string()),
+    messageIds: z.array(z.string()),
+    events: z.array(waitEventSchema),
+  }),
+});
+
+export const waitCancelRpc = defineRpc({
+  name: "swarm.wait.cancel",
+  input: z.object({
+    waitId: z.string().min(1),
+    release: z.array(z.string()).default([]),
+  }),
+  output: z.object({ canceled: z.literal(true) }),
+});

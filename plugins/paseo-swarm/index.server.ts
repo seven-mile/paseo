@@ -6,6 +6,7 @@ import { notifyManager, registerOperations } from "./server/operations";
 import { declareSeatLabels } from "./server/seats";
 import { recoverIntents } from "./server/spec";
 import { summarizeTurn } from "./server/turns";
+import { noteWatchedPermission, noteWatchedTurnEnded, stopWaitsOf } from "./server/waits";
 
 export default function contribute(server: PluginServerContext) {
   // A store from before swarms is migrated before any request or hook reads it, and seat changes
@@ -43,14 +44,21 @@ export default function contribute(server: PluginServerContext) {
     declare(context);
     // Cleared first, so the flush below can deliver turn rows held for this agent.
     noteTurnEnded(event.agent.id);
+    stopWaitsOf(event.agent.id);
     if (event.outcome.kind === "completed") await markConsumed(event.agent.id);
-    await notifyManager(event.agent, summarizeTurn(event), context);
+    const turn = summarizeTurn(event);
+    noteWatchedTurnEnded(event.agent.id, turn);
+    await notifyManager(event.agent, turn, context);
     // The author's artifacts are copied again when the turn changed them, so the copy readers
     // open is current as of its last turn. A copy that fails stays as it was.
     await syncAuthoredArtifacts(event.agent.id, context);
     // Any turn end is a chance to retry mail that earlier sends could not deliver,
     // including mail left queued when the daemon last stopped.
     await flushMailbox(context);
+  });
+  server.on("agent.permission_requested", async (event) => {
+    await ready;
+    noteWatchedPermission(event.agent.id, event.request);
   });
   return async () => {};
 }

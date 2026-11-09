@@ -541,17 +541,24 @@ async function adjustOccupant(
 // running agents without a reset. The seat's receipt moves only once Paseo accepts the send. A
 // prompt that cannot be assembled, or a send that fails, throws: mail that depends on the prompt
 // must not go out ahead of it.
-export async function refreshStalePrompt(seat: AgentRecord, context: SeatContext): Promise<void> {
-  if (seat.paseoAgentId === null) return;
+// The current standing prompt for a seat whose agent last received an older one, or null when its
+// agent's prompt is current. recordPrompt marks it received once it reached the agent.
+export function stalePrompt(
+  seat: AgentRecord,
+): { text: string; received: ReturnType<typeof assemblePrompt>["received"] } | null {
+  if (seat.paseoAgentId === null) return null;
   const assembled = assemblePrompt(seat, swarmOf(seat).source.files);
-  if (seat.prompt?.revision === assembled.received.revision) return;
-  // The same messageId for the same revision, so a retry after a lost reply is not sent twice.
-  await context.paseo.agents
-    .ref(seat.paseoAgentId)
-    .send(refreshedPrompt({ pwa: assembled.pwa, agent: seat, changed: true }), {
-      messageId: `prompt-refresh-${seat.paseoAgentId}-${assembled.received.revision}`,
-      activeTurnBehavior: "steer",
-    });
+  if (seat.prompt?.revision === assembled.received.revision) return null;
+  return {
+    text: refreshedPrompt({ pwa: assembled.pwa, agent: seat, changed: true }),
+    received: assembled.received,
+  };
+}
+
+export async function recordPrompt(
+  seat: AgentRecord,
+  received: ReturnType<typeof assemblePrompt>["received"],
+): Promise<void> {
   await store.commit((state) => {
     const current = state.agents.find((agent) => agent.id === seat.id);
     if (!current || current.paseoAgentId !== seat.paseoAgentId) return [];
@@ -559,10 +566,21 @@ export async function refreshStalePrompt(seat: AgentRecord, context: SeatContext
       {
         op: "put",
         collection: "agents",
-        record: { ...current, prompt: assembled.received, updatedAt: now() },
+        record: { ...current, prompt: received, updatedAt: now() },
       },
     ];
   });
+}
+
+export async function refreshStalePrompt(seat: AgentRecord, context: SeatContext): Promise<void> {
+  const stale = stalePrompt(seat);
+  if (!stale || seat.paseoAgentId === null) return;
+  // The same messageId for the same revision, so a retry after a lost reply is not sent twice.
+  await context.paseo.agents.ref(seat.paseoAgentId).send(stale.text, {
+    messageId: `prompt-refresh-${seat.paseoAgentId}-${stale.received.revision}`,
+    activeTurnBehavior: "steer",
+  });
+  await recordPrompt(seat, stale.received);
 }
 
 // Brings the seat's agent in line with the seat, as planSeat decides. The caller makes sure the

@@ -317,6 +317,7 @@ interface Loaded {
 // `compactAfter` commits.
 export class StateStore {
   private loaded: Loaded | null = null;
+  private readonly listeners = new Set<() => void>();
 
   constructor(private readonly compactAfter = 500) {}
 
@@ -335,6 +336,13 @@ export class StateStore {
   // it replaces them.
   forget(): void {
     this.loaded = null;
+  }
+
+  // Called after every commit that changed something. Listeners only learn that the state moved;
+  // they read it again themselves, and must not throw.
+  onCommit(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   // The plan reads the current state and returns the changes to make. It must not mutate the
@@ -360,6 +368,7 @@ export class StateStore {
     loaded.seq = seq;
     loaded.commitsSinceSnapshot += 1;
     if (loaded.commitsSinceSnapshot >= this.compactAfter) this.compact(loaded);
+    for (const listener of this.listeners) listener();
     return next;
   }
 

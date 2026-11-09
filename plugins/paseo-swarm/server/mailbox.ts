@@ -3,7 +3,13 @@ import type { MailboxMessage, MailboxStatus, SwarmState } from "../shared/models
 import { agentQualifiedName, mailboxMessageStatus } from "../shared/models";
 import { turnDigest } from "./prompts";
 import { planSeat } from "./seat-policy";
-import { occupantRunning, reconcileSeat, refreshStalePrompt } from "./seats";
+import {
+  occupantRunning,
+  reconcileSeat,
+  recordPrompt,
+  refreshStalePrompt,
+  stalePrompt,
+} from "./seats";
 import { randomUUID } from "node:crypto";
 import { newMessage, type EnqueueInput } from "./mail";
 import { store, type SwarmChange } from "./state";
@@ -15,9 +21,9 @@ export const MAX_DELIVERY_ATTEMPTS = 5;
 // Settled (consumed or failed) messages kept for inspection; older ones are pruned.
 export const SETTLED_MESSAGE_LIMIT = 1000;
 
-// Turn rows wait while their manager is mid-turn, so a burst of child turn ends reaches the
-// manager as one digest when its turn ends. A manager whose turn end Swarm never observes gets
-// the digest steered into its turn after this long, as every turn notice was before digests.
+// Turn rows (failed turns of a report) wait while their manager is mid-turn, so a burst of them
+// reaches the manager as one digest when its turn ends. A manager whose turn end Swarm never
+// observes gets the digest steered into its turn after this long.
 export const DIGEST_HOLD_LIMIT_MS = 2 * 60_000;
 
 // The daemon reports this when an earlier send with the same messageId was
@@ -67,9 +73,19 @@ export function noteTurnEnded(paseoAgentId: string): void {
   runningAgents.delete(paseoAgentId);
 }
 
+// Paseo agents inside swarm_wait. Their mail stays queued for the wait to claim, since a steer
+// cannot reach the agent before the tool call returns. In memory only, like runningAgents.
+const waitingAgents = new Set<string>();
+
+export function noteWaiting(paseoAgentId: string, waiting: boolean): void {
+  if (waiting) waitingAgents.add(paseoAgentId);
+  else waitingAgents.delete(paseoAgentId);
+}
+
 // For tests: the module outlives a single test's store.
 export function forgetRunningTurns(): void {
   runningAgents.clear();
+  waitingAgents.clear();
 }
 
 // One send to the daemon: a single message, or every turn row of a digest.
@@ -159,7 +175,10 @@ function digestDelivery(rows: MailboxMessage[], batchId: string): Delivery {
 // The next send for one recipient's queue, or null while its turn rows are held. A digest's
 // rows are fixed under a batch id before the first send, so a retry resends the same digest
 // under the same messageId; rows that arrive later go in the next digest.
-async function nextDelivery(queue: MailboxMessage[]): Promise<Delivery | null> {
+async function nextDelivery(
+  queue: MailboxMessage[],
+  holdTurnRows = true,
+): Promise<Delivery | null> {
   const [head] = queue;
   if (head.kind !== "runtime") {
     return { messages: [head], messageId: head.id, prompt: head.prompt };
@@ -177,6 +196,7 @@ async function nextDelivery(queue: MailboxMessage[]): Promise<Delivery | null> {
   const followedByMessage = end < queue.length;
   const recipient = store.read().agents.find((agent) => agent.id === head.recipientAgentId);
   const held =
+    holdTurnRows &&
     !followedByMessage &&
     recipient?.paseoAgentId != null &&
     runningAgents.has(recipient.paseoAgentId) &&
@@ -267,6 +287,8 @@ export function flushMailbox(context: MailboxContext): Promise<void> {
       queues.set(message.recipientAgentId, queue);
     }
     for (let queue of queues.values()) {
+      const recipient = store.read().agents.find((agent) => agent.id === queue[0].recipientAgentId);
+      if (recipient?.paseoAgentId != null && waitingAgents.has(recipient.paseoAgentId)) continue;
       const synced = await syncSeat(queue, context);
       if (!synced) continue;
       queue = synced;
@@ -279,6 +301,65 @@ export function flushMailbox(context: MailboxContext): Promise<void> {
       }
     }
   });
+}
+
+export interface ClaimedMail {
+  // What the agent reads, in order: a standing prompt refresh first when its own is older, then
+  // each delivery exactly as a steer would have carried it.
+  prompts: string[];
+  messageIds: string[];
+}
+
+// Hands a waiting agent its seat's queued mail as the wait's result. The rows are marked delivered
+// to that agent here, as a send marks them, and consumed when its turn completes. Turn rows are
+// not held, since the wait is the agent's own moment to read them.
+export function claimForWait(seatId: string, paseoAgentId: string): Promise<ClaimedMail> {
+  return serialized(async () => {
+    const claimed: ClaimedMail = { prompts: [], messageIds: [] };
+    let queue = queuedFor(seatId);
+    if (queue.length === 0) return claimed;
+    const seat = store.read().agents.find((agent) => agent.id === seatId);
+    if (!seat || seat.retired || seat.paseoAgentId !== paseoAgentId) return claimed;
+    const stale = stalePrompt(seat);
+    if (stale) {
+      claimed.prompts.push(stale.text);
+      await recordPrompt(seat, stale.received);
+    }
+    while (queue.length > 0) {
+      const delivery = await nextDelivery(queue, false);
+      if (!delivery) break;
+      const deliveredAt = new Date().toISOString();
+      await settle(delivery.messages, (message) => ({
+        attempts: message.attempts + 1,
+        lastError: null,
+        deliveredAt,
+        deliveredToPaseoAgentId: paseoAgentId,
+      }));
+      claimed.prompts.push(delivery.prompt);
+      const sent = new Set(delivery.messages.map((message) => message.id));
+      claimed.messageIds.push(...sent);
+      queue = queue.filter((message) => !sent.has(message.id));
+    }
+    return claimed;
+  });
+}
+
+// Puts mail a wait claimed back in the queue when its result never reached the agent, such as a
+// tool call canceled while the claim was in flight. Rows the agent already consumed stay.
+export async function releaseClaim(paseoAgentId: string, messageIds: string[]): Promise<void> {
+  const ids = new Set(messageIds);
+  await store.commit((state) =>
+    state.messages
+      .filter(
+        (message) =>
+          ids.has(message.id) &&
+          message.deliveredToPaseoAgentId === paseoAgentId &&
+          mailboxMessageStatus(message) === "delivered",
+      )
+      .map((message) =>
+        putMessage({ ...message, deliveredAt: null, deliveredToPaseoAgentId: null }),
+      ),
+  );
 }
 
 // Enqueues, then tries to deliver everything queued, this message included.

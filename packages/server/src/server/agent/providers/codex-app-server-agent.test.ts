@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { PASEO_MCP_TOOL_TIMEOUT_SEC } from "../runtime-mcp-config.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { type Dirent, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -1419,6 +1420,31 @@ describe("Codex app-server provider", () => {
       },
     });
     expect(turnStart).not.toHaveProperty("config.mcp_servers.hub.tools.reply");
+  });
+
+  test("gives the Paseo MCP server a tool timeout that covers swarm_wait", async () => {
+    const session = createSession({
+      modeId: undefined,
+      mcpServers: {
+        paseo: { type: "http", url: "http://127.0.0.1/mcp/agents?callerAgentId=a" },
+        plain: { type: "http", url: "http://127.0.0.1/plain" },
+      },
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/loaded/list") return { data: ["test-thread"] };
+      if (method === "turn/start") return {};
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    session.activeForegroundTurnId = null;
+    session.client = createStub<CodexClientLike>({ request });
+
+    await session.startTurn("wait");
+
+    const turnStart = request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+    expect(turnStart).toMatchObject({
+      config: { mcp_servers: { paseo: { tool_timeout_sec: PASEO_MCP_TOOL_TIMEOUT_SEC } } },
+    });
+    expect(turnStart).not.toHaveProperty("config.mcp_servers.plain.tool_timeout_sec");
   });
 
   test("passes ephemeral: true to thread/start when constructed as ephemeral", async () => {
