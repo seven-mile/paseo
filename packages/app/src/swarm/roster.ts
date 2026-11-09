@@ -4,7 +4,7 @@ import { useFetchQuery } from "@/data/query";
 import { useInstalledPlugin } from "@/plugins/registry";
 import type { InstalledPlugin } from "@/plugins/types";
 import { deliveredArtifactSchema } from "./artifact-model";
-import { SWARM_POLL_MS, selectSwarmValue, swarmConditionalQuery } from "./sync";
+import { SWARM_POLL_MS, parseSwarmRead, selectSwarmValue, swarmConditionalQuery } from "./sync";
 
 const configSchema = z.object({
   provider: z.string().optional(),
@@ -159,6 +159,18 @@ const seatReadSchema = z.object({
 });
 type SeatRead = z.infer<typeof seatReadSchema>;
 const NO_DELIVERIES: SeatDelivery[] = [];
+
+// The roster and one seat read once, for a send made outside the seat's own view.
+export async function readSwarmRoster(plugin: InstalledPlugin): Promise<Roster> {
+  return parseSwarmRead(rosterSchema, await plugin.invoke("swarm.roster.read", {}));
+}
+
+export async function readSwarmSeat(
+  plugin: InstalledPlugin,
+  seatId: string,
+): Promise<SwarmSeat | null> {
+  return parseSwarmRead(seatReadSchema, await plugin.invoke("swarm.seat.read", { seatId })).seat;
+}
 
 // One seat and its occupants, retired seats included. A poll whose etag still holds costs a few
 // hundred bytes, so a seat tab can follow its occupant without reading the roster.

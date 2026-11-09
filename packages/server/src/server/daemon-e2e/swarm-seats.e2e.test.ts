@@ -8,6 +8,7 @@ import { afterEach, expect, test } from "vitest";
 import type {
   AgentLaunchContext,
   AgentPersistenceHandle,
+  AgentPromptInput,
   AgentSessionConfig,
 } from "../agent/agent-sdk-types.js";
 import { MockLoadTestAgentClient } from "../agent/providers/mock-load-test-agent.js";
@@ -257,3 +258,84 @@ test("a Swarm seat starts on its first message, moves to another provider, and b
   await leadSaw("SEAT_E2E_MODE");
   expect((await listSeat("lead")).paseoAgentId).toBe(leadAgentId);
 }, 120_000);
+
+// A mock provider that records every prompt its sessions start a turn with.
+class PromptRecordingMockClient extends MockLoadTestAgentClient {
+  readonly prompts: AgentPromptInput[] = [];
+
+  override async createSession(config: AgentSessionConfig, launchContext?: AgentLaunchContext) {
+    const session = await super.createSession(config, launchContext);
+    const startTurn = session.startTurn.bind(session);
+    session.startTurn = (prompt, options) => {
+      this.prompts.push(prompt);
+      return startTurn(prompt, options);
+    };
+    return session;
+  }
+}
+
+// The person's images and attachments ride the seat's mailbox and reach the agent the first
+// message starts, as the image and attachment blocks of its prompt.
+test("a person's image and attachment reach a seat's agent through its mailbox", async () => {
+  const mock = new PromptRecordingMockClient();
+  const root = await mkdtemp(path.join(os.tmpdir(), "swarm-seat-attachments-e2e-"));
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  execSync("git init -b main", { cwd: root, stdio: "pipe" });
+  setEnv(
+    "PASEO_SWARM_PWA_ROOT",
+    fileURLToPath(new URL("../../../../../plugins/paseo-swarm/pwa/pr-workflow", import.meta.url)),
+  );
+  const daemon = await createTestPaseoDaemon({
+    isDev: true,
+    pluginsEnabled: true,
+    builtinPlugins: new BuiltinPluginLoader(undefined, ["paseo-swarm"]),
+    agentClients: { mock },
+  });
+  cleanups.push(() => daemon.close());
+  setEnv("PASEO_HOME", daemon.paseoHome);
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+  cleanups.push(() => client.close());
+  await client.connect();
+  const swarm = <T>(method: string, input: unknown) =>
+    client.invokePluginRpc("paseo-swarm", method, input) as Promise<T>;
+
+  const { workspace } = await client.createWorkspace({ source: { kind: "directory", path: root } });
+  await swarm<Seat>("swarm.seat.create", {
+    provider: "mock/e2e-fast-stream",
+    modeId: "load-test",
+    name: "lead",
+    roleClass: "supervisor",
+    role: "supervisor",
+    workspaceId: workspace!.id,
+  });
+  const roster = await swarm<{ data: { features?: string[] } }>("swarm.roster.read", {});
+  expect(roster.data.features).toContain("attachments");
+
+  const image = {
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    mimeType: "image/png",
+  };
+  const notes = { type: "text", mimeType: "text/plain", title: "Notes", text: "SEAT_E2E_NOTES" };
+  const receipt = await swarm<{ status: string }>("swarm.message.send", {
+    recipientName: "lead",
+    senderName: "human",
+    body: "SEAT_E2E_ATTACHED",
+    images: [image],
+    attachments: [notes],
+  });
+  expect(receipt.status).not.toBe("failed");
+
+  const carriesBody = (block: Exclude<AgentPromptInput, string>[number]) =>
+    block.type === "text" && block.text.includes("SEAT_E2E_ATTACHED");
+  const prompt = await waitFor(
+    async () =>
+      mock.prompts.find((candidate) => Array.isArray(candidate) && candidate.some(carriesBody)),
+    (found) => found !== undefined,
+  );
+  expect(prompt).toEqual(
+    expect.arrayContaining([
+      { type: "image", data: image.data, mimeType: "image/png" },
+      expect.objectContaining({ type: "text", title: "Notes", text: "SEAT_E2E_NOTES" }),
+    ]),
+  );
+}, 60_000);

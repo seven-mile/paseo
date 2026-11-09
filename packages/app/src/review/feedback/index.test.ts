@@ -22,7 +22,7 @@ function makeComment(id: string, body = id): ReviewDraftComment {
 }
 function makeRecipient(agentId: string): FeedbackRecipient {
   return {
-    agentId,
+    id: agentId,
     tab: {
       key: `agent_${agentId}`,
       tabId: `agent_${agentId}`,

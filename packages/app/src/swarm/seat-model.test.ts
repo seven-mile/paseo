@@ -145,7 +145,7 @@ describe("seat handover", () => {
 
 describe("seat mail", () => {
   function mail(id: string, status: SeatMail["status"], createdAt: string): SeatMail {
-    return { id, words: id, status, createdAt, lastError: null };
+    return { id, words: id, attachmentCount: 0, status, createdAt, lastError: null };
   }
 
   it("keeps queued and failed mail, oldest first", () => {

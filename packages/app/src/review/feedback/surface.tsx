@@ -180,8 +180,8 @@ function RecipientOption({
   workspaceId: string;
 }) {
   const choose = useCallback(() => {
-    void model.send(recipient.agentId);
-  }, [model, recipient.agentId]);
+    void model.send(recipient.id);
+  }, [model, recipient.id]);
   const render = useCallback(
     (presentation: WorkspaceTabPresentation) => (
       <RecipientRow presentation={presentation} onSelect={choose} />

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { MailboxMessage, MessageKind } from "../shared/models";
+import type { MailAttachment, MailboxMessage, MailImage, MessageKind } from "../shared/models";
 
 export interface EnqueueInput {
   // The roster member (AgentRecord.id). The Paseo agent behind it is resolved
@@ -10,6 +10,8 @@ export interface EnqueueInput {
   taskId: string | null;
   kind: MessageKind;
   render: (id: string) => string;
+  images?: readonly MailImage[];
+  attachments?: readonly MailAttachment[];
 }
 
 // A queued message record. A commit that must not happen without its mail puts it alongside its
@@ -31,5 +33,7 @@ export function newMessage(input: EnqueueInput): MailboxMessage {
     deliveredToPaseoAgentId: null,
     consumedAt: null,
     failedAt: null,
+    ...(input.images?.length ? { images: [...input.images] } : {}),
+    ...(input.attachments?.length ? { attachments: [...input.attachments] } : {}),
   };
 }

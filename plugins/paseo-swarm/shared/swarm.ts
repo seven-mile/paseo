@@ -5,6 +5,7 @@ import {
   agentRecordSchema,
   artifactSchema,
   audienceEntrySchema,
+  mailAttachmentSchema,
   mailboxMessageSchema,
   mailboxStatusSchema,
   responseProfileSchema,
@@ -141,7 +142,7 @@ const swarmRefSchema = z.object({
 // "addressing": writes report their audience, and the seat read lists deliveries to the human.
 // "board": the Task list reads its current view and a searchable history.
 // "close": the human closes open Tasks as done without a delivery (swarm.tasks.close).
-export const SWARM_FEATURES = ["cc", "addressing", "board", "close", "artifacts"];
+export const SWARM_FEATURES = ["cc", "addressing", "board", "close", "artifacts", "attachments"];
 const featuresSchema = z.array(z.string()).optional();
 
 // What a list or a link needs of a seat: no prompt receipts, occupant history or agent config.
@@ -494,16 +495,28 @@ export const appendHumanActivityRpc = defineRpc({
 
 export const sendMessageRpc = defineRpc({
   name: "swarm.message.send",
-  input: z.object({
-    swarmId: z.string().min(1).optional(),
-    taskId: slugNameSchema.nullable().default(null),
-    actorName: z.string().nullable().default(null),
-    senderName: z.string().min(1),
-    recipientName: z.string().min(1),
-    // Seats that get a copy for awareness: the copy names the recipient, so it asks nothing of them.
-    cc: z.array(z.string().min(1)).default([]),
-    body: z.string().min(1),
-  }),
+  input: z
+    .object({
+      swarmId: z.string().min(1).optional(),
+      taskId: slugNameSchema.nullable().default(null),
+      actorName: z.string().nullable().default(null),
+      senderName: z.string().min(1),
+      recipientName: z.string().min(1),
+      // Seats that get a copy for awareness: the copy names the recipient, so it asks nothing of them.
+      cc: z.array(z.string().min(1)).default([]),
+      // Empty only when the message carries images or attachments.
+      body: z.string(),
+      // Sent with the body to the recipient and every Cc seat. Hosts list "attachments" in their
+      // features; older ones drop these fields.
+      images: z
+        .array(z.object({ data: z.string().min(1), mimeType: z.string().min(1) }))
+        .default([]),
+      attachments: z.array(mailAttachmentSchema).default([]),
+    })
+    .refine(
+      (input) => input.body.length > 0 || input.images.length > 0 || input.attachments.length > 0,
+      { message: "A message needs a body, an image, or an attachment", path: ["body"] },
+    ),
   output: z.object({
     delivered: z.boolean(),
     messageId: z.string(),

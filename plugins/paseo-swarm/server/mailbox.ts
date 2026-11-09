@@ -1,3 +1,4 @@
+import type { PaseoAgentSendOptions } from "@getpaseo/client";
 import type { PluginHookContext } from "@getpaseo/plugin/server";
 import type { MailboxMessage, MailboxStatus, SwarmState } from "../shared/models";
 import { agentQualifiedName, mailboxMessageStatus } from "../shared/models";
@@ -6,6 +7,7 @@ import { planSeat } from "./seat-policy";
 import { occupantRunning, reconcileSeat, refreshStalePrompt } from "./seats";
 import { randomUUID } from "node:crypto";
 import { newMessage, type EnqueueInput } from "./mail";
+import { readMailImages, sweepMailImages } from "./mail-images";
 import { store, type SwarmChange } from "./state";
 
 export { newMessage, type EnqueueInput };
@@ -77,6 +79,9 @@ interface Delivery {
   messages: MailboxMessage[];
   messageId: string;
   prompt: string;
+  // A person's message carries its images and attachments; a digest carries none.
+  images?: MailboxMessage["images"];
+  attachments?: MailboxMessage["attachments"];
 }
 
 async function settle(
@@ -116,6 +121,10 @@ async function deliver(delivery: Delivery, context: MailboxContext): Promise<Mai
     await context.paseo.agents.ref(paseoAgentId).send(delivery.prompt, {
       messageId: delivery.messageId,
       activeTurnBehavior: "steer",
+      ...(delivery.images?.length ? { images: readMailImages(delivery.images) } : {}),
+      ...(delivery.attachments?.length
+        ? { attachments: delivery.attachments as PaseoAgentSendOptions["attachments"] }
+        : {}),
     });
     const deliveredAt = new Date().toISOString();
     return settle(delivery.messages, (message) => ({
@@ -162,7 +171,13 @@ function digestDelivery(rows: MailboxMessage[], batchId: string): Delivery {
 async function nextDelivery(queue: MailboxMessage[]): Promise<Delivery | null> {
   const [head] = queue;
   if (head.kind !== "runtime") {
-    return { messages: [head], messageId: head.id, prompt: head.prompt };
+    return {
+      messages: [head],
+      messageId: head.id,
+      prompt: head.prompt,
+      images: head.images,
+      attachments: head.attachments,
+    };
   }
   if (head.batchId) {
     return digestDelivery(
@@ -278,6 +293,7 @@ export function flushMailbox(context: MailboxContext): Promise<void> {
         queue = queue.filter((message) => !sent.has(message.id));
       }
     }
+    sweepMailImages(store.read().messages);
   });
 }
 

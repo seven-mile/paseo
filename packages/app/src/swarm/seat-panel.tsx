@@ -8,6 +8,7 @@ import {
   ChevronRight,
   ChevronUp,
   Clock,
+  Paperclip,
   SquareArrowOutUpRight,
 } from "lucide-react-native";
 import { useShallow } from "zustand/shallow";
@@ -47,7 +48,12 @@ import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { DeliveredArtifacts } from "./artifact-views";
 import { SwarmInlineLink } from "./inline-link";
 import { useSwarmCanonicalLinkPress } from "./canonical-links";
-import { sendSeatMail, seatRecipient, useUndeliveredSeatMail } from "./seat-mail";
+import {
+  sendSeatMail,
+  seatRecipient,
+  supportsSeatMailAttachments,
+  useUndeliveredSeatMail,
+} from "./seat-mail";
 import { defaultSwarmCc } from "./task-model";
 import {
   latestHandover,
@@ -61,6 +67,7 @@ import {
 export const ThemedSeatIcon = withUnistyles(Armchair);
 const ThemedChevronDown = withUnistyles(ChevronDown);
 const ThemedClock = withUnistyles(Clock);
+const ThemedPaperclip = withUnistyles(Paperclip);
 
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
@@ -155,16 +162,19 @@ function SeatConversationContent({
   const name = seatRecipient(seat);
 
   const copies = useSeatCc(plugin, seat);
+  const attachmentsSupported = supportsSeatMailAttachments(useSwarmRoster(plugin).data?.features);
   const seatRef = useRef(seat);
   seatRef.current = seat;
   const ccRef = useRef(copies.cc);
   ccRef.current = copies.cc;
   const submit = useCallback(
     async ({ text, attachments }: MessagePayload) => {
-      if (attachments.length > 0) throw new Error(t("swarm.seat.textOnly"));
-      await sendSeatMail(plugin, seatRef.current, text, ccRef.current);
+      if (attachments.length > 0 && !attachmentsSupported) {
+        throw new Error(t("swarm.seat.attachmentsNeedUpdate"));
+      }
+      await sendSeatMail(plugin, seatRef.current, text, ccRef.current, attachments);
     },
-    [plugin, t],
+    [attachmentsSupported, plugin, t],
   );
   const showCurrent = useCallback(() => setViewedAgentId(null), []);
   const aboveInput = useMemo(
@@ -581,9 +591,19 @@ function SeatComposerNotices({
     <View style={styles.notices}>
       {mail.map((message) => (
         <View key={message.id} style={styles.mailRow} testID={`swarm-seat-mail-${message.id}`}>
-          <Text style={styles.mailWords} numberOfLines={2} ellipsizeMode="tail">
-            {message.words}
-          </Text>
+          {message.words ? (
+            <Text style={styles.mailWords} numberOfLines={2} ellipsizeMode="tail">
+              {message.words}
+            </Text>
+          ) : null}
+          {message.attachmentCount > 0 ? (
+            <View style={styles.mailAttachments}>
+              <ThemedPaperclip size={ICON_SIZE.sm} uniProps={mutedColorMapping} />
+              <Text style={styles.mailStatus}>
+                {t("swarm.seat.mailAttachments", { count: message.attachmentCount })}
+              </Text>
+            </View>
+          ) : null}
           <Text
             style={message.status === "failed" ? styles.mailFailed : styles.mailStatus}
             accessibilityRole={message.status === "failed" ? "alert" : undefined}
@@ -891,6 +911,11 @@ const styles = StyleSheet.create((theme) => ({
   mailStatus: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
+  },
+  mailAttachments: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
   },
   mailFailed: {
     color: theme.colors.statusDanger,
