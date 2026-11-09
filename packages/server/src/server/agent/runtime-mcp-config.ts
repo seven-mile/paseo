@@ -61,7 +61,6 @@ export function withRuntimePaseoMcpServer(params: {
         type: "http",
         url: `${params.mcpBaseUrl}?callerAgentId=${params.agentId}`,
         alwaysLoad: true,
-        toolTimeoutSec: PASEO_MCP_TOOL_TIMEOUT_SEC,
         ...(params.mcpAuthToken
           ? { headers: { Authorization: `Bearer ${params.mcpAuthToken}` } }
           : {}),
@@ -71,7 +70,7 @@ export function withRuntimePaseoMcpServer(params: {
   };
 }
 
-function isInternalPaseoMcpServer(config: McpServerConfig): boolean {
+export function isInternalPaseoMcpServer(config: McpServerConfig): boolean {
   if (config.type !== "http" && config.type !== "sse") {
     return false;
   }

@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { PASEO_MCP_TOOL_TIMEOUT_SEC } from "../runtime-mcp-config.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { type Dirent, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -1421,11 +1422,11 @@ describe("Codex app-server provider", () => {
     expect(turnStart).not.toHaveProperty("config.mcp_servers.hub.tools.reply");
   });
 
-  test("passes an MCP server's tool timeout to Codex as tool_timeout_sec", async () => {
+  test("gives the Paseo MCP server a tool timeout that covers swarm_wait", async () => {
     const session = createSession({
       modeId: undefined,
       mcpServers: {
-        paseo: { type: "http", url: "http://127.0.0.1/mcp/agents", toolTimeoutSec: 1920 },
+        paseo: { type: "http", url: "http://127.0.0.1/mcp/agents?callerAgentId=a" },
         plain: { type: "http", url: "http://127.0.0.1/plain" },
       },
     });
@@ -1441,7 +1442,7 @@ describe("Codex app-server provider", () => {
 
     const turnStart = request.mock.calls.find(([method]) => method === "turn/start")?.[1];
     expect(turnStart).toMatchObject({
-      config: { mcp_servers: { paseo: { tool_timeout_sec: 1920 } } },
+      config: { mcp_servers: { paseo: { tool_timeout_sec: PASEO_MCP_TOOL_TIMEOUT_SEC } } },
     });
     expect(turnStart).not.toHaveProperty("config.mcp_servers.plain.tool_timeout_sec");
   });
