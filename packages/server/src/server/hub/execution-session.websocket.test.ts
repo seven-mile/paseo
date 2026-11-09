@@ -17,10 +17,6 @@ async function launchRelationship(): Promise<HubRelationshipHarness> {
   return launched;
 }
 
-// Daemon restart plus git worktree setup and teardown takes well past the default timeout on
-// shared Windows CI runners.
-const DAEMON_RESTART_TEST_TIMEOUT_MS = 90_000;
-
 function createdAgentWorkspaceId(message: SessionOutboundMessage): string {
   if (message.type !== "status" || message.payload.status !== "agent_created")
     throw new Error("Agent was not created");
@@ -186,6 +182,7 @@ test("ordinary Hub create and message retries do not duplicate agents or prompts
   ).toMatchObject({ payload: { accepted: false } });
 });
 
+// Daemon restart plus git worktree setup and teardown runs past 30s on busy Windows CI runners.
 test("ordinary Hub requests survive daemon restart and restore an archived workspace", async () => {
   const hub = await launchRelationship();
   const create = {
@@ -252,7 +249,7 @@ test("ordinary Hub requests survive daemon restart and restore an archived works
     }),
   ).toMatchObject({ payload: { agentId, accepted: true } });
   expect(hub.providerPromptTexts().filter((text) => text === "follow up")).toHaveLength(1);
-}, DAEMON_RESTART_TEST_TIMEOUT_MS);
+}, 90_000);
 
 test("Hub completes the standard hello before rejecting a second hello", async () => {
   const hub = await launchRelationship();
@@ -497,6 +494,7 @@ test("archiving a second same-slug execution leaves the first worktree intact", 
   expect(await hub.ownedWorkspaceArchivedAt(original.payload.agentId!)).toBeNull();
 });
 
+// Daemon restart plus git worktree setup and teardown runs past 30s on busy Windows CI runners.
 test("Hub resolves persisted execution ownership after daemon restart", async () => {
   const hub = await launchRelationship();
   hub.beginOwnedCreate("restart-create", "execution-restart", {
@@ -518,7 +516,7 @@ test("Hub resolves persisted execution ownership after daemon restart", async ()
   expect(workspaceId).toEqual(expect.any(String));
   expect(await hub.archivedWorkspaceAt(workspaceId!)).toEqual(expect.any(String));
   expect(await hub.worktreeState(worktreeCwd)).toEqual({ exists: false, listed: false });
-}, DAEMON_RESTART_TEST_TIMEOUT_MS);
+}, 90_000);
 
 test("Hub treats missing and foreign executions as already controlled without exposing ownership", async () => {
   const hub = await launchRelationship();
