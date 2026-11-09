@@ -1,7 +1,10 @@
 import type { AgentSessionConfig, McpServerConfig } from "./agent-sdk-types.js";
+import { SWARM_WAIT_MAX_SECONDS } from "./tools/swarm-wait.js";
 
 export const PASEO_MCP_SERVER_NAME = "paseo";
 const PASEO_MCP_PATHNAME = "/mcp/agents";
+// The longest Paseo tool call, swarm_wait at its cap, plus room for its last poll and cancel.
+export const PASEO_MCP_TOOL_TIMEOUT_SEC = SWARM_WAIT_MAX_SECONDS + 120;
 
 export function stripInternalPaseoMcpServer(config: AgentSessionConfig): AgentSessionConfig {
   const mcpServers = config.mcpServers;
@@ -58,6 +61,7 @@ export function withRuntimePaseoMcpServer(params: {
         type: "http",
         url: `${params.mcpBaseUrl}?callerAgentId=${params.agentId}`,
         alwaysLoad: true,
+        toolTimeoutSec: PASEO_MCP_TOOL_TIMEOUT_SEC,
         ...(params.mcpAuthToken
           ? { headers: { Authorization: `Bearer ${params.mcpAuthToken}` } }
           : {}),

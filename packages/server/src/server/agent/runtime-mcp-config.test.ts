@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import type { AgentSessionConfig } from "./agent-sdk-types.js";
-import { withRuntimePaseoMcpServer } from "./runtime-mcp-config.js";
+import { PASEO_MCP_TOOL_TIMEOUT_SEC, withRuntimePaseoMcpServer } from "./runtime-mcp-config.js";
 
 const BASE_CONFIG: AgentSessionConfig = {
   provider: "claude",
@@ -21,6 +21,7 @@ describe("withRuntimePaseoMcpServer", () => {
       type: "http",
       url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
       alwaysLoad: true,
+      toolTimeoutSec: PASEO_MCP_TOOL_TIMEOUT_SEC,
       headers: { Authorization: "Bearer cap-token" },
     });
   });
@@ -37,6 +38,7 @@ describe("withRuntimePaseoMcpServer", () => {
       type: "http",
       url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
       alwaysLoad: true,
+      toolTimeoutSec: PASEO_MCP_TOOL_TIMEOUT_SEC,
     });
   });
 

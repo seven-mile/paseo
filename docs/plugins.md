@@ -156,7 +156,7 @@ mailbox delivery starts the agent. Change what a seat should run, or reset it, w
 `paseo-swarm swarm seat set|reset` (the `swarm.seat.*` RPCs). The seat's next mailbox delivery,
 after any running turn, brings its agent in line: in place where that keeps the context, otherwise
 with an earlier or a new agent. A replaced agent is archived and its transcript stays readable
-through `swarm seat history` and the `swarm_transcript_list` tool. Typing into the agent's own
+through `swarm seat history` and the `swarm_transcript_list` tool. Seats report their own work by mail; Swarm writes to a manager only when a report's turn fails. An agent that wants to continue in its turn once another seat moves calls `swarm_wait`, which holds that agent's mail and returns it as the tool result; see [design/02-plugin-boundary-and-runtime.md](../design/02-plugin-boundary-and-runtime.md#a2a-与向上通知) for its delivery and timeout rules. Typing into the agent's own
 conversation skips the mailbox and does not reconcile the seat. See
 [design/06-seats.md](../design/06-seats.md).
 

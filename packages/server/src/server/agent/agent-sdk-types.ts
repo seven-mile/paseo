@@ -39,6 +39,11 @@ export interface McpStdioServerConfig {
    * and never deferred behind tool search. Honored by the Claude provider.
    */
   alwaysLoad?: boolean;
+  /**
+   * Seconds a single tool call may run before the client gives up. Honored by the Codex
+   * provider, whose default (60s) would cut off swarm_wait.
+   */
+  toolTimeoutSec?: number;
 }
 
 /**
@@ -53,6 +58,11 @@ export interface McpHttpServerConfig {
    * and never deferred behind tool search. Honored by the Claude provider.
    */
   alwaysLoad?: boolean;
+  /**
+   * Seconds a single tool call may run before the client gives up. Honored by the Codex
+   * provider, whose default (60s) would cut off swarm_wait.
+   */
+  toolTimeoutSec?: number;
 }
 
 /**
@@ -67,6 +77,11 @@ export interface McpSseServerConfig {
    * and never deferred behind tool search. Honored by the Claude provider.
    */
   alwaysLoad?: boolean;
+  /**
+   * Seconds a single tool call may run before the client gives up. Honored by the Codex
+   * provider, whose default (60s) would cut off swarm_wait.
+   */
+  toolTimeoutSec?: number;
 }
 
 /**

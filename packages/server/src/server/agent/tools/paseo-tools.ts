@@ -29,6 +29,7 @@ import {
   type SwarmBoard,
   type SwarmSeat,
 } from "./swarm-context.js";
+import { SWARM_WAIT_DEFAULT_SECONDS, SWARM_WAIT_MAX_SECONDS, waitInSwarm } from "./swarm-wait.js";
 import { ensureValidJson } from "../../json-utils.js";
 import type { Logger } from "pino";
 
@@ -1100,6 +1101,54 @@ async function createToolCatalog(
               body: input.body,
             }),
           );
+        },
+      );
+      registerTool(
+        "swarm_wait",
+        {
+          description:
+            "Keep your turn open until something happens: mail reaches you, or a waited seat's turn ends, it asks for a permission, or it is retired or replaced. Call it only when your next step depends on another seat and you want to continue in this turn; otherwise end your turn, since mail and failures wake you anyway. seats defaults to your direct reports. The result returns your mail in its envelopes, the events of the waited seats, and their state now. It returns once, at the first event or after timeoutSeconds with nothing; call it again only if you still have nothing else to do.",
+          inputSchema: {
+            seats: z.array(z.string().min(1)).optional(),
+            timeoutSeconds: z
+              .number()
+              .int()
+              .min(1)
+              .max(SWARM_WAIT_MAX_SECONDS)
+              .default(SWARM_WAIT_DEFAULT_SECONDS),
+          },
+        },
+        async (input, context) => {
+          if (!callerAgentId) throw new Error("swarm_wait requires an agent caller");
+          const { seats, actor } = await readSwarm();
+          const waited = input.seats
+            ? input.seats.map((reference: string) => resolveSeat(seats, reference, actor))
+            : seats.filter((seat) => !seat.retired && seat.reportsTo === seatName(actor));
+          const outcome = await waitInSwarm({
+            invoke: (method, value) => invokePlugin("paseo-swarm", method, value),
+            paseoAgentId: callerAgentId,
+            seats: waited.map(seatName),
+            timeoutMs: input.timeoutSeconds * 1000,
+            signal: context?.signal,
+          });
+          const current = await readSeats(actor.swarmId ? { swarmId: actor.swarmId } : {});
+          const states = await Promise.all(
+            waited.map(async (seat: SwarmSeat) => {
+              const now = current.find((candidate) => candidate.id === seat.id) ?? seat;
+              return {
+                seat: seatName(seat),
+                state: now.retired ? "retired" : await seatState(now),
+              };
+            }),
+          );
+          const summary = { reason: outcome.reason, events: outcome.events, seats: states };
+          return {
+            content: [
+              ...outcome.mail.map((text) => ({ type: "text", text })),
+              { type: "text", text: JSON.stringify(summary) },
+            ],
+            structuredContent: { ...summary, mail: outcome.mail },
+          };
         },
       );
       registerTool(

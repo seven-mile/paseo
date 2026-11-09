@@ -1421,6 +1421,31 @@ describe("Codex app-server provider", () => {
     expect(turnStart).not.toHaveProperty("config.mcp_servers.hub.tools.reply");
   });
 
+  test("passes an MCP server's tool timeout to Codex as tool_timeout_sec", async () => {
+    const session = createSession({
+      modeId: undefined,
+      mcpServers: {
+        paseo: { type: "http", url: "http://127.0.0.1/mcp/agents", toolTimeoutSec: 1920 },
+        plain: { type: "http", url: "http://127.0.0.1/plain" },
+      },
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/loaded/list") return { data: ["test-thread"] };
+      if (method === "turn/start") return {};
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    session.activeForegroundTurnId = null;
+    session.client = createStub<CodexClientLike>({ request });
+
+    await session.startTurn("wait");
+
+    const turnStart = request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+    expect(turnStart).toMatchObject({
+      config: { mcp_servers: { paseo: { tool_timeout_sec: 1920 } } },
+    });
+    expect(turnStart).not.toHaveProperty("config.mcp_servers.plain.tool_timeout_sec");
+  });
+
   test("passes ephemeral: true to thread/start when constructed as ephemeral", async () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     const fakeClient: CodexClientLike = {

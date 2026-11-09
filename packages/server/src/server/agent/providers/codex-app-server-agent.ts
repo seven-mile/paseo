@@ -902,6 +902,11 @@ interface CodexMcpServerConfig {
 }
 
 function toCodexMcpConfig(config: McpServerConfig): CodexMcpServerConfig {
+  const timeout = config.toolTimeoutSec ? { tool_timeout_sec: config.toolTimeoutSec } : {};
+  return { ...toCodexMcpTransport(config), ...timeout };
+}
+
+function toCodexMcpTransport(config: McpServerConfig): CodexMcpServerConfig {
   switch (config.type) {
     case "stdio":
       return {

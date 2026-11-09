@@ -418,14 +418,26 @@ test("settled mail is pruned oldest first while queued mail is kept", async (t) 
   assert.equal(ids.length, SETTLED_MESSAGE_LIMIT + 2);
 });
 
-test("child turn ends coalesce into one digest per manager wake", async (t) => {
+test("a completed child turn tells its manager nothing; its own mail is the report", async (t) => {
+  const { turnEnded } = setup(t);
+  const { sends, context } = fakePaseo();
+  await seed([manager, worker]);
+  await turnEnded(worker, { kind: "completed" }, context, [
+    { type: "assistant_message", text: "Survey done." },
+  ]);
+  await turnEnded(worker, { kind: "canceled", reason: "interrupted" }, context);
+  assert.equal(sends.length, 0);
+  assert.equal(store.read().messages.length, 0);
+});
+
+test("failed child turns coalesce into one digest per manager wake", async (t) => {
   const { turnStarted, turnEnded } = setup(t);
   const { sends, context } = fakePaseo();
   await seed([manager, worker, reviewer]);
 
-  // An idle manager is woken by the first turn end right away.
-  await turnEnded(worker, { kind: "completed" }, context, [
-    { type: "assistant_message", text: "Survey done." },
+  // An idle manager is woken by the first failure right away.
+  await turnEnded(worker, { kind: "failed", error: { message: "context overflow" } }, context, [
+    { type: "assistant_message", text: "Survey half done." },
   ]);
   assert.equal(sends.length, 1);
   assert.equal(sends[0].agentId, manager.paseoAgentId);
@@ -434,17 +446,17 @@ test("child turn ends coalesce into one digest per manager wake", async (t) => {
     sends[0].text,
     [
       '<paseo-swarm-turn-digest manager="manager" turns="1">',
-      '<turn agent="manager.worker" outcome="completed" files="0">',
-      "Survey done.",
+      '<turn agent="manager.worker" outcome="failed" detail="context overflow" files="0">',
+      "Survey half done.",
       "</turn>",
       "</paseo-swarm-turn-digest>",
     ].join("\n"),
   );
 
-  // While that wake runs, further turn ends wait for it to finish.
+  // While that wake runs, further failures wait for it to finish.
   await turnStarted(manager, context);
   const report = "x".repeat(2000);
-  await turnEnded(reviewer, { kind: "completed" }, context, [
+  await turnEnded(reviewer, { kind: "failed", error: { message: "quota" } }, context, [
     {
       type: "tool_call",
       callId: "a",
@@ -486,7 +498,7 @@ test("child turn ends coalesce into one digest per manager wake", async (t) => {
   assert.match(digest.text, /^<paseo-swarm-turn-digest manager="manager" turns="2">\n/);
   assert.ok(
     digest.text.includes(
-      `<turn agent="manager.reviewer" outcome="completed" files="2" truncated="true" occupant="1">\n${"x".repeat(1500)}\n</turn>`,
+      `<turn agent="manager.reviewer" outcome="failed" detail="quota" files="2" truncated="true" occupant="1">\n${"x".repeat(1500)}\n</turn>`,
     ),
   );
   assert.ok(
@@ -510,7 +522,7 @@ test("a message to a busy manager releases its held rows first, in order", async
   const { sends, context } = fakePaseo();
   await seed([manager, worker]);
   await turnStarted(manager, context);
-  await turnEnded(worker, { kind: "completed" }, context);
+  await turnEnded(worker, { kind: "failed", error: { message: "boom" } }, context);
   assert.equal(sends.length, 0);
 
   const message = await sendTo(context, manager, "Human steer");
@@ -519,7 +531,10 @@ test("a message to a busy manager releases its held rows first, in order", async
     sends.map((entry) => entry.messageId.split("-")[0]),
     ["digest", "message"],
   );
-  assert.match(sends[0].text, /<turn agent="manager\.worker" outcome="completed" files="0" \/>/);
+  assert.match(
+    sends[0].text,
+    /<turn agent="manager\.worker" outcome="failed" detail="boom" files="0" \/>/,
+  );
 });
 
 test("a failed digest is resent with the same rows and id; later rows go in the next digest", async (t) => {
@@ -527,12 +542,12 @@ test("a failed digest is resent with the same rows and id; later rows go in the 
   const { sends, failures, context } = fakePaseo();
   await seed([manager, worker, reviewer]);
   failures.set(manager.paseoAgentId, "Agent is offline");
-  await turnEnded(worker, { kind: "completed" }, context);
+  await turnEnded(worker, { kind: "failed", error: { message: "boom" } }, context);
   const [first] = sends;
   assert.match(first.text, /turns="1"/);
 
   await turnStarted(manager, context);
-  await turnEnded(reviewer, { kind: "completed" }, context);
+  await turnEnded(reviewer, { kind: "failed", error: { message: "boom" } }, context);
   // Each retry resends the formed digest unchanged; the reviewer's row waits behind it.
   assert.ok(sends.length > 1);
   assert.ok(

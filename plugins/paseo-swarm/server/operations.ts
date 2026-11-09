@@ -21,6 +21,7 @@ import { enqueueMessage, flushMailbox, sendThroughMailbox } from "./mailbox";
 import { makeActivity, registerTasks } from "./tasks";
 import { artifactsView, artifactView, findArtifact, publishArtifact } from "./artifacts";
 import { store } from "./state";
+import { cancelWait, pollWait, startWait } from "./waits";
 import { readPwaSource } from "./source";
 import {
   createSwarm,
@@ -77,6 +78,9 @@ import {
   seatRetireRpc,
   seatUpdateRpc,
   SWARM_FEATURES,
+  waitCancelRpc,
+  waitPollRpc,
+  waitStartRpc,
 } from "../shared/swarm";
 import type {
   AgentConfig,
@@ -870,6 +874,15 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
   });
   server.handle(seatHistoryReadRpc, async (input, context) => readSeatHistory(input, context));
 
+  server.handle(waitStartRpc, async (input, context) => ({
+    waitId: await startWait(input, context),
+  }));
+  server.handle(waitPollRpc, async (input, context) => pollWait(input, context));
+  server.handle(waitCancelRpc, async (input, context) => {
+    await cancelWait(input, context);
+    return { canceled: true as const };
+  });
+
   server.handle(mailboxReadRpc, async (input: RpcInput<typeof mailboxReadRpc>, context) => {
     await flushMailbox(context);
     const inSwarm = input.swarmId
@@ -899,11 +912,15 @@ function lastAssignedTask(agent: AgentRecord): string | null {
   return null;
 }
 
+// A report tells its manager about its own work by mail. Swarm writes to the manager only when
+// the report's turn failed, since a failed turn could not report; completed and canceled turns
+// reach a manager only through swarm_wait.
 export async function notifyManager(
   agent: { id: string },
   turn: TurnSummary,
   context: PluginHandlerContext,
 ): Promise<void> {
+  if (turn.outcome !== "failed") return;
   const managed = store.read().agents.find((candidate) => candidate.paseoAgentId === agent.id);
   if (!managed?.reportsTo) return;
   const manager = findAgent(swarmOf(managed).id, managed.reportsTo);
