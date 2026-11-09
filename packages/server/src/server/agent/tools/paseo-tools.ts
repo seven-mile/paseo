@@ -13,6 +13,8 @@ import { stat } from "node:fs/promises";
 import { z } from "zod";
 import {
   activityPreviews,
+  activityReceipt,
+  deliveryReceipt,
   pageSwarmItems,
   resolveSeat,
   resolveSeatAccess,
@@ -22,12 +24,15 @@ import {
   seatToolAllowed,
   swarmRoleOf,
   visibleSeats,
-  notesSinceBrief,
+  taskDetail,
+  taskReceipt,
   visibleTasks,
   type SeatAccess,
   type SeatState,
+  type SwarmActivity,
   type SwarmBoard,
   type SwarmSeat,
+  type SwarmTask,
 } from "./swarm-context.js";
 import { ensureValidJson } from "../../json-utils.js";
 import type { Logger } from "pino";
@@ -917,6 +922,54 @@ async function createToolCatalog(
         limit: z.number().int().min(1).max(50).default(20),
         cursor: z.string().optional().describe("nextCursor from the previous page"),
       };
+      // Task create and update refuse Task data by name rather than dropping it, so an agent that
+      // still sends it learns the write did not happen. The schema keeps unknown keys for that
+      // check on every path (MCP strips them otherwise), and taskFields passes on only the
+      // declared ones.
+      const taskWriteInput = <Shape extends z.ZodRawShape>(shape: Shape) =>
+        z
+          .object(shape)
+          .passthrough()
+          .superRefine((value, context) => {
+            if ("data" in value) {
+              context.addIssue({
+                code: "custom",
+                path: ["data"],
+                message:
+                  "Task data is no longer writable. Put the agreement in brief, and decisions, results and history in Activities, deliveries or artifacts. Nothing was written; retry without data.",
+              });
+            }
+          });
+      const taskFields = <Shape extends z.ZodRawShape>(
+        shape: Shape,
+        input: Record<string, unknown>,
+      ) =>
+        Object.fromEntries(
+          Object.entries(input).filter(([key]) => Object.hasOwn(shape, key)),
+        ) as z.infer<z.ZodObject<Shape>>;
+      const taskCreateShape = {
+        id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+        title: z.string().min(1),
+        brief: z.string().min(1).optional(),
+        status: z.string().min(1),
+        owner: z.string().min(1).optional(),
+        requester: z.string().min(1).optional(),
+        assign: z.boolean().optional(),
+        workerNames: z.array(z.string()).optional(),
+      };
+      const taskUpdateShape = {
+        taskId: z.string(),
+        status: z.string().min(1).optional(),
+        title: z.string().min(1).optional(),
+        brief: z.string().min(1).optional(),
+        owner: z.string().min(1).optional(),
+        resolution: z.enum(["wont-do", "duplicate", "superseded"]).nullable().optional(),
+        duplicateOf: z.string().optional(),
+        supersededBy: z.string().optional(),
+        reason: z.string().min(1).optional(),
+        briefBasedOn: z.string().min(1).optional(),
+        workerNames: z.array(z.string()).optional(),
+      };
       registerTool(
         "swarm_seat_read",
         {
@@ -984,23 +1037,14 @@ async function createToolCatalog(
         "swarm_task_read",
         {
           description:
-            "Read one Swarm Task: its brief (the current agreement) and briefUpdatedAt, status, owner, requester (who asked for the work), resolution when closed, workers, data, and activityCount. briefUnconfirmedBy names the seat whose brief the owner has not confirmed yet. notesSinceBrief lists human notes newer than the brief: instructions its owner has not yet written into it.",
+            "Read one Swarm Task: its brief (the current agreement) and briefUpdatedAt, status, owner, requester (who asked for the work), resolution when closed, workers, and activityCount. briefUnconfirmedBy names the seat whose brief the owner has not confirmed yet. notesSinceBrief lists human notes newer than the brief: instructions its owner has not yet written into it.",
           inputSchema: { taskId: z.string() },
         },
         async (input) => {
           const { board } = await readBoard();
           const task = board.tasks?.find((candidate) => candidate.id === input.taskId);
           if (!task) throw new Error(`Unknown Task: ${input.taskId}`);
-          const activityCount = (board.activities ?? []).filter(
-            (activity) => activity.taskId === task.id,
-          ).length;
-          const { managerName, ...rest } = task;
-          return swarmResult({
-            ...rest,
-            owner: managerName,
-            activityCount,
-            notesSinceBrief: notesSinceBrief(board, task),
-          });
+          return swarmResult(taskDetail(board, task));
         },
       );
       registerTool(
@@ -1187,70 +1231,44 @@ async function createToolCatalog(
           "swarm_task_create",
           {
             description:
-              "Create a Swarm Task: a project-level commitment on the board, with one owner and an understood outcome. The planner decides what goes on the board; owning work is no reason to create a Task for it. owner defaults to you; name a seat below you to give it the Task, and that is its assignment: the owner receives the brief, so don't send it again. To record work the owner already started, pass assign: false: the owner gets a record notice, not an assignment, and brief may be left out when you know too little, for the owner to write. Recording preserves the existing agreement, including conditions still open; it does not authorize a smaller outcome. requester is whoever asked for the work (human, or a seat) and defaults to you; deliveries go to it. Delegating part of your own work to a worker needs no Task of its own; message the worker with your taskId. The brief records the agreement: objective, scope, constraints, acceptance criteria, and conditions still open. workerNames optionally records workers on the owner's team; it grants nothing.",
-            inputSchema: {
-              id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-              title: z.string().min(1),
-              brief: z.string().min(1).optional(),
-              status: z.string().min(1),
-              owner: z.string().min(1).optional(),
-              requester: z.string().min(1).optional(),
-              assign: z.boolean().optional(),
-              workerNames: z.array(z.string()).optional(),
-              data: z.record(z.string(), z.unknown()).optional(),
-            },
+              "Create a Swarm Task: a project-level commitment on the board, with one owner and an understood outcome. The planner decides what goes on the board; owning work is no reason to create a Task for it. owner defaults to you; name a seat below you to give it the Task, and that is its assignment: the owner receives the brief, so don't send it again. To record work the owner already started, pass assign: false: the owner gets a record notice, not an assignment, and brief may be left out when you know too little, for the owner to write. Recording preserves the existing agreement, including conditions still open; it does not authorize a smaller outcome. requester is whoever asked for the work (human, or a seat) and defaults to you; deliveries go to it. Delegating part of your own work to a worker needs no Task of its own; message the worker with your taskId. The brief records the agreement: objective, scope, constraints, acceptance criteria, and conditions still open. workerNames optionally records workers on the owner's team; it grants nothing. The result is a receipt: the Task's id, status, owner and requester, and who the assignment or record notice reached.",
+            inputSchema: taskWriteInput(taskCreateShape),
           },
           async (input) => {
             const { seats, actor, name, swarmScope } = await readSwarm();
-            const { owner, ...fields } = input;
-            return swarmResult(
-              await invokePlugin("paseo-swarm", "swarm.task.create", {
-                ...swarmScope,
-                ...fields,
-                managerName: owner ? seatName(resolveSeat(seats, owner, actor)) : name,
-                createdBy: name,
-                workerNames: input.workerNames ?? [],
-                data: input.data ?? {},
-              }),
-            );
+            const { owner, ...fields } = taskFields(taskCreateShape, input);
+            const created = (await invokePlugin("paseo-swarm", "swarm.task.create", {
+              ...swarmScope,
+              ...fields,
+              managerName: owner ? seatName(resolveSeat(seats, owner, actor)) : name,
+              createdBy: name,
+              workerNames: input.workerNames ?? [],
+            })) as SwarmTask;
+            return swarmResult(taskReceipt(created));
           },
         );
         registerTool(
           "swarm_task_update",
           {
             description:
-              "Update a Swarm Task. Its owner and every seat above the owner can; the owner keeps the record current, and seats above it steer by message and edit only to escalate. The owner is told of changes it did not make. Rewrite brief to record an agreed change, such as a smaller outcome the requester, a seat above the owner or the human agreed to (name who in reason), not to log progress; the requester and the owner's manager get a copy; each field you supply replaces that field, so read the Task first. If you are not the owner, pass the briefUpdatedAt you read as briefBasedOn; a brief rewritten since is not overwritten. The owner confirms a brief another seat wrote by writing it, even unchanged. owner reassigns the Task to you or a seat below you, and the new owner receives it as an assignment. resolution closes it without a result: wont-do, duplicate (with duplicateOf), or superseded (with supersededBy when a Task replaces it), each with a reason; null reopens it with a reason. A Task that produced its result is completed with swarm_task_deliver instead. Swarm records owner, status, resolution, title and brief changes in the Task's history itself. The result lists who the change reached.",
-            inputSchema: {
-              taskId: z.string(),
-              status: z.string().min(1).optional(),
-              title: z.string().min(1).optional(),
-              brief: z.string().min(1).optional(),
-              owner: z.string().min(1).optional(),
-              resolution: z.enum(["wont-do", "duplicate", "superseded"]).nullable().optional(),
-              duplicateOf: z.string().optional(),
-              supersededBy: z.string().optional(),
-              reason: z.string().min(1).optional(),
-              briefBasedOn: z.string().min(1).optional(),
-              workerNames: z.array(z.string()).optional(),
-              data: z.record(z.string(), z.unknown()).optional(),
-            },
+              "Update a Swarm Task. Its owner and every seat above the owner can; the owner keeps the record current, and seats above it steer by message and edit only to escalate. The owner is told of changes it did not make. Rewrite brief to record an agreed change, such as a smaller outcome the requester, a seat above the owner or the human agreed to (name who in reason), not to log progress; the requester and the owner's manager get a copy; each field you supply replaces that field, so read the Task first. If you are not the owner, pass the briefUpdatedAt you read as briefBasedOn; a brief rewritten since is not overwritten. The owner confirms a brief another seat wrote by writing it, even unchanged. owner reassigns the Task to you or a seat below you, and the new owner receives it as an assignment. resolution closes it without a result: wont-do, duplicate (with duplicateOf), or superseded (with supersededBy when a Task replaces it), each with a reason; null reopens it with a reason. A Task that produced its result is completed with swarm_task_deliver instead. Swarm records owner, status, resolution, title and brief changes in the Task's history itself. The result is a receipt: the Task's resulting status, resolution, owner and briefUpdatedAt, and who the change reached.",
+            inputSchema: taskWriteInput(taskUpdateShape),
           },
           async (input) => {
             const { seats, actor } = await readSwarm();
-            const { owner, ...fields } = input;
-            return swarmResult(
-              await invokeSwarm("swarm.task.update", {
-                ...fields,
-                ...(owner ? { managerName: seatName(resolveSeat(seats, owner, actor)) } : {}),
-              }),
-            );
+            const { owner, ...fields } = taskFields(taskUpdateShape, input);
+            const updated = (await invokeSwarm("swarm.task.update", {
+              ...fields,
+              ...(owner ? { managerName: seatName(resolveSeat(seats, owner, actor)) } : {}),
+            })) as SwarmTask;
+            return swarmResult(taskReceipt(updated));
           },
         );
         registerTool(
           "swarm_task_deliver",
           {
             description:
-              "Deliver a result on a Swarm Task you own: an outcome the reader can understand or use, and what it means for the commitment. One call records it, sets the Task's state, and sends it to the Task's requester with a copy to your manager, so don't also append an Activity, update the status first, or message the same summary to them. to and cc choose the audience instead: either one replaces both defaults, names are seats or human, and to: [] records without telling anyone, for a result you already gave its requester. The result lists the audience. A seat above the owner delivers only to escalate, when the owner cannot; a delivery it received from below is already recorded. Work without a Task needs no delivery: answer whoever asked in your reply or a message. result is your synthesis for a reader who did not follow the work: the outcome, the decisions that shaped it and why, what is still uncertain, and how to use it, with Markdown links to documents (artifacts, files, PRs) only for detail the reader may need. No execution diary and no forwarded worker reports. Link an artifact with the link swarm_artifact_publish returned; the delivery records the version it carried, so readers see when it changes later. A short complete result needs no artifact. taskState is the Task's state after this delivery: done when the result fulfills the agreed outcome, including its required conditions; open for a useful stage result, such as a finished design while its implementation remains. status optionally moves the Task to a PWA status in the same call. To correct an earlier delivery whose conclusions, confidence or completion claim changed, deliver again with revises set to that delivery's id and say what changed; if the correction means more work is needed, set taskState: open, which reopens a done Task in the same call. Typos and formatting need no revision. Retrying a call that may have failed returns the first delivery.",
+              "Deliver a result on a Swarm Task you own: an outcome the reader can understand or use, and what it means for the commitment. One call records it, sets the Task's state, and sends it to the Task's requester with a copy to your manager, so don't also append an Activity, update the status first, or message the same summary to them. to and cc choose the audience instead: either one replaces both defaults, names are seats or human, and to: [] records without telling anyone, for a result you already gave its requester. The result lists the audience. A seat above the owner delivers only to escalate, when the owner cannot; a delivery it received from below is already recorded. Work without a Task needs no delivery: answer whoever asked in your reply or a message. result is your synthesis for a reader who did not follow the work: the outcome, the decisions that shaped it and why, what is still uncertain, and how to use it, with Markdown links to documents (artifacts, files, PRs) only for detail the reader may need. No execution diary and no forwarded worker reports. Link an artifact with the link swarm_artifact_publish returned; the delivery records the version it carried, so readers see when it changes later. A short complete result needs no artifact. taskState is the Task's state after this delivery: done when the result fulfills the agreed outcome, including its required conditions; open for a useful stage result, such as a finished design while its implementation remains. status optionally moves the Task to a PWA status in the same call. To correct an earlier delivery whose conclusions, confidence or completion claim changed, deliver again with revises set to that delivery's id and say what changed; if the correction means more work is needed, set taskState: open, which reopens a done Task in the same call. Typos and formatting need no revision. The result is a receipt: the delivery's activityId (pass it as revises to correct it), the Task's resulting status and resolution, and who it reached. Retrying a call that may have failed returns the first delivery with duplicate: true.",
             inputSchema: {
               taskId: z.string(),
               result: z.string().min(1),
@@ -1263,10 +1281,12 @@ async function createToolCatalog(
           },
           async (input) =>
             swarmResult(
-              await invokeSwarm("swarm.task.deliver", {
-                ...input,
-                revises: input.revises ?? null,
-              }),
+              deliveryReceipt(
+                (await invokeSwarm("swarm.task.deliver", {
+                  ...input,
+                  revises: input.revises ?? null,
+                })) as Parameters<typeof deliveryReceipt>[0],
+              ),
             ),
         );
         registerTool(
@@ -1303,7 +1323,7 @@ async function createToolCatalog(
           "swarm_activity_append",
           {
             description:
-              'Append an Activity to a Swarm Task you own or are above: a consequential decision, trade-off, blocker or question that Task operations do not already record. Results go through swarm_task_deliver, including stage results while the Task stays open; whether a record links an artifact does not make it one or the other, and owner, status and brief changes are recorded by swarm_task_update; routine progress needs no Activity. It reaches the owner when you are not the owner, and the asker of the Activity it replies to; to and cc address anyone else (seats, or human). To ask the human to choose, set data.action to { type: "choice", prompt, options: [{ id, label, description? }], responseProfiles? }. Link Swarm things as paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, or paseo-swarm://file/<workspace-id>/<relative-path>.',
+              'Append an Activity to a Swarm Task you own or are above: a consequential decision, trade-off, blocker or question that Task operations do not already record. Results go through swarm_task_deliver, including stage results while the Task stays open; whether a record links an artifact does not make it one or the other, and owner, status and brief changes are recorded by swarm_task_update; routine progress needs no Activity. It reaches the owner when you are not the owner, and the asker of the Activity it replies to; to and cc address anyone else (seats, or human). To ask the human to choose, set data.action to { type: "choice", prompt, options: [{ id, label, description? }], responseProfiles? }. Link Swarm things as paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, or paseo-swarm://file/<workspace-id>/<relative-path>. The result is a receipt: the activityId and who it reached.',
             inputSchema: {
               taskId: z.string(),
               kind: z.string().min(1),
@@ -1317,12 +1337,14 @@ async function createToolCatalog(
           },
           async (input) =>
             swarmResult(
-              await invokeSwarm("swarm.activity.append", {
-                ...input,
-                replyTo: input.replyTo ?? null,
-                responseProfile: input.responseProfile ?? null,
-                data: input.data ?? {},
-              }),
+              activityReceipt(
+                (await invokeSwarm("swarm.activity.append", {
+                  ...input,
+                  replyTo: input.replyTo ?? null,
+                  responseProfile: input.responseProfile ?? null,
+                  data: input.data ?? {},
+                })) as SwarmActivity,
+              ),
             ),
         );
       }

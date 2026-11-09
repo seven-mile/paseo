@@ -993,7 +993,7 @@ describe("Swarm MCP coordination", () => {
         items: [],
         total: 0,
       });
-      const { managerName: _owner, ...alpha } = board.tasks[1];
+      const { managerName: _owner, data: _data, ...alpha } = board.tasks[1];
       expect(await read("swarm_task_read", { taskId: "alpha" })).toEqual({
         ...alpha,
         owner: "lead.team",
@@ -1081,7 +1081,20 @@ describe("Swarm MCP coordination", () => {
       const { server, invokePlugin } = await swarmServer(
         "actual-caller",
         [seat("planner.supervisor", roleClass, "actual-caller")],
-        () => ({ id: "review-api" }),
+        (method) => {
+          const task = {
+            id: "review-api",
+            title: "Review API",
+            brief: "Review the API",
+            status: "review",
+            managerName: "planner.supervisor",
+            workerNames: [],
+            updatedAt: "2026-10-07",
+          };
+          return method === "swarm.task.deliver"
+            ? { task, activity: { id: "delivery-1", taskId: task.id }, duplicate: false }
+            : task;
+        },
       );
       try {
         if (roleClass === "worker") {
@@ -1131,6 +1144,184 @@ describe("Swarm MCP coordination", () => {
       }
     },
   );
+
+  it("answers Task writes with receipts", async () => {
+    const audience = [{ name: "human", as: "to", why: "requester" }];
+    const task = {
+      id: "review-api",
+      swarmId: "swarm",
+      title: "Review API",
+      brief: "brief ".repeat(500),
+      status: "review",
+      managerName: "lead",
+      workerNames: [],
+      createdBy: "lead",
+      requester: "human",
+      data: { notes: "accumulated ".repeat(500) },
+      briefUpdatedAt: "2026-10-06",
+      createdAt: "2026-10-06",
+      updatedAt: "2026-10-07",
+    };
+    const activity = {
+      id: "act-1",
+      swarmId: "swarm",
+      taskId: "review-api",
+      actorName: "lead",
+      actorKind: "agent",
+      kind: "decision",
+      body: "body ".repeat(500),
+      replyTo: null,
+      responseProfile: null,
+      createdAt: "2026-10-07",
+      data: { action: { type: "choice" } },
+      refs: [],
+      audience,
+    };
+    const { server, invokePlugin } = await swarmServer(
+      "lead-agent",
+      [seat("lead", "supervisor", "lead-agent")],
+      (method) => {
+        switch (method) {
+          case "swarm.task.create":
+            return { ...task, audience };
+          case "swarm.task.update":
+            return { ...task, status: "done", resolution: "wont-do", audience };
+          case "swarm.task.deliver":
+            return {
+              task: { ...task, resolution: "done" },
+              activity: { ...activity, kind: "delivery" },
+              duplicate: true,
+            };
+          case "swarm.activity.append":
+            return activity;
+          default:
+            return {};
+        }
+      },
+    );
+    const call = async (name: string, input: Record<string, unknown>) =>
+      (await invokeToolWithParsedInput(registeredTool(server, name), input)).structuredContent;
+    try {
+      const receipt = {
+        taskId: "review-api",
+        title: "Review API",
+        owner: "lead",
+        requester: "human",
+        briefUpdatedAt: "2026-10-06",
+        updatedAt: "2026-10-07",
+        audience,
+      };
+      expect(
+        await call("swarm_task_create", {
+          id: "review-api",
+          title: "Review API",
+          brief: "Review the API",
+          status: "review",
+        }),
+      ).toEqual({ ...receipt, status: "review", resolution: null });
+      expect(await call("swarm_task_update", { taskId: "review-api" })).toEqual({
+        ...receipt,
+        status: "done",
+        resolution: "wont-do",
+      });
+      expect(invokePlugin).toHaveBeenLastCalledWith("paseo-swarm", "swarm.task.update", {
+        swarmId: "swarm",
+        taskId: "review-api",
+        actorName: "lead",
+      });
+      expect(
+        await call("swarm_task_deliver", {
+          taskId: "review-api",
+          result: "Done.",
+          taskState: "done",
+        }),
+      ).toEqual({
+        taskId: "review-api",
+        activityId: "act-1",
+        duplicate: true,
+        status: "review",
+        resolution: "done",
+        createdAt: "2026-10-07",
+        audience,
+      });
+      expect(
+        await call("swarm_activity_append", { taskId: "review-api", kind: "decision", body: "x" }),
+      ).toEqual({
+        activityId: "act-1",
+        taskId: "review-api",
+        kind: "decision",
+        createdAt: "2026-10-07",
+        audience,
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("refuses Task data on every call path and passes on only declared Task fields", async () => {
+    const { server, invokePlugin } = await swarmServer(
+      "lead-agent",
+      [seat("lead", "supervisor", "lead-agent")],
+      () => ({ id: "review-api", title: "Review API", status: "review", managerName: "lead" }),
+    );
+    const writes = () =>
+      invokePlugin.mock.calls.filter(([, method]) => method.startsWith("swarm.task."));
+    const client = await connectInMemoryMcpClient(server);
+    try {
+      const create = {
+        id: "review-api",
+        title: "Review API",
+        brief: "Review the API",
+        status: "review",
+      };
+      // MCP clients: the schema reports data instead of dropping it.
+      for (const [name, args] of [
+        ["swarm_task_create", { ...create, data: { notes: "x" } }],
+        ["swarm_task_update", { taskId: "review-api", status: "done", data: { notes: "x" } }],
+      ] as const) {
+        const result = await client.callTool({ name, arguments: args });
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result.content)).toContain("Task data is no longer writable");
+      }
+      // Providers that call the tool catalog directly, such as OpenCode and OMP.
+      await expect(
+        registeredTool(server, "swarm_task_update").handler({
+          taskId: "review-api",
+          status: "done",
+          data: { notes: "x" },
+        }),
+      ).rejects.toThrow("Task data is no longer writable");
+      expect(writes()).toEqual([]);
+
+      await registeredTool(server, "swarm_task_update").handler({
+        taskId: "review-api",
+        status: "done",
+        swarmId: "another-swarm",
+        managerName: "someone-else",
+      });
+      expect(invokePlugin).toHaveBeenLastCalledWith("paseo-swarm", "swarm.task.update", {
+        swarmId: "swarm",
+        taskId: "review-api",
+        status: "done",
+        actorName: "lead",
+      });
+      await registeredTool(server, "swarm_task_create").handler({
+        ...create,
+        swarmId: "another-swarm",
+        createdBy: "someone-else",
+      });
+      expect(invokePlugin).toHaveBeenLastCalledWith("paseo-swarm", "swarm.task.create", {
+        swarmId: "swarm",
+        ...create,
+        managerName: "lead",
+        createdBy: "lead",
+        workerNames: [],
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 
   it("gives seat occupants work tools and no native agent or scheduling tools", async () => {
     const bypassTools = [

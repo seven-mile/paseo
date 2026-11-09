@@ -142,6 +142,15 @@ the whole board, 2.4 MB with 900 Activities, every three seconds, and on slow re
 starved the connection's heartbeat ([architecture](architecture.md)). `swarm.board.read` remains
 for Swarm's agent tools, which call it in process, and for older apps.
 
+Swarm's agent tools (`packages/server/src/server/agent/tools/paseo-tools.ts`) spend the agent's
+context, so they return less than the RPCs behind them. A Task write, delivery or Activity append
+answers with a receipt: ids, the resulting state, and the audience it reached, never the record the
+agent just sent. Agent tools neither read nor write Task `data`, and Task create and update refuse it by name instead of dropping it, so an agent that still sends it learns that nothing was written. Agents used it as a second history
+that grew to tens of thousands of characters per Task, and because an update replaces the whole
+object, a small change meant resubmitting all of it; one exceeded the request size limit. Stored
+Task `data` stays on the record for the RPCs. Activity `data` stays agent-facing, since it carries
+structured human choices.
+
 Seats, Tasks, and Activities belong to a swarm: a directory holding `swarm.yaml`, `PWA.md`, and
 `roles/`, attached to one project and identified by an id the daemon mints. Seat names and Task ids
 are unique within a swarm, so requests that name them carry `swarmId`, or name an actor whose swarm
