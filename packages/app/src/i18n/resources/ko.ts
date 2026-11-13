@@ -129,6 +129,8 @@ export const ko: TranslationResources = {
       status: "작업 상태",
       unavailableInScope: "이 범위에서 작업을 사용할 수 없습니다.",
       emptyScope: "이 범위에 작업이 없습니다.",
+      agentQuestions_one: "에이전트 질문 {{count}}개",
+      agentQuestions_other: "에이전트 질문 {{count}}개",
       awaitingReply_one: "답변 대기 {{count}}개",
       awaitingReply_other: "답변 대기 {{count}}개",
       activityActor: "활동 작성자",

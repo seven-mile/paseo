@@ -25,6 +25,7 @@ import {
   type SwarmActivity,
   type SwarmTaskAgent,
   type SwarmTaskBoard,
+  seatQuestions,
 } from "./task-model";
 
 function agent(name: string, parent: string | null, workspaceId: string | null): SwarmTaskAgent {
@@ -785,5 +786,65 @@ describe("Swarm board lanes", () => {
     expect(
       swarmAttentionTotal([summary("a", { attention: 2 }), summary("b", { attention: 1 })]),
     ).toBe(3);
+  });
+});
+
+describe("seatQuestions", () => {
+  const seat = {
+    id: "seat-dev",
+    paseoAgentId: "agent-dev",
+    name: "dev",
+    qualifiedName: "lead.dev",
+    aliases: [],
+    roleClass: "worker" as const,
+    reportsTo: "lead",
+    workspaceId: "ws-1",
+    retired: false,
+  };
+
+  it("lists provider questions from current seats and leaves other requests out", () => {
+    const pending = new Map([
+      [
+        "agent-dev",
+        [
+          {
+            id: "permission-q1",
+            provider: "codex",
+            name: "request_user_input_async",
+            kind: "question" as const,
+            title: "Question",
+            input: { questions: [{ question: "Which release channel?" }] },
+          },
+          { id: "permission-t1", provider: "codex", name: "shell", kind: "tool" as const },
+        ],
+      ],
+      [
+        "agent-old",
+        [{ id: "q2", provider: "claude", name: "AskUserQuestion", kind: "question" as const }],
+      ],
+    ]);
+
+    expect(
+      seatQuestions(
+        [
+          seat,
+          { ...seat, id: "seat-old", paseoAgentId: "agent-old", name: "old", retired: true },
+          { ...seat, id: "seat-new", paseoAgentId: null, name: "new" },
+        ],
+        (agentId) => pending.get(agentId),
+      ),
+    ).toEqual([
+      {
+        requestId: "permission-q1",
+        seatName: "lead.dev",
+        question: "Which release channel?",
+        reference: {
+          kind: "agent",
+          paseoAgentId: "agent-dev",
+          qualifiedName: "lead.dev",
+          workspaceId: "ws-1",
+        },
+      },
+    ]);
   });
 });

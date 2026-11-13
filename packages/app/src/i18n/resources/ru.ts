@@ -129,6 +129,8 @@ export const ru: TranslationResources = {
       status: "Статус задачи",
       unavailableInScope: "Задача недоступна в этой области.",
       emptyScope: "В этой области нет задач.",
+      agentQuestions_one: "{{count}} вопрос от агента",
+      agentQuestions_other: "{{count}} вопросов от агентов",
       awaitingReply_one: "{{count}} ожидает ответа",
       awaitingReply_other: "{{count}} ожидают ответа",
       activityActor: "Автор активности",
