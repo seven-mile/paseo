@@ -118,7 +118,7 @@ function workingRules(): string[] {
     "- A Task that should not be finished is closed with swarm_task_update: resolution wont-do, duplicate (with duplicateOf), or superseded (with supersededBy when another Task replaces it), and a reason. The human can also close a Task as done as it stands. When someone else closes a Task you own, stop work on it and tell your manager about anything left half-done.",
     '- Mail is for the readers named in to. If you are only in cc (addressed="cc"), it gives you context: it is not a new assignment and needs no acknowledgment. The readers in to answer it and keep their own Tasks; you act on it where it bears on responsibilities you already hold. When a human asks you something directly, answer in your reply.',
     "- A Task recorded for work you already have (kind task-recorded) is not a new assignment: it documents the commitment you already have, including newer authorized instructions, and does not replace them. Carry on from where you are. Check its brief against what you agreed; if it differs or is missing, write it when you next update or deliver on the Task. Your next brief write or delivery confirms the brief. If you already gave the requester the result, deliver it on the Task with to: [] so it is recorded without reaching them twice.",
-    'Envelopes: a team message is <paseo-swarm-team-message id="..." from="..." to="..." cc="..." addressed="..." task="...">, and its body is the sender\'s words; cc, addressed and task are absent when unused, and addressed says whether you are in to or cc when the message has more than one reader. kind marks messages Swarm sends about a Task: task-assigned carries the brief of a Task you now own; task-recorded carries the brief of a Task recorded for work you already have; task-change says who changed your Task and how; task-handover lists Tasks you inherited from a retired seat; delivery carries a result with task-state and the activity id; it is already on the record and has reached everyone in to and cc, so do not deliver it again or forward it to them. activity carries an Activity addressed to you. A human Activity arrives with kind="human_activity" and the activity, activity-kind, reply-to, and response-profile attributes. A turn digest is <paseo-swarm-turn-digest manager="..." turns="N"> with one <turn> per ended turn: agent, task (the Task of the last Task-scoped message that seat received), outcome, detail for canceled or failed turns, files (how many files the turn edited or wrote), and the start of the agent\'s final text. A row marked truncated="true" carries the occupant number; read the rest with swarm_transcript_list.',
+    'Envelopes: a team message is <paseo-swarm-team-message id="..." from="..." to="..." cc="..." addressed="..." task="...">, and its body is the sender\'s words; cc, addressed and task are absent when unused, and addressed says whether you are in to or cc when the message has more than one reader. kind marks messages Swarm sends about a Task: task-assigned carries the brief of a Task you now own; task-recorded carries the brief of a Task recorded for work you already have; task-change says who changed your Task and how; task-handover lists Tasks you inherited from a retired seat; delivery carries a result with task-state and the activity id; it is already on the record and has reached everyone in to and cc, so do not deliver it again or forward it to them. activity carries an Activity addressed to you. A human Activity arrives with kind="human_activity" and the activity, activity-kind, reply-to, and response-profile attributes. A Cc copy carries none of the images or attachments sent to the recipient; its body ends with a list of them, with a file path for each image that you can open if you need it. A turn digest is <paseo-swarm-turn-digest manager="..." turns="N"> with one <turn> per ended turn: agent, task (the Task of the last Task-scoped message that seat received), outcome, detail for canceled or failed turns, files (how many files the turn edited or wrote), and the start of the agent\'s final text. A row marked truncated="true" carries the occupant number; read the rest with swarm_transcript_list.',
     'Human choices: to ask the human to choose, append an Activity with the question, evidence, trade-offs, and your recommendation, and set data.action to { type: "choice", prompt, options: [{ id, label, description? }], responseProfiles? }. responseProfiles names the kinds of reply you accept: decision, steering, or discussion. The board counts a choice as unanswered until a human Activity replies to it with replyTo, often carrying data.selectedOption. Apply what the human wrote; a reply alone is not approval and does not complete the Task. Workers ask their manager to raise the choice, since workers cannot append Activities.',
     "Links: refer to Swarm things with Markdown links to paseo-swarm://agent/<qualified-name>, paseo-swarm://task/<task-id>, and paseo-swarm://file/<workspace-id>/<relative-path>, with each path segment URL-encoded. Use names and ids you read from Swarm, and files you checked exist in that workspace. If you cannot verify a target, describe it in plain text.",
   ];
@@ -286,6 +286,64 @@ export function messagePrompt({
     `<paseo-swarm-team-message${attributes({ ...base, ...extras })}>`,
     message,
     "</paseo-swarm-team-message>",
+  ].join("\n");
+}
+
+export interface CcAttachmentListInput {
+  recipient: string;
+  images: readonly { path: string; mimeType: string; size: number }[];
+  attachments: readonly Record<string, unknown>[];
+}
+
+function byteSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function field(attachment: Record<string, unknown>, name: string): string | null {
+  const value = attachment[name];
+  return typeof value === "string" || typeof value === "number" ? String(value) : null;
+}
+
+function attachmentLine(attachment: Record<string, unknown>): string {
+  const title = field(attachment, "title");
+  const number = field(attachment, "number");
+  const url = field(attachment, "url");
+  switch (attachment.type) {
+    case "forge_change_request":
+    case "github_pr":
+      return `Change request #${number} "${title}": ${url}`;
+    case "forge_issue":
+    case "github_issue":
+      return `Issue #${number} "${title}": ${url}`;
+    case "text": {
+      const text = field(attachment, "text") ?? "";
+      return `Text${title ? ` "${title}"` : ""}, ${text.length} characters`;
+    }
+    case "review": {
+      const comments = Array.isArray(attachment.comments) ? attachment.comments.length : 0;
+      return `Review comments (${comments}) on ${field(attachment, "cwd")}`;
+    }
+    case "uploaded_file":
+      return `File ${field(attachment, "fileName")} (${field(attachment, "mimeType")}, ${byteSize(Number(attachment.size ?? 0))}): ${field(attachment, "path")}`;
+    default:
+      return `Attachment of type ${String(attachment.type)}`;
+  }
+}
+
+// What a Cc copy carries instead of the images and attachments sent to the recipient: one line
+// each, with a path to every image, so a reader that needs one can open it.
+export function ccAttachmentList({
+  recipient,
+  images,
+  attachments,
+}: CcAttachmentListInput): string {
+  if (images.length === 0 && attachments.length === 0) return "";
+  return [
+    `Attachments sent to ${recipient}, not included in your copy:`,
+    ...images.map((image) => `- Image (${image.mimeType}, ${byteSize(image.size)}): ${image.path}`),
+    ...attachments.map((attachment) => `- ${attachmentLine(attachment)}`),
   ].join("\n");
 }
 

@@ -506,8 +506,8 @@ export const sendMessageRpc = defineRpc({
       cc: z.array(z.string().min(1)).default([]),
       // Empty only when the message carries images or attachments.
       body: z.string(),
-      // Sent with the body to the recipient and every Cc seat. Hosts list "attachments" in their
-      // features; older ones drop these fields.
+      // Sent with the body to the recipient. A Cc seat's copy lists them instead, with a file path
+      // for each image. Hosts list "attachments" in their features; older ones drop these fields.
       images: z
         .array(z.object({ data: z.string().min(1), mimeType: z.string().min(1) }))
         .default([]),

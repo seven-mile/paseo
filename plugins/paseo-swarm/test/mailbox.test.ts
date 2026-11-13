@@ -597,41 +597,60 @@ test("rows held past the limit are steered into a manager whose turn end was nev
   assert.match(sends[0].messageId, /^digest-/);
 });
 
-test("a person's images and attachments reach the recipient and its Cc seats, and the image file goes once delivered", async (t) => {
+test("a person's images and attachments reach the recipient, and a Cc seat gets them named by path", async (t) => {
   const { sendInput } = setup(t);
   const { sends, failures, context } = fakePaseo();
   await seed([manager, worker, reviewer]);
   failures.set(worker.paseoAgentId, "Agent is offline");
   const image = { data: Buffer.from("png bytes").toString("base64"), mimeType: "image/png" };
   const attachment = { type: "text", mimeType: "text/plain", title: "Notes", text: "Look here" };
+  const pr = {
+    type: "forge_change_request",
+    mimeType: "application/paseo-forge-change-request",
+    number: 12,
+    title: "Fix login",
+    url: "https://example.com/pull/12",
+  };
   const result = await sendInput(context, {
     recipientName: "manager.worker",
     senderName: "human",
     cc: ["manager.reviewer"],
     body: "See the screenshot",
     images: [image],
-    attachments: [attachment],
+    attachments: [attachment, pr],
   });
   assert.equal(result.status, "queued");
-  // The reviewer's copy went out with the same image and attachment.
-  const copy = sends.find((entry) => entry.agentId === reviewer.paseoAgentId);
-  assert.deepEqual(copy?.images, [image]);
-  assert.deepEqual(copy?.attachments, [attachment]);
-  // The worker's message is still queued, so its image stays on disk and the rows hold only its name.
   const row = new StateStore().read().messages.find((message) => message.id === result.messageId)!;
   assert.equal(row.images?.length, 1);
   assert.doesNotMatch(JSON.stringify(row), /cG5nIGJ5dGVz/);
   const imageDirectory = join(getDataDirectory(), "mail-images");
+  const imagePath = join(imageDirectory, row.images![0].file);
+  assert.match(imagePath, /\.png$/);
+
+  // The reviewer's copy carries no blocks; it names each one after the person's words.
+  const copy = sends.find((entry) => entry.agentId === reviewer.paseoAgentId)!;
+  assert.equal(copy.images, undefined);
+  assert.equal(copy.attachments, undefined);
+  assert.ok(copy.text.includes("See the screenshot\n\nAttachments sent to manager.worker"));
+  assert.ok(copy.text.includes(`- Image (image/png, 9 B): ${imagePath}`));
+  assert.ok(copy.text.includes('- Text "Notes", 9 characters'));
+  assert.ok(copy.text.includes('- Change request #12 "Fix login": https://example.com/pull/12'));
+
+  // The worker's message is still queued, so its image stays on disk.
   sweepMailImages(store.read().messages, Date.now() + MAIL_IMAGE_SWEEP_AGE_MS + 1000);
-  assert.ok(existsSync(join(imageDirectory, row.images![0].file)));
+  assert.ok(existsSync(imagePath));
 
   failures.delete(worker.paseoAgentId);
   await flushMailbox(context);
   const delivered = sends.findLast((entry) => entry.agentId === worker.paseoAgentId);
   assert.deepEqual(delivered?.images, [image]);
-  assert.deepEqual(delivered?.attachments, [attachment]);
-  // A fresh file survives the sweep until it is old enough to belong to no pending send.
-  assert.equal(readdirSync(imageDirectory).length, 1);
+  assert.deepEqual(delivered?.attachments, [attachment, pr]);
+  assert.doesNotMatch(delivered!.text, /Attachments sent to/);
+  // Delivered, the image stays because the Cc copy still names it.
   sweepMailImages(store.read().messages, Date.now() + MAIL_IMAGE_SWEEP_AGE_MS + 1000);
+  assert.ok(existsSync(imagePath));
+  // Once no kept row names it, the sweep removes it.
+  const withoutCopy = store.read().messages.filter((message) => message.files === undefined);
+  sweepMailImages(withoutCopy, Date.now() + MAIL_IMAGE_SWEEP_AGE_MS + 1000);
   assert.equal(readdirSync(imageDirectory).length, 0);
 });

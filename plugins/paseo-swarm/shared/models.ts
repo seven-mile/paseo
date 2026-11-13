@@ -325,6 +325,9 @@ export const mailboxMessageSchema = z.object({
   images: z.array(mailImageSchema).optional(),
   // Paseo agent attachments (files, PRs, review comments, text). The daemon validates them on send.
   attachments: z.array(mailAttachmentSchema).optional(),
+  // Files under mail-images that a Cc copy names by path instead of carrying them. They stay on
+  // disk while the row is kept, so the Cc reader can open one later.
+  files: z.array(z.string().min(1)).optional(),
 });
 export type MailboxMessage = z.infer<typeof mailboxMessageSchema>;
 
