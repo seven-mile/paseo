@@ -39,6 +39,7 @@ import {
   CheckSquare,
   ChevronRight,
   CircleDot,
+  Code,
   Copy,
   FileSymlink,
   Info,
@@ -82,10 +83,16 @@ import Animated, {
 import Svg, { Defs, Rect, Stop, LinearGradient as SvgLinearGradient } from "react-native-svg";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useSettings } from "@/hooks/use-settings";
-import { parseSwarmEnvelope, personMailWords } from "@/swarm/system-envelope";
+import {
+  parsePersonMail,
+  parseSwarmEnvelope,
+  type PersonMail,
+  type SwarmEnvelope,
+} from "@/swarm/system-envelope";
 import {
   SwarmEnvelopeBody,
   SwarmEnvelopeOriginal,
+  SwarmEnvelopeOriginalText,
   swarmEnvelopeStartsExpanded,
   swarmEnvelopeTitleKeys,
   type SwarmEnvelopeCardProps,
@@ -392,6 +399,26 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: STREAM_METADATA_FONT_SIZE,
   },
+  mailMetaRow: {
+    alignSelf: "flex-end",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
+    marginTop: theme.spacing[1],
+    maxWidth: "100%",
+  },
+  mailMeta: {
+    flexShrink: 1,
+    textAlign: "right",
+    color: theme.colors.foregroundMuted,
+    fontSize: STREAM_METADATA_FONT_SIZE,
+  },
+  mailOriginal: {
+    alignSelf: "stretch",
+    marginTop: theme.spacing[2],
+    borderRadius: theme.borderRadius.lg,
+    overflow: "hidden",
+  },
 }));
 
 interface UserMessageImagePillProps {
@@ -452,13 +479,50 @@ function SwarmEnvelopeMessage({ envelope, original }: SwarmEnvelopeCardProps) {
   );
 }
 
-// A person's own Swarm mail reads as their message; other Swarm envelopes render as cards.
-function useUserMessageText(rawMessage: string, sourceMessage: string) {
+// A person's own Swarm mail reads as their message, with who it went to; other Swarm envelopes
+// render as cards.
+function useUserMessageText(
+  rawMessage: string,
+  sourceMessage: string,
+): { message: string; envelope: SwarmEnvelope | null; mail: PersonMail | null } {
   return useMemo(() => {
-    const personMail = personMailWords(sourceMessage);
-    if (personMail !== null) return { message: personMail, envelope: null };
-    return { message: rawMessage, envelope: parseSwarmEnvelope(sourceMessage) };
+    const mail = parsePersonMail(sourceMessage);
+    if (mail !== null) return { message: mail.words, envelope: null, mail };
+    return { message: rawMessage, envelope: parseSwarmEnvelope(sourceMessage), mail: null };
   }, [rawMessage, sourceMessage]);
+}
+
+// Under a person's Swarm mail: who it went to, the Task it was about, and the envelope the agent
+// received, which the bubble shows only the words of.
+function PersonMailFooter({ mail, original }: { mail: PersonMail | null; original: string }) {
+  const { t } = useTranslation();
+  const [shown, setShown] = useState(false);
+  const toggle = useCallback(() => setShown((value) => !value), []);
+  if (!mail) return null;
+  const parts = [
+    mail.to ? t("swarm.cc.to", { name: mail.to }) : null,
+    mail.cc.length > 0 ? t("message.mail.cc", { names: mail.cc.join(", ") }) : null,
+    mail.task ? t("message.mail.task", { task: mail.task }) : null,
+  ].filter((part): part is string => part !== null);
+  return (
+    <>
+      <View style={userMessageStylesheet.mailMetaRow}>
+        <Text
+          style={userMessageStylesheet.mailMeta}
+          numberOfLines={2}
+          testID="user-message-mail-meta"
+        >
+          {parts.join(" · ")}
+        </Text>
+        <ViewOriginalButton shown={shown} onToggle={toggle} />
+      </View>
+      {shown ? (
+        <View style={userMessageStylesheet.mailOriginal}>
+          <SwarmEnvelopeOriginalText original={original} />
+        </View>
+      ) : null}
+    </>
+  );
 }
 
 export const UserMessage = memo(function UserMessage({
@@ -488,7 +552,7 @@ export const UserMessage = memo(function UserMessage({
     [lightboxMetadata],
   );
   const resolvedDisableOuterSpacing = useDisableOuterSpacing(disableOuterSpacing);
-  const { message, envelope } = useUserMessageText(rawMessage, sourceMessage);
+  const { message, envelope, mail } = useUserMessageText(rawMessage, sourceMessage);
   const hasText = message.trim().length > 0;
   const hasImages = images.length > 0;
   const hasAttachments = attachments.length > 0;
@@ -620,6 +684,7 @@ export const UserMessage = memo(function UserMessage({
             </MessagePreview>
           )}
         </View>
+        <PersonMailFooter mail={mail} original={sourceMessage} />
         {hasText ? (
           <View
             style={trailingRowStyle}
@@ -902,6 +967,49 @@ const turnCopyButtonStylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
   },
 }));
+
+interface ViewOriginalButtonProps {
+  shown: boolean;
+  onToggle: () => void;
+  containerStyle?: StyleProp<ViewStyle>;
+}
+
+// Shows the exact text the agent received, beside copy, for a message the bubble shows otherwise.
+const ViewOriginalButton = memo(function ViewOriginalButton({
+  shown,
+  onToggle,
+  containerStyle,
+}: ViewOriginalButtonProps) {
+  const { t } = useTranslation();
+  const pressableStyle = useMemo(
+    () => [turnCopyButtonStylesheet.container, containerStyle],
+    [containerStyle],
+  );
+  const state = useMemo(() => ({ expanded: shown }), [shown]);
+  return (
+    <Pressable
+      onPress={onToggle}
+      style={pressableStyle}
+      accessibilityRole="button"
+      accessibilityState={state}
+      accessibilityLabel={
+        shown ? t("message.actions.hideOriginal") : t("message.actions.viewOriginal")
+      }
+      testID="user-message-view-original"
+    >
+      {({ hovered }) => (
+        <Code
+          size={ICON_SIZE.sm}
+          color={
+            hovered || shown
+              ? turnCopyButtonStylesheet.iconHoveredColor.color
+              : turnCopyButtonStylesheet.iconColor.color
+          }
+        />
+      )}
+    </Pressable>
+  );
+});
 
 interface TurnCopyButtonProps {
   getContent: () => string;

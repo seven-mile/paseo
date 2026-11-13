@@ -53,6 +53,9 @@ export const en = {
       openTask: "Open {{title}}",
       showAll: "Show all",
       showLatest: "Show latest",
+      openResults: "Show results for you",
+      dismissResult: "Hide this result",
+      mailMore: "Show {{count}} more",
       handover: {
         new: "Occupant {{to}} took over from occupant {{from}} {{time}} ({{reason}}).",
         returning: "Occupant {{to}} came back to the seat {{time}} ({{reason}}).",
@@ -62,6 +65,7 @@ export const en = {
         givenReturning:
           "Its own session, resumed, so it remembers its turns from before it left, plus a return brief and the message that woke it. Occupant {{from}}'s conversation was not given to it.",
         showPrevious: "Show occupant {{from}}",
+        dismiss: "Hide this handover",
       },
     },
     message: {
@@ -521,6 +525,10 @@ export const en = {
       },
       originalMessage: "Original message",
     },
+    mail: {
+      cc: "Cc {{names}}",
+      task: "Task {{task}}",
+    },
     diagram: {
       diagram: "Diagram",
       zoomIn: "Zoom in",
@@ -534,6 +542,8 @@ export const en = {
       copyCode: "Copy code",
       copyTurn: "Copy turn",
       copyMessage: "Copy message",
+      viewOriginal: "View original",
+      hideOriginal: "Hide original",
       forkMenu: "Fork chat from here",
       forkInNewTab: "Fork in a new tab",
       forkInNewWorkspace: "Fork in a new workspace",

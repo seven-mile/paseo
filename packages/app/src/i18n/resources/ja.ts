@@ -57,6 +57,9 @@ export const ja: TranslationResources = {
       openTask: "{{title}} を開く",
       showAll: "すべて表示",
       showLatest: "最新のみ表示",
+      openResults: "あなた宛ての結果を表示",
+      dismissResult: "この結果を非表示",
+      mailMore: "さらに {{count}} 件表示",
       handover: {
         new: "担当者 {{to}} が{{time}}に担当者 {{from}} から引き継ぎました ({{reason}})。",
         returning: "担当者 {{to}} が{{time}}にシートに戻りました ({{reason}})。",
@@ -66,6 +69,7 @@ export const ja: TranslationResources = {
         givenReturning:
           "自身のセッションを再開したため、離任前のターンを覚えています。加えて復帰の概要と起こしたメッセージ。担当者 {{from}} の会話は渡されていません。",
         showPrevious: "担当者 {{from}} を表示",
+        dismiss: "この引き継ぎを非表示",
       },
     },
     message: {
@@ -530,6 +534,10 @@ export const ja: TranslationResources = {
       },
       originalMessage: "元のメッセージ",
     },
+    mail: {
+      cc: "CC: {{names}}",
+      task: "タスク {{task}}",
+    },
     diagram: {
       diagram: "図",
       zoomIn: "拡大",
@@ -543,6 +551,8 @@ export const ja: TranslationResources = {
       copyCode: "コードをコピー",
       copyTurn: "ターンをコピー",
       copyMessage: "メッセージをコピー",
+      viewOriginal: "元のメッセージを表示",
+      hideOriginal: "元のメッセージを隠す",
       forkMenu: "メッセージをフォーク",
       forkInNewTab: "新しいタブにフォーク",
       forkInNewWorkspace: "新しいワークスペースにフォーク",

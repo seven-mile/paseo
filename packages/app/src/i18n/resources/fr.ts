@@ -58,6 +58,9 @@ export const fr: TranslationResources = {
       openTask: "Ouvrir {{title}}",
       showAll: "Tout afficher",
       showLatest: "Afficher le dernier",
+      openResults: "Afficher les résultats pour vous",
+      dismissResult: "Masquer ce résultat",
+      mailMore: "Afficher {{count}} de plus",
       handover: {
         new: "L'occupant {{to}} a pris la relève de l'occupant {{from}} {{time}} ({{reason}}).",
         returning: "L'occupant {{to}} est revenu au poste {{time}} ({{reason}}).",
@@ -67,6 +70,7 @@ export const fr: TranslationResources = {
         givenReturning:
           "Sa propre session, reprise : il se souvient de ses tours d'avant son départ. Il a aussi reçu une note de retour et le message qui l'a réveillé. La conversation de l'occupant {{from}} ne lui a pas été donnée.",
         showPrevious: "Afficher l'occupant {{from}}",
+        dismiss: "Masquer cette passation",
       },
     },
     message: {
@@ -533,6 +537,10 @@ export const fr: TranslationResources = {
       },
       originalMessage: "Message d’origine",
     },
+    mail: {
+      cc: "Cc {{names}}",
+      task: "Tâche {{task}}",
+    },
     diagram: {
       diagram: "Diagramme",
       zoomIn: "Zoomer",
@@ -546,6 +554,8 @@ export const fr: TranslationResources = {
       copyCode: "Copier le code",
       copyTurn: "Copier l’échange",
       copyMessage: "Copier le message",
+      viewOriginal: "Voir l’original",
+      hideOriginal: "Masquer l’original",
       forkMenu: "Forker la conversation à partir d’ici",
       forkInNewTab: "Forker dans un nouvel onglet",
       forkInNewWorkspace: "Forker dans un nouvel espace de travail",

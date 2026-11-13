@@ -7,7 +7,7 @@ import {
   undeliveredMail,
   type SeatMail,
 } from "./seat-model";
-import { personMailWords } from "./system-envelope";
+import { parsePersonMail, personMailWords } from "./system-envelope";
 
 const baseSeat: SwarmSeat = {
   id: "seat-dev",
@@ -165,6 +165,19 @@ describe("seat mail", () => {
         '<paseo-swarm-team-message id="m1" from="human" to="lead.dev">\nFix the flaky test\nplease\n</paseo-swarm-team-message>',
       ),
     ).toBe("Fix the flaky test\nplease");
+  });
+
+  it("reads who the person's message went to and its Task", () => {
+    expect(
+      parsePersonMail(
+        '<paseo-swarm-team-message id="m1" from="human" to="lead.dev" cc="lead,planner" addressed="cc" task="fix-login">\nShip it\n</paseo-swarm-team-message>',
+      ),
+    ).toEqual({ words: "Ship it", to: "lead.dev", cc: ["lead", "planner"], task: "fix-login" });
+    expect(
+      parsePersonMail(
+        '<paseo-swarm-team-message id="m1" from="human" to="lead.dev">\nHi\n</paseo-swarm-team-message>',
+      ),
+    ).toEqual({ words: "Hi", to: "lead.dev", cc: [], task: null });
   });
 
   it("leaves team messages from other seats as cards", () => {

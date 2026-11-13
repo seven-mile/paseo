@@ -56,6 +56,9 @@ export const ko: TranslationResources = {
       openTask: "{{title}} 열기",
       showAll: "모두 보기",
       showLatest: "최신만 보기",
+      openResults: "나에게 온 결과 보기",
+      dismissResult: "이 결과 숨기기",
+      mailMore: "{{count}}개 더 보기",
       handover: {
         new: "담당자 {{to}}이(가) {{time}} 담당자 {{from}}에게서 이어받았습니다 ({{reason}}).",
         returning: "담당자 {{to}}이(가) {{time}} 자리로 돌아왔습니다 ({{reason}}).",
@@ -65,6 +68,7 @@ export const ko: TranslationResources = {
         givenReturning:
           "자신의 세션을 재개했으므로 떠나기 전의 턴을 기억합니다. 복귀 요약과 깨운 메시지도 받았습니다. 담당자 {{from}}의 대화는 받지 않았습니다.",
         showPrevious: "담당자 {{from}} 보기",
+        dismiss: "이 인계 숨기기",
       },
     },
     message: {
@@ -525,6 +529,10 @@ export const ko: TranslationResources = {
       },
       originalMessage: "원본 메시지",
     },
+    mail: {
+      cc: "참조 {{names}}",
+      task: "작업 {{task}}",
+    },
     diagram: {
       diagram: "다이어그램",
       zoomIn: "확대",
@@ -538,6 +546,8 @@ export const ko: TranslationResources = {
       copyCode: "코드 복사",
       copyTurn: "턴 복사",
       copyMessage: "메시지 복사",
+      viewOriginal: "원본 보기",
+      hideOriginal: "원본 숨기기",
       forkMenu: "여기에서 채팅 분기",
       forkInNewTab: "새 탭으로 분기",
       forkInNewWorkspace: "새 워크스페이스로 분기",

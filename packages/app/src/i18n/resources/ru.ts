@@ -56,6 +56,9 @@ export const ru: TranslationResources = {
       openTask: "Открыть {{title}}",
       showAll: "Показать все",
       showLatest: "Показать последний",
+      openResults: "Показать результаты для вас",
+      dismissResult: "Скрыть этот результат",
+      mailMore: "Показать ещё {{count}}",
       handover: {
         new: "Агент {{to}} сменил агента {{from}} {{time}} ({{reason}}).",
         returning: "Агент {{to}} вернулся на место {{time}} ({{reason}}).",
@@ -65,6 +68,7 @@ export const ru: TranslationResources = {
         givenReturning:
           "Свою сессию, возобновлённую, поэтому он помнит свои ходы до ухода, а также сводку возвращения и сообщение, которое его разбудило. Разговор агента {{from}} ему не передан.",
         showPrevious: "Показать агента {{from}}",
+        dismiss: "Скрыть эту передачу",
       },
     },
     message: {
@@ -529,6 +533,10 @@ export const ru: TranslationResources = {
       },
       originalMessage: "Исходное сообщение",
     },
+    mail: {
+      cc: "Копия: {{names}}",
+      task: "Задача {{task}}",
+    },
     diagram: {
       diagram: "Диаграмма",
       zoomIn: "Увеличить масштаб",
@@ -542,6 +550,8 @@ export const ru: TranslationResources = {
       copyCode: "Скопировать код",
       copyTurn: "Скопировать ответ",
       copyMessage: "Копировать сообщение",
+      viewOriginal: "Показать оригинал",
+      hideOriginal: "Скрыть оригинал",
       forkMenu: "Форкнуть чат отсюда",
       forkInNewTab: "Создать форк в новой вкладке",
       forkInNewWorkspace: "Создать форк в новом рабочем пространстве",
