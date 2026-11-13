@@ -6,7 +6,7 @@ import {
 } from "./agent-messages/index.js";
 import { expect, test, vi, onTestFinished } from "vitest";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -27,6 +27,7 @@ import { projectTimelineRows } from "./timeline-projection.js";
 import { getOpenAgentTabLabel, PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import { startAgentRun } from "./agent-prompt.js";
 import { buildAgentPrompt } from "./prompt-attachments.js";
+import { PromptImageStore } from "./prompt-images.js";
 import { StaleProviderSessionError } from "./stale-provider-session-error.js";
 import { ensureAgentLoaded, ensureUnarchivedAgentLoaded } from "./agent-loading.js";
 import type { StoredAgentRecord } from "./agent-storage.js";
@@ -11160,6 +11161,41 @@ test("a submitted prompt records what it attached on its timeline row", async ()
         ],
       },
     ]);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a submitted image is kept for its timeline row until the agent's state is deleted", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-prompt-images-"));
+  const promptImages = new PromptImageStore(join(workdir, "prompt-images"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    promptImages,
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const prompt = buildAgentPrompt("Look at this", [
+      { data: Buffer.from("png bytes").toString("base64"), mimeType: "image/png" },
+    ]);
+    await startAgentRun(manager, agent.id, prompt, logger, {
+      runOptions: { clientMessageId: "prompt-image" },
+    });
+    await manager.waitForAgentEvent(agent.id);
+
+    const row = manager.getTimeline(agent.id).find((item) => item.type === "user_message");
+    const kept = row?.type === "user_message" ? row.attachments?.[0]?.path : undefined;
+    expect(kept).toBeDefined();
+    await promptImages.flush();
+    expect(readFileSync(kept!, "utf8")).toBe("png bytes");
+
+    await manager.closeAgent(agent.id);
+    await manager.deleteAgentState(agent.id);
+    expect(existsSync(kept!)).toBe(false);
   } finally {
     await manager.closeAgent(agent.id).catch(() => undefined);
     rmSync(workdir, { recursive: true, force: true });

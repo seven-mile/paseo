@@ -53,6 +53,8 @@ $PASEO_HOME/
 ├── agents/
 │   └── {sanitized-cwd}/
 │       └── {agentId}.json               # One file per agent
+├── prompt-images/
+│   └── {agentId}/{sha256}.{ext}         # Images people sent; deleted with the agent's state
 ├── schedules/
 │   └── {scheduleId}.json                # One file per schedule
 ├── projects/

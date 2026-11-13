@@ -728,6 +728,8 @@ export const UserMessageAttachmentSummarySchema = z.object({
   commentCount: z.number().optional(),
   providerLabel: z.string().optional(),
   identifier: z.string().optional(),
+  // An image the host kept: an absolute path on the host, read like any other file.
+  path: z.string().optional(),
 });
 export type UserMessageAttachmentSummary = z.infer<typeof UserMessageAttachmentSummarySchema>;
 

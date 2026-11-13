@@ -1,5 +1,6 @@
 import { MessagePreview, MessageSender } from "@/components/user-message";
 import { useStableEvent } from "@/hooks/use-stable-event";
+import { useKeptImage } from "@/attachments/kept-image";
 import {
   getAgentAttachmentPillContent,
   getAttachmentSummaryPillContent,
@@ -532,11 +533,49 @@ function PersonMailFooter({ mail, original }: { mail: PersonMail | null; origina
 function attachmentSummaryKeys(summaries: UserMessageAttachmentSummary[]): string[] {
   const seen = new Map<string, number>();
   return summaries.map((summary) => {
-    const base = `${summary.type}:${summary.url ?? summary.fileName ?? summary.title ?? ""}`;
+    const name = summary.path ?? summary.url ?? summary.fileName ?? summary.title ?? "";
+    const base = `${summary.type}:${name}`;
     const count = seen.get(base) ?? 0;
     seen.set(base, count + 1);
     return `${base}:${count}`;
   });
+}
+
+interface AttachmentSummaryPillProps {
+  summary: UserMessageAttachmentSummary;
+  client: DaemonClient | null | undefined;
+  serverId: string | undefined;
+  onOpenImage: (image: UserMessageImageAttachment) => void;
+}
+
+function AttachmentSummaryLabel({ summary }: { summary: UserMessageAttachmentSummary }) {
+  const { t } = useTranslation();
+  const content = getAttachmentSummaryPillContent(summary, t);
+  return (
+    <AttachmentFrame>
+      <AttachmentLabel icon={content.icon} title={content.title} subtitle={content.subtitle} />
+    </AttachmentFrame>
+  );
+}
+
+// An image the host kept shows as a thumbnail once it loads, and as a card until then or if it
+// can't be read.
+function KeptImageSummaryPill({
+  summary,
+  client,
+  serverId,
+  onOpenImage,
+}: AttachmentSummaryPillProps) {
+  const { t } = useTranslation();
+  const image = useKeptImage({ client, serverId, path: summary.path });
+  if (!image) return <AttachmentSummaryLabel summary={summary} />;
+  return (
+    <UserMessageImagePill
+      image={image}
+      onOpen={onOpenImage}
+      accessibilityLabel={t("composer.attachments.openImage")}
+    />
+  );
 }
 
 // The daemon's record of what a message carried, shown when this client has no local copy:
@@ -545,28 +584,31 @@ function AttachmentSummaryPills({
   summaries,
   localCount,
   style,
-}: {
+  client,
+  serverId,
+  onOpenImage,
+}: Omit<AttachmentSummaryPillProps, "summary"> & {
   summaries: UserMessageAttachmentSummary[] | undefined;
   localCount: number;
   style: StyleProp<ViewStyle>;
 }) {
-  const { t } = useTranslation();
   if (localCount > 0 || !summaries || summaries.length === 0) return null;
   const keys = attachmentSummaryKeys(summaries);
   return (
     <View style={style} testID="user-message-attachment-summaries">
-      {summaries.map((summary, position) => {
-        const content = getAttachmentSummaryPillContent(summary, t);
-        return (
-          <AttachmentFrame key={keys[position]}>
-            <AttachmentLabel
-              icon={content.icon}
-              title={content.title}
-              subtitle={content.subtitle}
-            />
-          </AttachmentFrame>
-        );
-      })}
+      {summaries.map((summary, position) =>
+        summary.type === "image" && summary.path ? (
+          <KeptImageSummaryPill
+            key={keys[position]}
+            summary={summary}
+            client={client}
+            serverId={serverId}
+            onOpenImage={onOpenImage}
+          />
+        ) : (
+          <AttachmentSummaryLabel key={keys[position]} summary={summary} />
+        ),
+      )}
     </View>
   );
 }
@@ -703,6 +745,9 @@ export const UserMessage = memo(function UserMessage({
         summaries={attachmentSummaries}
         localCount={images.length + attachments.length}
         style={attachmentPreviewContainerStyle}
+        client={client}
+        serverId={serverId}
+        onOpenImage={setLightboxMetadata}
       />
     </>
   );
