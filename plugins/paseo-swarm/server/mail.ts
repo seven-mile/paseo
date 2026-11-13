@@ -12,6 +12,7 @@ export interface EnqueueInput {
   render: (id: string) => string;
   images?: readonly MailImage[];
   attachments?: readonly MailAttachment[];
+  files?: readonly string[];
 }
 
 // A queued message record. A commit that must not happen without its mail puts it alongside its
@@ -35,5 +36,6 @@ export function newMessage(input: EnqueueInput): MailboxMessage {
     failedAt: null,
     ...(input.images?.length ? { images: [...input.images] } : {}),
     ...(input.attachments?.length ? { attachments: [...input.attachments] } : {}),
+    ...(input.files?.length ? { files: [...input.files] } : {}),
   };
 }

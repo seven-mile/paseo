@@ -4,7 +4,13 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { listPwaRoles, readPwa, readPwaFiles } from "./pwa";
-import { messagePrompt, messageReceipt, refreshedPrompt, turnDigestRow } from "./prompts";
+import {
+  ccAttachmentList,
+  messagePrompt,
+  messageReceipt,
+  refreshedPrompt,
+  turnDigestRow,
+} from "./prompts";
 import {
   assemblePrompt,
   findSeat,
@@ -18,7 +24,7 @@ import {
 } from "./seats";
 import type { TurnSummary } from "./turns";
 import { enqueueMessage, flushMailbox, sendThroughMailbox } from "./mailbox";
-import { storeMailImages } from "./mail-images";
+import { mailImagePath, storeMailImages } from "./mail-images";
 import { makeActivity, registerTasks } from "./tasks";
 import { artifactsView, artifactView, findArtifact, publishArtifact } from "./artifacts";
 import { store } from "./state";
@@ -427,9 +433,23 @@ async function sendWithCopies(
     ).values(),
   ];
   const cc = copiedSeats.map(agentQualifiedName);
-  const images = storeMailImages(input.images ?? []);
-  const queue = (seat: AgentRecord) =>
-    enqueueMessage({
+  const stored = storeMailImages(input.images ?? []);
+  const images = stored.map(({ file, mimeType }) => ({ file, mimeType }));
+  // The recipient gets the images and attachments themselves. A Cc copy is for awareness, so it
+  // names them instead and keeps the image files on disk for as long as the copy is kept.
+  const ccList = ccAttachmentList({
+    recipient: to,
+    images: stored.map(({ file, mimeType, size }) => ({
+      path: mailImagePath(file),
+      mimeType,
+      size,
+    })),
+    attachments: input.attachments ?? [],
+  });
+  const ccBody = [input.body, ccList].filter(Boolean).join("\n\n");
+  const queue = (seat: AgentRecord) => {
+    const addressed = seat.id === input.recipient.id ? "to" : "cc";
+    return enqueueMessage({
       recipientAgentId: seat.id,
       recipientName: agentQualifiedName(seat),
       senderName: input.sender,
@@ -441,14 +461,16 @@ async function sendWithCopies(
           sender: input.sender,
           recipient: to,
           cc,
-          addressed: seat.id === input.recipient.id ? "to" : "cc",
-          message: input.body,
+          addressed,
+          message: addressed === "to" ? input.body : ccBody,
           taskId: input.taskId,
           attributes: input.attributes,
         }),
-      images,
-      attachments: input.attachments,
+      ...(addressed === "to"
+        ? { images, attachments: input.attachments }
+        : { files: images.map((image) => image.file) }),
     });
+  };
   const message = await queue(input.recipient);
   const copies = [];
   for (const seat of copiedSeats) copies.push(await queue(seat));
