@@ -236,7 +236,10 @@ footer, and leaves the message without its image previews.
 The daemon records a summary of each attachment on the canonical `user_message` (`attachments`: kind,
 title, number, file name, size), never its contents. Clients without a local copy, such as another
 device, a reload, or mail from a Swarm seat, draw cards from those summaries. A row that has local
-images or attachments keeps showing those.
+images or attachments keeps showing those. An image summary also carries the `path` where the host
+kept the image (`$PASEO_HOME/prompt-images`). The app reads it through the file RPC and shows a
+thumbnail, or the card if the read fails. The file is written just after the row is recorded, so
+the read retries. Internal agents keep nothing on disk, so their image summaries have no path.
 
 A submitted prompt is one `UserMessageItem` row. That row is the authoritative local presentation:
 its stable identity, text, timestamp, images, and attachments do not change when the provider

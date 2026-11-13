@@ -84,17 +84,21 @@ function summarizeAttachment(attachment: AgentAttachment): UserMessageAttachment
 
 // What a prompt carried besides its text, for its timeline row: names and sizes, never bodies or
 // image bytes, so the row stays small and any client can draw the cards.
+// `keepImage` stores an image and returns where, so clients can show it again.
 export function summarizePromptAttachments(
   prompt: AgentPromptInput,
+  keepImage?: (image: { data: string; mimeType: string }) => string | null,
 ): UserMessageAttachmentSummary[] {
   if (typeof prompt === "string") return [];
   return prompt.flatMap((block): UserMessageAttachmentSummary[] => {
     if (block.type === "image" && "data" in block) {
+      const kept = keepImage?.({ data: block.data, mimeType: block.mimeType });
       return [
         {
           type: "image",
           mimeType: block.mimeType,
           size: Math.floor((block.data.length * 3) / 4),
+          ...(kept ? { path: kept } : {}),
         },
       ];
     }
