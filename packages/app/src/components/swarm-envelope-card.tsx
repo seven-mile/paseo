@@ -105,12 +105,17 @@ export function SwarmEnvelopeOriginal({
       >
         {t("message.envelope.originalMessage")}
       </Button>
-      {expanded ? (
-        <Text selectable style={styles.original} testID="swarm-envelope-original">
-          {original}
-        </Text>
-      ) : null}
+      {expanded ? <SwarmEnvelopeOriginalText original={original} /> : null}
     </View>
+  );
+}
+
+// The exact text the agent received, as a selectable monospace block.
+export function SwarmEnvelopeOriginalText({ original }: { original: string }) {
+  return (
+    <Text selectable style={styles.original} testID="swarm-envelope-original">
+      {original}
+    </Text>
   );
 }
 

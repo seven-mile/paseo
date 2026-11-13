@@ -56,6 +56,9 @@ export const ar: TranslationResources = {
       openTask: "فتح {{title}}",
       showAll: "عرض الكل",
       showLatest: "عرض الأحدث",
+      openResults: "عرض النتائج الموجهة إليك",
+      dismissResult: "إخفاء هذه النتيجة",
+      mailMore: "عرض {{count}} أخرى",
       handover: {
         new: "تسلّم الشاغل {{to}} من الشاغل {{from}} {{time}} ({{reason}}).",
         returning: "عاد الشاغل {{to}} إلى المقعد {{time}} ({{reason}}).",
@@ -65,6 +68,7 @@ export const ar: TranslationResources = {
         givenReturning:
           "جلسته الخاصة، مستأنفة، لذا يتذكر أدواره قبل مغادرته، بالإضافة إلى ملخص عودة والرسالة التي أيقظته. لم تُعطَ له محادثة الشاغل {{from}}.",
         showPrevious: "عرض الشاغل {{from}}",
+        dismiss: "إخفاء هذا التسليم",
       },
     },
     message: {
@@ -523,6 +527,10 @@ export const ar: TranslationResources = {
       },
       originalMessage: "الرسالة الأصلية",
     },
+    mail: {
+      cc: "نسخة إلى {{names}}",
+      task: "المهمة {{task}}",
+    },
     diagram: {
       diagram: "مخطط",
       zoomIn: "تكبير",
@@ -536,6 +544,8 @@ export const ar: TranslationResources = {
       copyCode: "نسخ الرمز",
       copyTurn: "نسخ بدوره",
       copyMessage: "انسخ الرسالة",
+      viewOriginal: "عرض الأصل",
+      hideOriginal: "إخفاء الأصل",
       forkMenu: "تفريع الرسالة",
       forkInNewTab: "تفريع في تبويب جديد",
       forkInNewWorkspace: "تفريع في مساحة عمل جديدة",

@@ -1,18 +1,21 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import {
   Armchair,
   ChevronDown,
-  ChevronRight,
   ChevronUp,
   Clock,
+  Inbox,
   Paperclip,
   SquareArrowOutUpRight,
+  X,
 } from "lucide-react-native";
 import { useShallow } from "zustand/shallow";
+import { AdaptiveModalSheet } from "@/components/adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
+import { PressHighlight } from "@/components/ui/press-highlight";
 import { CONTROL_HEIGHTS } from "@/components/ui/control-geometry";
 import {
   DropdownMenu,
@@ -55,6 +58,7 @@ import {
   useUndeliveredSeatMail,
 } from "./seat-mail";
 import { defaultSwarmCc } from "./task-model";
+import { seatSeenKey, useSeatSeen } from "./seat-seen-store";
 import {
   latestHandover,
   seatConversationAgentId,
@@ -68,6 +72,7 @@ export const ThemedSeatIcon = withUnistyles(Armchair);
 const ThemedChevronDown = withUnistyles(ChevronDown);
 const ThemedClock = withUnistyles(Clock);
 const ThemedPaperclip = withUnistyles(Paperclip);
+const ThemedInbox = withUnistyles(Inbox);
 
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
@@ -177,6 +182,20 @@ function SeatConversationContent({
     [attachmentsSupported, plugin, t],
   );
   const showCurrent = useCallback(() => setViewedAgentId(null), []);
+  const seatKey = seatSeenKey(plugin.serverId, seat.id);
+  const seeResult = useSeatSeen((state) => state.seeResult);
+  const seenResult = useSeatSeen((state) => state.results[seatKey] ?? null);
+  const [resultsOpen, setResultsOpen] = useState(false);
+  const newestResult = deliveries[0]?.activityId ?? null;
+  const openResults = useCallback(() => {
+    setResultsOpen(true);
+    if (newestResult) seeResult(seatKey, newestResult);
+  }, [newestResult, seatKey, seeResult]);
+  const closeResults = useCallback(() => setResultsOpen(false), []);
+  const dismissResult = useCallback(() => {
+    if (newestResult) seeResult(seatKey, newestResult);
+  }, [newestResult, seatKey, seeResult]);
+  const resultsWorkspaceId = seat.workspaceId ?? workspaceId;
   const aboveInput = useMemo(
     () => (
       <>
@@ -216,13 +235,21 @@ function SeatConversationContent({
         occupants={occupants}
         shown={shownOccupant ?? null}
         onShow={setViewedAgentId}
+        results={deliveries.length}
+        unreadResults={newestResult !== null && newestResult !== seenResult}
+        onOpenResults={openResults}
       />
       {handover && !viewedPast ? (
-        <HandoverRow handover={handover} onShow={setViewedAgentId} />
+        <HandoverRow handover={handover} seatKey={seatKey} onShow={setViewedAgentId} />
       ) : null}
-      <SeatDeliveries
+      {deliveries[0] && newestResult !== seenResult ? (
+        <SeatResultBar delivery={deliveries[0]} onOpen={openResults} onDismiss={dismissResult} />
+      ) : null}
+      <SeatResultsSheet
+        visible={resultsOpen}
+        onClose={closeResults}
         serverId={plugin.serverId}
-        workspaceId={seat.workspaceId ?? workspaceId}
+        workspaceId={resultsWorkspaceId}
         deliveries={deliveries}
       />
       {shownAgentId && workspaceId ? (
@@ -252,56 +279,98 @@ function SeatConversationContent({
   );
 }
 
+// The newest result the person has not seen, pinned under the header on one line. Opening it
+// shows every result; closing it keeps it closed until a newer result arrives.
+function SeatResultBar({
+  delivery,
+  onOpen,
+  onDismiss,
+}: {
+  delivery: SeatDelivery;
+  onOpen: () => void;
+  onDismiss: () => void;
+}) {
+  const { t } = useTranslation();
+  const label =
+    delivery.taskState === "open" ? t("swarm.tasks.stageResult") : t("swarm.tasks.result");
+  return (
+    <View style={styles.resultBar} testID="swarm-seat-result-bar">
+      <PressHighlight
+        style={styles.resultBarOpen}
+        highlightStyle={styles.resultBarPressed}
+        onPress={onOpen}
+        accessibilityRole="button"
+        accessibilityLabel={t("swarm.seat.openResults")}
+        testID="swarm-seat-result-bar-open"
+      >
+        <ThemedInbox size={ICON_SIZE.sm} uniProps={mutedColorMapping} />
+        <Text style={styles.resultBarText} numberOfLines={1}>
+          <Text style={styles.resultBarLabel}>{label}</Text>
+          {` · ${delivery.taskTitle} · ${formatTimeAgo(new Date(delivery.createdAt))}`}
+        </Text>
+      </PressHighlight>
+      <Button
+        variant="ghost"
+        size="sm"
+        leftIcon={X}
+        onPress={onDismiss}
+        accessibilityLabel={t("swarm.seat.dismissResult")}
+        testID="swarm-seat-result-bar-dismiss"
+      />
+    </View>
+  );
+}
+
 // Results the seat delivered to the person, newest first, so a reply the seat did not repeat in
-// its own words is still in reach of its conversation. The newest shows; the rest open below it,
-// in a list that scrolls on its own so the conversation keeps its room.
-function SeatDeliveries({
+// its own words is still in reach of its conversation. They open in a sheet, so the conversation
+// keeps its room however long they are.
+function SeatResultsSheet({
+  visible,
+  onClose,
   serverId,
   workspaceId,
   deliveries,
 }: {
+  visible: boolean;
+  onClose: () => void;
   serverId: string;
   workspaceId: string | null;
   deliveries: SeatDelivery[];
 }) {
   const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(false);
-  const toggle = useCallback(() => setExpanded((value) => !value), []);
-  if (deliveries.length === 0) return null;
-  const shown = expanded ? deliveries : deliveries.slice(0, 1);
+  const header = useMemo(() => ({ title: t("swarm.seat.deliveries") }), [t]);
+  // Read here, outside the sheet's portal, which the pane's link handler does not reach. A link
+  // the pane opens closes the sheet so the person sees where it went.
+  const paneOpenLink = useSwarmCanonicalLinkPress();
+  const openLink = useMemo(() => {
+    if (!paneOpenLink) return null;
+    return (uri: string) => {
+      const result = paneOpenLink(uri);
+      if (result === false) onClose();
+      return result;
+    };
+  }, [onClose, paneOpenLink]);
   return (
-    <View style={styles.deliveries} testID="swarm-seat-deliveries">
-      <View style={styles.deliveriesContent}>
-        <View style={styles.deliveriesHeader}>
-          <Text style={styles.deliveriesTitle}>{t("swarm.seat.deliveries")}</Text>
-          <Text style={styles.deliveriesCount}>{deliveries.length}</Text>
-          {deliveries.length > 1 ? (
-            <View style={styles.deliveriesToggle}>
-              <Button
-                variant="ghost"
-                size="sm"
-                leftIcon={expanded ? ChevronUp : ChevronDown}
-                onPress={toggle}
-                testID="swarm-seat-deliveries-toggle"
-              >
-                {expanded ? t("swarm.seat.showLatest") : t("swarm.seat.showAll")}
-              </Button>
-            </View>
-          ) : null}
-        </View>
-        <ScrollView style={styles.deliveriesList} contentContainerStyle={styles.deliveriesRows}>
-          {shown.map((delivery, index) => (
-            <SeatDeliveryRow
-              key={delivery.activityId}
-              serverId={serverId}
-              workspaceId={workspaceId}
-              delivery={delivery}
-              first={index === 0}
-            />
-          ))}
-        </ScrollView>
+    <AdaptiveModalSheet
+      header={header}
+      visible={visible}
+      onClose={onClose}
+      testID="swarm-seat-deliveries"
+    >
+      <View style={styles.deliveriesRows}>
+        {deliveries.map((delivery, index) => (
+          <SeatDeliveryRow
+            key={delivery.activityId}
+            serverId={serverId}
+            workspaceId={workspaceId}
+            delivery={delivery}
+            first={index === 0}
+            onNavigate={onClose}
+            onOpenLink={openLink}
+          />
+        ))}
       </View>
-    </View>
+    </AdaptiveModalSheet>
   );
 }
 
@@ -312,19 +381,23 @@ function SeatDeliveryRow({
   workspaceId,
   delivery,
   first,
+  onNavigate,
+  onOpenLink,
 }: {
   serverId: string;
   workspaceId: string | null;
   delivery: SeatDelivery;
   first: boolean;
+  onNavigate: () => void;
+  onOpenLink: ((uri: string) => boolean) | null;
 }) {
   const { t } = useTranslation();
-  const openLink = useSwarmCanonicalLinkPress();
   const { taskId } = delivery;
   const open = useCallback(() => {
     if (!workspaceId) return;
+    onNavigate();
     openSwarmTasks({ serverId, workspaceId, agentName: "", taskId });
-  }, [taskId, serverId, workspaceId]);
+  }, [onNavigate, taskId, serverId, workspaceId]);
   const rowStyle = useMemo(() => [styles.delivery, !first && styles.deliveryDivided], [first]);
   return (
     <View style={rowStyle} testID={`swarm-seat-delivery-${delivery.activityId}`}>
@@ -342,10 +415,10 @@ function SeatDeliveryRow({
           testID={`swarm-seat-delivery-open-${delivery.activityId}`}
         />
       </View>
-      <MarkdownRenderer text={delivery.body} compact onLinkPress={openLink ?? undefined} />
+      <MarkdownRenderer text={delivery.body} compact onLinkPress={onOpenLink ?? undefined} />
       <DeliveredArtifacts
         artifacts={delivery.artifacts}
-        onOpenLink={openLink}
+        onOpenLink={onOpenLink}
         testID={`swarm-seat-delivery-artifacts-${delivery.activityId}`}
       />
     </View>
@@ -392,12 +465,18 @@ function SeatHeader({
   occupants,
   shown,
   onShow,
+  results,
+  unreadResults,
+  onOpenResults,
 }: {
   serverId: string;
   seat: SwarmSeat;
   occupants: SeatOccupant[];
   shown: SeatOccupant | null;
   onShow: (paseoAgentId: string | null) => void;
+  results: number;
+  unreadResults: boolean;
+  onOpenResults: () => void;
 }) {
   const { t } = useTranslation();
   const openAgentTab = useCallback(() => {
@@ -454,6 +533,23 @@ function SeatHeader({
       ) : (
         <Text style={styles.occupantsLabel}>{t("swarm.seat.noAgent")}</Text>
       )}
+      {results > 0 ? (
+        <View>
+          <Button
+            variant="ghost"
+            size="sm"
+            leftIcon={Inbox}
+            onPress={onOpenResults}
+            accessibilityLabel={t("swarm.seat.openResults")}
+            testID="swarm-seat-results"
+          >
+            {String(results)}
+          </Button>
+          {unreadResults ? (
+            <View style={styles.unreadDot} testID="swarm-seat-results-unread" />
+          ) : null}
+        </View>
+      ) : null}
       {shown ? (
         <Button
           variant="ghost"
@@ -498,50 +594,72 @@ function OccupantItem({
 }
 
 // Where the current occupant took the seat over, and what it actually knows: a new agent has
-// none of the earlier conversation, and a returning one remembers only its own.
+// none of the earlier conversation, and a returning one remembers only its own. One line until
+// opened; closing it keeps it closed until the next handover.
 function HandoverRow({
   handover,
+  seatKey,
   onShow,
 }: {
   handover: SeatHandover;
+  seatKey: string;
   onShow: (paseoAgentId: string | null) => void;
 }) {
   const { t } = useTranslation();
+  const handoverKey = `${handover.at}:${handover.to}`;
+  const dismissed = useSeatSeen((state) => state.handovers[seatKey] === handoverKey);
+  const seeHandover = useSeatSeen((state) => state.seeHandover);
   const [expanded, setExpanded] = useState(false);
   const toggle = useCallback(() => setExpanded((value) => !value), []);
+  const dismiss = useCallback(
+    () => seeHandover(seatKey, handoverKey),
+    [handoverKey, seatKey, seeHandover],
+  );
   const showPrevious = useCallback(
     () => onShow(handover.fromAgentId),
     [handover.fromAgentId, onShow],
   );
+  if (dismissed) return null;
   const time = formatTimeAgo(new Date(handover.at));
   const values = { from: handover.from, to: handover.to, time, reason: handover.reason };
   return (
     <View style={styles.handover} testID="swarm-seat-handover">
-      <Text style={styles.handoverText}>
-        {handover.returning
-          ? t("swarm.seat.handover.returning", values)
-          : t("swarm.seat.handover.new", values)}
-      </Text>
-      <View style={styles.handoverActions}>
+      <View style={styles.handoverLine}>
+        <Text style={styles.handoverText} numberOfLines={expanded ? undefined : 1}>
+          {handover.returning
+            ? t("swarm.seat.handover.returning", values)
+            : t("swarm.seat.handover.new", values)}
+        </Text>
         <Button
           variant="ghost"
           size="sm"
-          leftIcon={expanded ? ChevronDown : ChevronRight}
+          leftIcon={expanded ? ChevronUp : ChevronDown}
           onPress={toggle}
+          accessibilityLabel={t("swarm.seat.handover.given")}
           testID="swarm-seat-handover-toggle"
-        >
-          {t("swarm.seat.handover.given")}
-        </Button>
-        <Button variant="ghost" size="sm" onPress={showPrevious}>
-          {t("swarm.seat.handover.showPrevious", { from: handover.from })}
-        </Button>
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          leftIcon={X}
+          onPress={dismiss}
+          accessibilityLabel={t("swarm.seat.handover.dismiss")}
+          testID="swarm-seat-handover-dismiss"
+        />
       </View>
       {expanded ? (
-        <Text style={styles.handoverDetail}>
-          {handover.returning
-            ? t("swarm.seat.handover.givenReturning", values)
-            : t("swarm.seat.handover.givenNew", values)}
-        </Text>
+        <>
+          <Text style={styles.handoverDetail}>
+            {handover.returning
+              ? t("swarm.seat.handover.givenReturning", values)
+              : t("swarm.seat.handover.givenNew", values)}
+          </Text>
+          <View style={styles.handoverActions}>
+            <Button variant="ghost" size="sm" onPress={showPrevious}>
+              {t("swarm.seat.handover.showPrevious", { from: handover.from })}
+            </Button>
+          </View>
+        </>
       ) : null}
     </View>
   );
@@ -586,10 +704,32 @@ function SeatComposerNotices({
   mail: SeatMail[];
 }) {
   const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const toggle = useCallback(() => setExpanded((value) => !value), []);
   if (!pending && mail.length === 0) return null;
+  // Failed messages and the newest one stand for the rest until opened, so a backed-up mailbox
+  // does not push the conversation off the screen and a failure is never hidden.
+  const shown = expanded
+    ? mail
+    : mail.filter((message, index) => message.status === "failed" || index === mail.length - 1);
   return (
     <View style={styles.notices}>
-      {mail.map((message) => (
+      {mail.length > shown.length || expanded ? (
+        <View style={styles.mailToggle}>
+          <Button
+            variant="ghost"
+            size="sm"
+            leftIcon={expanded ? ChevronDown : ChevronUp}
+            onPress={toggle}
+            testID="swarm-seat-mail-toggle"
+          >
+            {expanded
+              ? t("swarm.seat.showLatest")
+              : t("swarm.seat.mailMore", { count: mail.length - shown.length })}
+          </Button>
+        </View>
+      ) : null}
+      {shown.map((message) => (
         <View key={message.id} style={styles.mailRow} testID={`swarm-seat-mail-${message.id}`}>
           {message.words ? (
             <Text style={styles.mailWords} numberOfLines={2} ellipsizeMode="tail">
@@ -789,15 +929,66 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
   },
+  unreadDot: {
+    position: "absolute",
+    top: theme.spacing[1],
+    right: theme.spacing[1],
+    width: 8,
+    height: 8,
+    borderRadius: theme.borderRadius.full,
+    backgroundColor: theme.colors.accent,
+  },
+  resultBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
+    paddingLeft: theme.spacing[4],
+    paddingRight: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    borderBottomWidth: theme.borderWidth[1],
+    borderBottomColor: theme.colors.border,
+    backgroundColor: theme.colors.surface1,
+  },
+  resultBarOpen: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    minHeight: CONTROL_HEIGHTS.sm,
+  },
+  resultBarPressed: {
+    backgroundColor: theme.colors.surface2,
+  },
+  resultBarText: {
+    flex: 1,
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
+  resultBarLabel: {
+    color: theme.colors.foreground,
+    fontWeight: theme.fontWeight.medium,
+  },
+  handoverLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
+  },
+  mailToggle: {
+    alignItems: "flex-start",
+  },
   handover: {
     gap: theme.spacing[1],
-    paddingHorizontal: theme.spacing[4],
-    paddingVertical: theme.spacing[2],
+    paddingLeft: theme.spacing[4],
+    paddingRight: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
     borderBottomWidth: theme.borderWidth[1],
     borderBottomColor: theme.colors.border,
     backgroundColor: theme.colors.surface1,
   },
   handoverText: {
+    flex: 1,
+    minWidth: 0,
     color: theme.colors.foreground,
     fontSize: theme.fontSize.sm,
   },
@@ -839,40 +1030,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.spacing[3],
     paddingBottom: theme.spacing[2],
   },
-  deliveries: {
-    alignItems: "center",
-    paddingHorizontal: { xs: theme.spacing[3], md: theme.spacing[4] },
-    paddingVertical: theme.spacing[3],
-    borderBottomWidth: theme.borderWidth[1],
-    borderBottomColor: theme.colors.border,
-  },
-  // On the conversation's column and inset, so a result reads on the same rail as the messages
-  // under it (agent-stream/view.tsx).
-  deliveriesContent: {
-    width: "100%",
-    maxWidth: theme.contentMaxWidth,
-    paddingHorizontal: theme.spacing[2],
-    gap: theme.spacing[2],
-  },
-  deliveriesHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[2],
-    minHeight: 28,
-  },
-  deliveriesTitle: {
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
-    fontWeight: theme.fontWeight.medium,
-  },
-  deliveriesCount: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
-    fontVariant: ["tabular-nums"],
-  },
-  deliveriesToggle: { marginLeft: "auto" },
-  deliveriesList: { maxHeight: 360, flexGrow: 0 },
-  deliveriesRows: { gap: theme.spacing[3] },
+  deliveriesRows: { gap: theme.spacing[3], paddingBottom: theme.spacing[4] },
   delivery: {
     gap: theme.spacing[1],
   },

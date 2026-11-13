@@ -55,6 +55,9 @@ export const zhCN: TranslationResources = {
       openTask: "打开 {{title}}",
       showAll: "显示全部",
       showLatest: "只显示最新",
+      openResults: "查看给你的结果",
+      dismissResult: "隐藏此结果",
+      mailMore: "再显示 {{count}} 条",
       handover: {
         new: "占用者 {{to}} 于{{time}}接替了占用者 {{from}}（{{reason}}）。",
         returning: "占用者 {{to}} 于{{time}}回到席位（{{reason}}）。",
@@ -64,6 +67,7 @@ export const zhCN: TranslationResources = {
         givenReturning:
           "它恢复了自己的会话，所以记得离开前的轮次；另有一份返回简报和唤醒它的消息。占用者 {{from}} 的对话没有交给它。",
         showPrevious: "查看占用者 {{from}}",
+        dismiss: "隐藏此交接",
       },
     },
     message: {
@@ -522,6 +526,10 @@ export const zhCN: TranslationResources = {
       },
       originalMessage: "原始消息",
     },
+    mail: {
+      cc: "抄送 {{names}}",
+      task: "任务 {{task}}",
+    },
     diagram: {
       diagram: "图表",
       zoomIn: "放大",
@@ -535,6 +543,8 @@ export const zhCN: TranslationResources = {
       copyCode: "复制代码",
       copyTurn: "复制回合",
       copyMessage: "复制消息",
+      viewOriginal: "查看原文",
+      hideOriginal: "隐藏原文",
       forkMenu: "分叉消息",
       forkInNewTab: "分叉到新标签页",
       forkInNewWorkspace: "分叉到新工作区",

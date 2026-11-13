@@ -56,6 +56,9 @@ export const es: TranslationResources = {
       openTask: "Abrir {{title}}",
       showAll: "Mostrar todo",
       showLatest: "Mostrar el último",
+      openResults: "Mostrar resultados para ti",
+      dismissResult: "Ocultar este resultado",
+      mailMore: "Mostrar {{count}} más",
       handover: {
         new: "El ocupante {{to}} relevó al ocupante {{from}} {{time}} ({{reason}}).",
         returning: "El ocupante {{to}} volvió al puesto {{time}} ({{reason}}).",
@@ -65,6 +68,7 @@ export const es: TranslationResources = {
         givenReturning:
           "Su propia sesión, reanudada, así que recuerda sus turnos de antes de irse, más un resumen de regreso y el mensaje que lo despertó. No recibió la conversación del ocupante {{from}}.",
         showPrevious: "Mostrar ocupante {{from}}",
+        dismiss: "Ocultar este relevo",
       },
     },
     message: {
@@ -531,6 +535,10 @@ export const es: TranslationResources = {
       },
       originalMessage: "Mensaje original",
     },
+    mail: {
+      cc: "CC a {{names}}",
+      task: "Tarea {{task}}",
+    },
     diagram: {
       diagram: "Diagrama",
       zoomIn: "Acercar",
@@ -544,6 +552,8 @@ export const es: TranslationResources = {
       copyCode: "Copiar código",
       copyTurn: "Copiar turno",
       copyMessage: "Copiar mensaje",
+      viewOriginal: "Ver original",
+      hideOriginal: "Ocultar original",
       forkMenu: "Bifurcar mensaje",
       forkInNewTab: "Bifurcar en una pestaña nueva",
       forkInNewWorkspace: "Bifurcar en un espacio de trabajo nuevo",

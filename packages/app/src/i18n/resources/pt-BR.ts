@@ -57,6 +57,9 @@ export const ptBR: TranslationResources = {
       openTask: "Abrir {{title}}",
       showAll: "Mostrar tudo",
       showLatest: "Mostrar o mais recente",
+      openResults: "Mostrar resultados para você",
+      dismissResult: "Ocultar este resultado",
+      mailMore: "Mostrar mais {{count}}",
       handover: {
         new: "O ocupante {{to}} assumiu no lugar do ocupante {{from}} {{time}} ({{reason}}).",
         returning: "O ocupante {{to}} voltou ao posto {{time}} ({{reason}}).",
@@ -66,6 +69,7 @@ export const ptBR: TranslationResources = {
         givenReturning:
           "A própria sessão, retomada, então ele lembra dos turnos de antes de sair, mais um resumo de retorno e a mensagem que o acordou. A conversa do ocupante {{from}} não foi dada a ele.",
         showPrevious: "Mostrar ocupante {{from}}",
+        dismiss: "Ocultar esta passagem",
       },
     },
     message: {
@@ -531,6 +535,10 @@ export const ptBR: TranslationResources = {
       },
       originalMessage: "Mensagem original",
     },
+    mail: {
+      cc: "Cc para {{names}}",
+      task: "Tarefa {{task}}",
+    },
     diagram: {
       diagram: "Diagrama",
       zoomIn: "Aproximar",
@@ -544,6 +552,8 @@ export const ptBR: TranslationResources = {
       copyCode: "Copiar código",
       copyTurn: "Copiar turno",
       copyMessage: "Copiar mensagem",
+      viewOriginal: "Ver original",
+      hideOriginal: "Ocultar original",
       forkMenu: "Bifurcar mensagem",
       forkInNewTab: "Bifurcar em uma nova aba",
       forkInNewWorkspace: "Bifurcar em um novo workspace",

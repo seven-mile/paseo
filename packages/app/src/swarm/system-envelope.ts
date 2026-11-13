@@ -176,9 +176,16 @@ export function parseSwarmEnvelope(text: string): SwarmEnvelope | null {
 // The name a person's mail carries; Swarm's own sender name for the human.
 export const PERSON_SENDER = "human";
 
-// The words of a team message a person sent, which render as the person's own message rather than
-// a team card. Null for any other text.
-export function personMailWords(text: string): string | null {
+export interface PersonMail {
+  words: string;
+  to: string | null;
+  cc: string[];
+  task: string | null;
+}
+
+// A team message a person sent, which renders as the person's own message rather than a team
+// card, with who it went to. Null for any other text.
+export function parsePersonMail(text: string): PersonMail | null {
   const tag = "paseo-swarm-team-message";
   const opening = readOpening(text, tag);
   if (!opening || opening.selfClosing || opening.attributes.get("from") !== PERSON_SENDER) {
@@ -190,5 +197,16 @@ export function personMailWords(text: string): string | null {
   if (!text.endsWith(delimiter)) return null;
   const start = opening.length + newline.length;
   const end = text.length - delimiter.length;
-  return end >= start ? text.slice(start, end) : "";
+  const cc = opening.attributes.get("cc");
+  return {
+    words: end >= start ? text.slice(start, end) : "",
+    to: opening.attributes.get("to") || null,
+    cc: cc ? cc.split(",").filter(Boolean) : [],
+    task: opening.attributes.get("task") || null,
+  };
+}
+
+// The words of a team message a person sent. Null for any other text.
+export function personMailWords(text: string): string | null {
+  return parsePersonMail(text)?.words ?? null;
 }
