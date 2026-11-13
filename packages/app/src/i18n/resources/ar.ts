@@ -129,6 +129,8 @@ export const ar: TranslationResources = {
       status: "حالة المهمة",
       unavailableInScope: "المهمة غير متاحة في هذا النطاق.",
       emptyScope: "لا توجد مهام في هذا النطاق.",
+      agentQuestions_one: "{{count}} سؤال من وكيل",
+      agentQuestions_other: "{{count}} أسئلة من الوكلاء",
       awaitingReply_one: "{{count}} بانتظار الرد",
       awaitingReply_other: "{{count}} بانتظار الرد",
       activityActor: "صاحب النشاط",

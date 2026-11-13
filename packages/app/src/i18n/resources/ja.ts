@@ -130,6 +130,8 @@ export const ja: TranslationResources = {
       status: "タスクの状態",
       unavailableInScope: "この範囲ではタスクを利用できません。",
       emptyScope: "この範囲にタスクはありません。",
+      agentQuestions_one: "エージェントの質問 {{count}} 件",
+      agentQuestions_other: "エージェントの質問 {{count}} 件",
       awaitingReply_one: "{{count}} 件の返信待ち",
       awaitingReply_other: "{{count}} 件の返信待ち",
       activityActor: "アクティビティの投稿者",

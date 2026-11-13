@@ -126,6 +126,8 @@ export const en = {
       status: "Task status",
       unavailableInScope: "Task is unavailable in this scope.",
       emptyScope: "No Tasks in this scope.",
+      agentQuestions_one: "{{count}} agent question",
+      agentQuestions_other: "{{count}} agent questions",
       awaitingReply_one: "{{count}} awaiting reply",
       awaitingReply_other: "{{count}} awaiting reply",
       activityActor: "Activity actor",

@@ -53,6 +53,7 @@ import {
   useWorkspaceStructure,
 } from "@/stores/session-store-hooks";
 import { filterSwarmArtifacts } from "./artifact-model";
+import { SeatQuestionsBadge, useSeatQuestions } from "./seat-questions";
 import { DeliveredArtifacts, SwarmArtifactList, useSwarmArtifacts } from "./artifact-views";
 import { SwarmInlineLink } from "./inline-link";
 import { resolveArtifactCopyLink } from "./artifact-links";
@@ -91,6 +92,7 @@ import {
   swarmAudience,
   swarmTaskResult,
   unansweredChoices,
+  type SeatQuestion,
   type SwarmActivity,
   type SwarmTask,
   type SwarmTaskAgent,
@@ -670,6 +672,7 @@ function LoadedTasks({
   }, []);
   const selected = [...tasks, ...loaded].find((task) => task.id === selectedTaskId);
   const scopeOptions = swarmTaskScopeOptions(board, projectWorkspaceIds, knownWorkspaceIds);
+  const questions = useSeatQuestions(serverId, board.agents);
   const statusOptions = useMemo(
     () => [
       { value: "", label: t("swarm.tasks.allStatuses") },
@@ -723,6 +726,8 @@ function LoadedTasks({
             statusOptions={statusOptions}
             onToggleStatus={toggleStatus}
             attention={swarmAttentionTotal(tasks)}
+            questions={questions}
+            onOpenQuestion={onOpenReference}
           />
           <RetainedPanel active={showKanban}>
             <TaskKanban
@@ -1040,6 +1045,8 @@ function TaskFilters({
   statusOptions,
   onToggleStatus,
   attention,
+  questions,
+  onOpenQuestion,
 }: {
   inline: boolean;
   compact: boolean;
@@ -1056,6 +1063,8 @@ function TaskFilters({
   statusOptions: Array<{ value: string; label: string }>;
   onToggleStatus: (value: string) => void;
   attention: number;
+  questions: readonly SeatQuestion[];
+  onOpenQuestion: ((reference: SwarmTaskReference) => void) | undefined;
 }) {
   const { t } = useTranslation();
   const artifacts = lane === "artifacts";
@@ -1106,6 +1115,9 @@ function TaskFilters({
           variant="warning"
           label={t("swarm.tasks.awaitingReply", { count: attention })}
         />
+      ) : null}
+      {onOpenQuestion && !artifacts ? (
+        <SeatQuestionsBadge questions={questions} onOpen={onOpenQuestion} />
       ) : null}
     </View>
   );

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AgentPermissionRequest } from "@getpaseo/protocol/agent-types";
 import { deliveredArtifactSchema } from "./artifact-model";
 import { i18n } from "@/i18n/i18next";
 import { isFileLookingAssistantToken, parseAssistantFileLink } from "@/assistant-file-links/parse";
@@ -701,4 +702,51 @@ export function partitionSwarmTasks(tasks: readonly SwarmTask[]): {
 // How many choices on these Tasks wait for the human.
 export function swarmAttentionTotal(tasks: readonly Pick<SwarmTask, "attention">[]): number {
   return tasks.reduce((total, task) => total + task.attention, 0);
+}
+
+export interface SeatQuestion {
+  requestId: string;
+  seatName: string;
+  question: string;
+  reference: Extract<SwarmTaskReference, { kind: "agent" }>;
+}
+
+// The first question a provider asks, for a one-line list. Questions put their text in
+// input.questions[].question; other requests fall back to their title.
+export function permissionQuestionText(request: AgentPermissionRequest): string {
+  const questions = request.input?.questions;
+  if (Array.isArray(questions)) {
+    const first: unknown = questions[0];
+    if (first && typeof first === "object" && "question" in first) {
+      const text = (first as { question: unknown }).question;
+      if (typeof text === "string" && text.trim()) return text.trim();
+    }
+  }
+  return request.title?.trim() || request.name;
+}
+
+// Questions the seats' current occupants asked through their provider, such as Codex's
+// request_user_input or Claude's AskUserQuestion. They wait on the person like a Swarm choice does,
+// but live on the agent, so they're read from the agent and answered in its seat.
+export function seatQuestions(
+  seats: readonly SwarmTaskAgent[],
+  pendingFor: (paseoAgentId: string) => readonly AgentPermissionRequest[] | undefined,
+): SeatQuestion[] {
+  return seats.flatMap((seat) => {
+    if (seat.retired || !seat.paseoAgentId) return [];
+    const reference = {
+      kind: "agent" as const,
+      paseoAgentId: seat.paseoAgentId,
+      qualifiedName: seat.qualifiedName ?? seat.name,
+      workspaceId: seat.workspaceId,
+    };
+    return (pendingFor(seat.paseoAgentId) ?? [])
+      .filter((request) => request.kind === "question")
+      .map((request) => ({
+        requestId: request.id,
+        seatName: reference.qualifiedName,
+        question: permissionQuestionText(request),
+        reference,
+      }));
+  });
 }
