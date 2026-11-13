@@ -1,5 +1,5 @@
 import { getForgeDefinitionOrNeutral } from "@getpaseo/protocol/forge-manifest";
-import type { AgentAttachment } from "@getpaseo/protocol/messages";
+import type { AgentAttachment, UserMessageAttachmentSummary } from "@getpaseo/protocol/messages";
 import type { AgentPromptContentBlock, AgentPromptInput } from "./agent-sdk-types.js";
 
 const REVIEW_LINE_MARKERS = { add: "+", remove: "-", context: " " } as const;
@@ -35,6 +35,72 @@ export function buildAgentPrompt(
   }
   blocks.push(...otherAttachments);
   return blocks;
+}
+
+function summarizeAttachment(attachment: AgentAttachment): UserMessageAttachmentSummary {
+  switch (attachment.type) {
+    case "forge_change_request":
+    case "forge_issue":
+      return {
+        type: attachment.type,
+        title: attachment.title,
+        number: attachment.number,
+        forge: attachment.forge,
+        url: attachment.url,
+      };
+    case "github_pr":
+    case "github_issue":
+      return {
+        type: attachment.type,
+        title: attachment.title,
+        number: attachment.number,
+        url: attachment.url,
+      };
+    case "text":
+      return {
+        type: "text",
+        ...(attachment.title ? { title: attachment.title } : {}),
+        ...(attachment.contextKind ? { contextKind: attachment.contextKind } : {}),
+        ...(attachment.externalResource
+          ? {
+              title: attachment.externalResource.title,
+              providerLabel: attachment.externalResource.providerLabel,
+              identifier: attachment.externalResource.identifier,
+              url: attachment.externalResource.url,
+            }
+          : {}),
+      };
+    case "review":
+      return { type: "review", commentCount: attachment.comments.length };
+    case "uploaded_file":
+      return {
+        type: "uploaded_file",
+        fileName: attachment.fileName,
+        mimeType: attachment.mimeType,
+        size: attachment.size,
+      };
+  }
+}
+
+// What a prompt carried besides its text, for its timeline row: names and sizes, never bodies or
+// image bytes, so the row stays small and any client can draw the cards.
+export function summarizePromptAttachments(
+  prompt: AgentPromptInput,
+): UserMessageAttachmentSummary[] {
+  if (typeof prompt === "string") return [];
+  return prompt.flatMap((block): UserMessageAttachmentSummary[] => {
+    if (block.type === "image" && "data" in block) {
+      return [
+        {
+          type: "image",
+          mimeType: block.mimeType,
+          size: Math.floor((block.data.length * 3) / 4),
+        },
+      ];
+    }
+    if (block.type === "text" && !("mimeType" in block)) return [];
+    return [summarizeAttachment(block as AgentAttachment)];
+  });
 }
 
 export function renderPromptAttachmentAsText(attachment: AgentAttachment): string {

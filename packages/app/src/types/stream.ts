@@ -6,7 +6,11 @@ import type {
   ToolCallDetail,
 } from "@getpaseo/protocol/agent-types";
 import { timelineItemIdentity } from "@getpaseo/protocol/timeline-identity";
-import type { AgentAttachment, AgentStreamEventPayload } from "@getpaseo/protocol/messages";
+import type {
+  AgentAttachment,
+  AgentStreamEventPayload,
+  UserMessageAttachmentSummary,
+} from "@getpaseo/protocol/messages";
 import type { AttachmentMetadata } from "@/attachments/types";
 import { extractTaskEntriesFromToolCall } from "../utils/tool-call-parsers";
 
@@ -105,6 +109,8 @@ export interface UserMessageItem {
   timestamp: Date;
   images?: UserMessageImageAttachment[];
   attachments?: AgentAttachment[];
+  /** What the daemon recorded about the message's attachments; contents stay on the host. */
+  attachmentSummaries?: UserMessageAttachmentSummary[];
 }
 
 export interface UserMessageInput {
@@ -117,6 +123,8 @@ export interface UserMessageInput {
   timestamp: Date;
   images?: UserMessageImageAttachment[];
   attachments?: AgentAttachment[];
+  /** What the daemon recorded about the message's attachments; contents stay on the host. */
+  attachmentSummaries?: UserMessageAttachmentSummary[];
 }
 
 export function createUserMessage(input: UserMessageInput): UserMessageItem {
@@ -136,6 +144,9 @@ export function createUserMessage(input: UserMessageInput): UserMessageItem {
     ...(input.images && input.images.length > 0 ? { images: input.images } : {}),
     ...(input.attachments && input.attachments.length > 0
       ? { attachments: input.attachments }
+      : {}),
+    ...(input.attachmentSummaries && input.attachmentSummaries.length > 0
+      ? { attachmentSummaries: input.attachmentSummaries }
       : {}),
   };
 }
@@ -265,6 +276,8 @@ function produceUserMessage(
     clientMessageId: incoming.clientMessageId ?? existing.clientMessageId,
     messageId: incoming.messageId ?? existing.messageId,
     timelineCursor: incoming.timelineCursor ?? existing.timelineCursor,
+    // Recorded summaries never change, so keep the existing array and its identity.
+    attachmentSummaries: existing.attachmentSummaries ?? incoming.attachmentSummaries,
   });
   if (
     existing.id === merged.id &&
@@ -274,7 +287,8 @@ function produceUserMessage(
     existing.text === merged.text &&
     existing.timestamp === merged.timestamp &&
     existing.images === merged.images &&
-    existing.attachments === merged.attachments
+    existing.attachments === merged.attachments &&
+    existing.attachmentSummaries === merged.attachmentSummaries
   ) {
     return { items, index, message: existing, matched: true };
   }
@@ -902,6 +916,7 @@ function appendUserMessage(
   clientMessageId?: string,
   timelineCursor?: TimelinePosition,
   turnId?: string,
+  attachmentSummaries?: UserMessageAttachmentSummary[],
 ): StreamItem[] {
   const { chunk, hasContent } = normalizeChunk(text);
   if (!hasContent) {
@@ -917,6 +932,7 @@ function appendUserMessage(
     turnId,
     text: chunk,
     timestamp,
+    attachmentSummaries,
   });
   return upsertUserMessage(state, nextItem);
 }
@@ -1525,6 +1541,7 @@ function reduceTimelineEvent(
         item.clientMessageId,
         timelineCursor,
         event.turnId,
+        item.attachments,
       );
     case "assistant_message":
       return appendAssistantMessage(
@@ -1890,6 +1907,7 @@ function applyCanonicalUserMessageEvent(params: {
     timelineCursor,
     text: normalized.chunk,
     timestamp,
+    attachmentSummaries: event.item.attachments,
   });
   if (unmatchedInsert === "head") {
     const reconciled = upsertUserMessageAcrossStream({

@@ -573,6 +573,7 @@ export const es: TranslationResources = {
       review: "Revisión",
       commentsOne: "1 comentario",
       commentsMany: "{{count}} comentarios",
+      image: "Imagen",
       textAttachment: "Adjunto de texto",
       text: "Texto",
       file: "Archivo",

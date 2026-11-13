@@ -573,6 +573,7 @@ export const ptBR: TranslationResources = {
       review: "Revisão",
       commentsOne: "1 comentário",
       commentsMany: "{{count}} comentários",
+      image: "Imagem",
       textAttachment: "Anexo de texto",
       text: "Texto",
       file: "Arquivo",

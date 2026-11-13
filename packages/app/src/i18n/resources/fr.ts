@@ -575,6 +575,7 @@ export const fr: TranslationResources = {
       review: "Revue",
       commentsOne: "1 commentaire",
       commentsMany: "{{count}} commentaires",
+      image: "Image",
       textAttachment: "Pièce jointe texte",
       text: "Texte",
       file: "Fichier",

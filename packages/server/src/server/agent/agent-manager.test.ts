@@ -26,6 +26,7 @@ import { toAgentPayload } from "./agent-projections.js";
 import { projectTimelineRows } from "./timeline-projection.js";
 import { getOpenAgentTabLabel, PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import { startAgentRun } from "./agent-prompt.js";
+import { buildAgentPrompt } from "./prompt-attachments.js";
 import { StaleProviderSessionError } from "./stale-provider-session-error.js";
 import { ensureAgentLoaded, ensureUnarchivedAgentLoaded } from "./agent-loading.js";
 import type { StoredAgentRecord } from "./agent-storage.js";
@@ -11120,6 +11121,49 @@ test("provider user_message is recorded from the live stream", async () => {
   // Provider's user_message should be recorded (no canonical to dedup against)
   expect(userMessages).toHaveLength(1);
   expect(userMessages[0].text).toBe("continuation prompt");
+});
+
+test("a submitted prompt records what it attached on its timeline row", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-attachment-summary-"));
+  const manager = new AgentManager({ clients: { codex: new TestAgentClient() }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const prompt = buildAgentPrompt(
+      "Look at this",
+      [{ data: "aW1hZ2U=", mimeType: "image/png" }],
+      [
+        {
+          type: "github_issue",
+          mimeType: "application/github-issue",
+          number: 7,
+          title: "Crash on start",
+          url: "https://github.com/getpaseo/paseo/issues/7",
+          body: "Issue body",
+        },
+      ],
+    );
+    await startAgentRun(manager, agent.id, prompt, logger, {
+      runOptions: { clientMessageId: "attachment-summary" },
+    });
+    await manager.waitForAgentEvent(agent.id);
+
+    expect(
+      manager.getTimeline(agent.id).filter((item) => item.type === "user_message"),
+    ).toMatchObject([
+      {
+        text: "Look at this",
+        attachments: [
+          { type: "image", mimeType: "image/png", size: 6 },
+          { type: "github_issue", number: 7, title: "Crash on start" },
+        ],
+      },
+    ]);
+  } finally {
+    await manager.closeAgent(agent.id).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });
 
 test("canonical submitted prompt keeps wire identity while rewind resolves provider identity", async () => {

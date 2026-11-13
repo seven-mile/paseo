@@ -565,6 +565,7 @@ export const ar: TranslationResources = {
       review: "مراجعة",
       commentsOne: "تعليق واحد",
       commentsMany: "{{count}} تعليقات",
+      image: "صورة",
       textAttachment: "مرفق النص",
       text: "نص",
       file: "ملف",

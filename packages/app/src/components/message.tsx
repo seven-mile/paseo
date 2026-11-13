@@ -1,6 +1,9 @@
 import { MessagePreview, MessageSender } from "@/components/user-message";
 import { useStableEvent } from "@/hooks/use-stable-event";
-import { getAgentAttachmentPillContent } from "@/attachments/attachment-pill-content";
+import {
+  getAgentAttachmentPillContent,
+  getAttachmentSummaryPillContent,
+} from "@/attachments/attachment-pill-content";
 import { AssistantForkMenu, type AssistantForkTarget } from "@/components/assistant-fork-menu";
 import { AttachmentLightbox, type ImageLightboxSource } from "@/components/attachment-lightbox";
 import {
@@ -32,7 +35,7 @@ import { useTargetAgentTitle } from "@/tool-calls/use-target-agent-title";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { AgentMessage } from "@getpaseo/protocol/agent-message";
 import type { AgentCapabilityFlags, ToolCallDetail } from "@getpaseo/protocol/agent-types";
-import type { AgentAttachment } from "@getpaseo/protocol/messages";
+import type { AgentAttachment, UserMessageAttachmentSummary } from "@getpaseo/protocol/messages";
 import MaskedView from "@react-native-masked-view/masked-view";
 import {
   Check,
@@ -115,6 +118,7 @@ interface UserMessageProps {
   sourceMessage?: string;
   images?: UserMessageImageAttachment[];
   attachments?: AgentAttachment[];
+  attachmentSummaries?: UserMessageAttachmentSummary[];
   timestamp: number;
   capabilities?: AgentCapabilityFlags;
   client?: DaemonClient | null;
@@ -525,6 +529,48 @@ function PersonMailFooter({ mail, original }: { mail: PersonMail | null; origina
   );
 }
 
+function attachmentSummaryKeys(summaries: UserMessageAttachmentSummary[]): string[] {
+  const seen = new Map<string, number>();
+  return summaries.map((summary) => {
+    const base = `${summary.type}:${summary.url ?? summary.fileName ?? summary.title ?? ""}`;
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    return `${base}:${count}`;
+  });
+}
+
+// The daemon's record of what a message carried, shown when this client has no local copy:
+// mail from a Swarm seat, or a message sent from another client or before a reload.
+function AttachmentSummaryPills({
+  summaries,
+  localCount,
+  style,
+}: {
+  summaries: UserMessageAttachmentSummary[] | undefined;
+  localCount: number;
+  style: StyleProp<ViewStyle>;
+}) {
+  const { t } = useTranslation();
+  if (localCount > 0 || !summaries || summaries.length === 0) return null;
+  const keys = attachmentSummaryKeys(summaries);
+  return (
+    <View style={style} testID="user-message-attachment-summaries">
+      {summaries.map((summary, position) => {
+        const content = getAttachmentSummaryPillContent(summary, t);
+        return (
+          <AttachmentFrame key={keys[position]}>
+            <AttachmentLabel
+              icon={content.icon}
+              title={content.title}
+              subtitle={content.subtitle}
+            />
+          </AttachmentFrame>
+        );
+      })}
+    </View>
+  );
+}
+
 export const UserMessage = memo(function UserMessage({
   sender,
   serverId,
@@ -534,6 +580,7 @@ export const UserMessage = memo(function UserMessage({
   sourceMessage = rawMessage,
   images = [],
   attachments = [],
+  attachmentSummaries,
   timestamp,
   capabilities,
   client,
@@ -652,6 +699,11 @@ export const UserMessage = memo(function UserMessage({
           })}
         </View>
       ) : null}
+      <AttachmentSummaryPills
+        summaries={attachmentSummaries}
+        localCount={images.length + attachments.length}
+        style={attachmentPreviewContainerStyle}
+      />
     </>
   );
 

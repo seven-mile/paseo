@@ -4,6 +4,7 @@ import {
   buildAgentBranchNameSeed,
   buildAgentPrompt,
   renderPromptAttachmentAsText,
+  summarizePromptAttachments,
 } from "./prompt-attachments.js";
 
 describe("prompt attachments", () => {
@@ -35,6 +36,39 @@ describe("prompt attachments", () => {
       { type: "image", data: "image-data", mimeType: "image/png" },
       issue,
     ]);
+  });
+
+  it("summarizes attachments for the timeline without their bodies", () => {
+    const issue = {
+      type: "github_issue" as const,
+      mimeType: "application/github-issue",
+      number: 55,
+      title: "Issue",
+      url: "https://github.com/getpaseo/paseo/issues/55",
+      body: "Long issue body",
+    };
+    const note = {
+      type: "text" as const,
+      mimeType: "text/plain",
+      title: "Notes",
+      text: "Long note text",
+    };
+
+    expect(
+      summarizePromptAttachments(
+        buildAgentPrompt("hi", [{ data: "aW1hZ2U=", mimeType: "image/png" }], [issue, note]),
+      ),
+    ).toEqual([
+      { type: "image", mimeType: "image/png", size: 6 },
+      {
+        type: "github_issue",
+        title: "Issue",
+        number: 55,
+        url: "https://github.com/getpaseo/paseo/issues/55",
+      },
+      { type: "text", title: "Notes" },
+    ]);
+    expect(summarizePromptAttachments("plain text")).toEqual([]);
   });
 
   it("renders github_pr attachments as readable text", () => {

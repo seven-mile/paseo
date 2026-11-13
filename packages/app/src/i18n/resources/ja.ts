@@ -572,6 +572,7 @@ export const ja: TranslationResources = {
       review: "レビュー",
       commentsOne: "1件のコメント",
       commentsMany: "{{count}}件のコメント",
+      image: "画像",
       textAttachment: "テキスト添付ファイル",
       text: "テキスト",
       file: "ファイル",

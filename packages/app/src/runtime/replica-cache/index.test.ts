@@ -753,6 +753,30 @@ describe("ReplicaCache", () => {
     expect((await reader.readTimeline(SERVER_ID, "agent-1"))?.items).toEqual([pluginItem]);
   });
 
+  it("round-trips the attachment summaries of a user message", async () => {
+    const storage = new MemoryStorage();
+    const writer = createCache(storage);
+    const userItem: StreamItem = {
+      kind: "user_message",
+      id: "m1",
+      messageId: "m1",
+      text: "See attached",
+      attachmentSummaries: [{ type: "image", mimeType: "image/png", size: 2048 }],
+      timestamp: new Date("2026-07-18T08:02:00.000Z"),
+      timelineCursor: { epoch: "epoch-1", seq: 12 },
+    };
+    writer.commitTimeline(SERVER_ID, "agent-1", {
+      agentId: "agent-1",
+      items: [userItem],
+      range: { epoch: "epoch-1", startSeq: 12, endSeq: 12 },
+      hasOlder: true,
+    });
+    await writer.flush();
+
+    const reader = createCache(storage);
+    expect((await reader.readTimeline(SERVER_ID, "agent-1"))?.items).toEqual([userItem]);
+  });
+
   it("drops cached plugin timeline items without a plugin-local id", async () => {
     const storage = new MemoryStorage();
     const writer = createCache(storage);

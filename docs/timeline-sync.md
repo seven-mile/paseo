@@ -231,7 +231,12 @@ Every path that sends a message to an agent — composer send, dictation accept-
 send-now, and the host runtime's automatic queue drain — goes through
 `dispatchComposerAgentMessage` with a submission writer. There is no second transport for the same
 product action: calling `client.sendAgentMessage` directly skips the submitted row and the pending
-footer, and permanently drops attachments because the daemon does not echo them back.
+footer, and leaves the message without its image previews.
+
+The daemon records a summary of each attachment on the canonical `user_message` (`attachments`: kind,
+title, number, file name, size), never its contents. Clients without a local copy, such as another
+device, a reload, or mail from a Swarm seat, draw cards from those summaries. A row that has local
+images or attachments keeps showing those.
 
 A submitted prompt is one `UserMessageItem` row. That row is the authoritative local presentation:
 its stable identity, text, timestamp, images, and attachments do not change when the provider

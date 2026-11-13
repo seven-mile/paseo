@@ -564,6 +564,7 @@ export const zhCN: TranslationResources = {
       review: "审查",
       commentsOne: "1 条评论",
       commentsMany: "{{count}} 条评论",
+      image: "图片",
       textAttachment: "文本附件",
       text: "文本",
       file: "文件",
