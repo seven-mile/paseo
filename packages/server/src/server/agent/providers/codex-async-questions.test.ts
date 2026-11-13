@@ -402,11 +402,37 @@ test("late answers use the existing follow-up prompt and dismissal does not inte
     await finish();
     expect(session.getPendingPermissions()).toHaveLength(1);
     expect(await session.respondToPermission(permission.id, answer)).toEqual({
-      followUpPrompt: "Answers to your questions:\n\nWhich color?\nGreen",
+      followUpPrompt: "Answers to your questions (async-question-1):\n\nWhich color?\nGreen",
     });
     expect(appServer.requests().some((request) => request.method === "turn/interrupt")).toBe(false);
   } finally {
     await session.close();
+  }
+});
+
+test("a dismissal tells the agent, during its turn or after it", async () => {
+  const dismissal = "The user dismissed your questions (async-question-1) without answering.";
+  const during = await setup();
+  try {
+    await during.ask();
+    const [permission] = during.session.getPendingPermissions();
+    await during.session.respondToPermission(permission.id, { behavior: "deny" });
+    expect(
+      during.appServer.requests().filter((request) => request.method === "turn/steer"),
+    ).toMatchObject([{ params: { input: [{ type: "text", text: dismissal }] } }]);
+  } finally {
+    await during.session.close();
+  }
+  const after = await setup();
+  try {
+    await after.ask();
+    const [permission] = after.session.getPendingPermissions();
+    await after.finish();
+    expect(await after.session.respondToPermission(permission.id, { behavior: "deny" })).toEqual({
+      followUpPrompt: dismissal,
+    });
+  } finally {
+    await after.session.close();
   }
 });
 
