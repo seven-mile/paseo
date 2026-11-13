@@ -567,6 +567,7 @@ export const ko: TranslationResources = {
       review: "리뷰",
       commentsOne: "댓글 1개",
       commentsMany: "댓글 {{count}}개",
+      image: "이미지",
       textAttachment: "텍스트 첨부",
       text: "텍스트",
       file: "파일",

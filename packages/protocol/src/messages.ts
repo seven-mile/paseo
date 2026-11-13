@@ -712,6 +712,25 @@ const ToolCallTimelineItemPayloadSchema: z.ZodType<ToolCallTimelineItem, unknown
     ToolCallCanceledPayloadSchema,
   ]);
 
+// What a user message carried besides its words, recorded on its timeline row so any client can
+// show it, including clients that did not send it. Names only, never bodies or bytes. type is an
+// agent attachment type, or "image".
+export const UserMessageAttachmentSummarySchema = z.object({
+  type: z.string(),
+  title: z.string().optional(),
+  number: z.number().optional(),
+  forge: z.string().optional(),
+  fileName: z.string().optional(),
+  mimeType: z.string().optional(),
+  size: z.number().optional(),
+  url: z.string().optional(),
+  contextKind: z.string().optional(),
+  commentCount: z.number().optional(),
+  providerLabel: z.string().optional(),
+  identifier: z.string().optional(),
+});
+export type UserMessageAttachmentSummary = z.infer<typeof UserMessageAttachmentSummarySchema>;
+
 // zod-aot 0.20.4 miscompiles this as a nested discriminated union by omitting
 // the inner tool_call branch from the generated outer dispatch.
 export const AgentTimelineItemPayloadSchema: z.ZodType<AgentTimelineItem, unknown> = z.union([
@@ -720,6 +739,8 @@ export const AgentTimelineItemPayloadSchema: z.ZodType<AgentTimelineItem, unknow
     text: z.string(),
     messageId: z.string().optional(),
     clientMessageId: z.string().optional(),
+    // Absent from daemons before attachment summaries, and on messages without any.
+    attachments: z.array(UserMessageAttachmentSummarySchema).optional(),
   }),
   z.object({
     type: z.literal("assistant_message"),

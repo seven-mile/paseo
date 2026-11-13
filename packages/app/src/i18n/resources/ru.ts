@@ -571,6 +571,7 @@ export const ru: TranslationResources = {
       review: "Ревью",
       commentsOne: "1 комментарий",
       commentsMany: "Комментарии: {{count}}",
+      image: "Изображение",
       textAttachment: "Текстовое вложение",
       text: "Текст",
       file: "Файл",

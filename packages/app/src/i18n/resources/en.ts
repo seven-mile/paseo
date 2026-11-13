@@ -563,6 +563,7 @@ export const en = {
       review: "Review",
       commentsOne: "1 comment",
       commentsMany: "{{count}} comments",
+      image: "Image",
       textAttachment: "Text attachment",
       text: "Text",
       file: "File",

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentStreamEventPayload } from "@getpaseo/protocol/messages";
 import type { ThoughtItem } from "@/types/stream";
-import { applyStreamEvent } from "@/types/stream";
+import { applyStreamEvent, createUserMessage } from "@/types/stream";
 
 const baseTimestamp = new Date(0);
 
@@ -198,5 +198,68 @@ describe("applyStreamEvent", () => {
     expect(result.head).toBe(head);
     expect(result.changedTail).toBe(false);
     expect(result.changedHead).toBe(false);
+  });
+
+  it("records the attachment summaries of a canonical user message", () => {
+    const summaries = [
+      { type: "image", mimeType: "image/png", size: 2048 },
+      { type: "github_issue", title: "Crash on start", number: 7 },
+    ];
+    const event: AgentStreamEventPayload = {
+      type: "timeline",
+      provider: "codex",
+      item: { type: "user_message", text: "See attached", messageId: "m1", attachments: summaries },
+    };
+
+    const result = applyStreamEvent({
+      tail: [],
+      head: [],
+      event,
+      timestamp: baseTimestamp,
+      source: "canonical",
+    });
+
+    expect(result.tail).toMatchObject([
+      { kind: "user_message", text: "See attached", attachmentSummaries: summaries },
+    ]);
+  });
+
+  it("keeps the local attachments of a submitted message and adds its summaries", () => {
+    const attachment = {
+      type: "github_issue" as const,
+      mimeType: "application/github-issue" as const,
+      number: 7,
+      title: "Crash on start",
+      url: "https://github.com/getpaseo/paseo/issues/7",
+    };
+    const submitted = createUserMessage({
+      clientMessageId: "c1",
+      text: "See attached",
+      timestamp: baseTimestamp,
+      attachments: [attachment],
+    });
+    const summaries = [{ type: "github_issue", title: "Crash on start", number: 7 }];
+
+    const result = applyStreamEvent({
+      tail: [submitted],
+      head: [],
+      event: {
+        type: "timeline",
+        provider: "codex",
+        item: {
+          type: "user_message",
+          text: "See attached",
+          messageId: "m1",
+          clientMessageId: "c1",
+          attachments: summaries,
+        },
+      },
+      timestamp: baseTimestamp,
+      source: "canonical",
+    });
+
+    expect(result.tail).toMatchObject([
+      { kind: "user_message", attachments: [attachment], attachmentSummaries: summaries },
+    ]);
   });
 });

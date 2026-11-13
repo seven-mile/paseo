@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   AgentStatusSchema,
   AgentTimelineItemPayloadSchema,
+  UserMessageAttachmentSummarySchema,
   WorkspaceGitHubRuntimePayloadSchema,
 } from "@getpaseo/protocol/messages";
 import { AgentProviderSchema } from "@getpaseo/protocol/provider-manifest";
@@ -119,6 +120,7 @@ const StoredTimelineItemSchema = z.discriminatedUnion("kind", [
     clientMessageId: z.string().optional(),
     messageId: z.string().optional(),
     text: z.string(),
+    attachmentSummaries: z.array(UserMessageAttachmentSummarySchema).optional(),
   }),
   z.strictObject({
     ...TimelineItemBaseShape,
@@ -449,6 +451,7 @@ function serializeTimelineItem(item: StreamItem): StoredTimelineItem | null {
         ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
         ...(item.messageId ? { messageId: item.messageId } : {}),
         text: item.text,
+        ...(item.attachmentSummaries ? { attachmentSummaries: item.attachmentSummaries } : {}),
       };
     case "assistant_message":
       return {
@@ -539,6 +542,7 @@ function deserializeBuiltinTimelineItem(
         ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
         ...(item.messageId ? { messageId: item.messageId } : {}),
         text: item.text,
+        ...(item.attachmentSummaries ? { attachmentSummaries: item.attachmentSummaries } : {}),
       };
     case "assistant_message":
       return {
