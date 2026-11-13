@@ -110,7 +110,10 @@ export class CodexAsyncQuestions {
     if (!record || record.resolution !== undefined)
       throw new Error("Question is no longer pending");
     let resolution: QuestionRecord["resolution"] = "dismissed";
-    let prompt: string | undefined;
+    // The id lets the agent match an answer, or a dismissal, to the questions it asked; it may
+    // have asked more than once.
+    let prompt: string | undefined =
+      `The user dismissed your questions (${record.item.id}) without answering.`;
     if (response.behavior === "allow") {
       const answers = z.record(z.string(), z.string()).parse(response.updatedInput?.answers);
       resolution = record.item.questions.map((_, index) => {
@@ -120,7 +123,7 @@ export class CodexAsyncQuestions {
       });
       const values = resolution;
       prompt =
-        "Answers to your questions:\n\n" +
+        `Answers to your questions (${record.item.id}):\n\n` +
         record.item.questions
           .map((question, index) => `${question.title}\n${values[index]}`)
           .join("\n\n");

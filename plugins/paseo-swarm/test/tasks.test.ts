@@ -411,6 +411,50 @@ test("a human note goes to the owner with copies to the seats it names", async (
   );
 });
 
+test("a human reply to a choice names the question and the option it picked", async (t) => {
+  const { call, mailTo } = setup(t);
+  await seed({ agents: [planner, lead, ops, dev] });
+  await call(createTaskRpc, create({}));
+  const choice = await call<{ id: string }>(appendActivityRpc, {
+    taskId: "fix-login",
+    actorName: "planner.lead",
+    kind: "question",
+    body: "Beta has the fix; stable ships Monday.",
+    data: {
+      action: {
+        type: "choice",
+        prompt: "Which release\nchannel?",
+        options: [
+          { id: "beta", label: "Beta" },
+          { id: "stable", label: "Stable" },
+        ],
+      },
+    },
+  });
+  const before = mailTo(lead).length;
+  await call(appendHumanActivityRpc, {
+    taskId: "fix-login",
+    kind: "human-response",
+    body: "Selected: Beta",
+    replyTo: choice.id,
+    responseProfile: "decision",
+    data: { selectedOption: "beta" },
+  });
+  const [reply] = mailTo(lead).slice(before);
+  assert.match(reply, new RegExp(`reply-to="${choice.id}"`));
+  assert.match(reply, /question="Which release channel\?"/);
+  assert.match(reply, /selected-option="beta"/);
+
+  // A note that answers no choice carries neither.
+  await call(appendHumanActivityRpc, {
+    taskId: "fix-login",
+    kind: "human-note",
+    body: "Thanks.",
+  });
+  const note = mailTo(lead).at(-1)!;
+  assert.doesNotMatch(note, /question=|selected-option=/);
+});
+
 test("a retiring owner's open Tasks move to the nearest seat above it that stays", async (t) => {
   setup(t);
   await seed({ agents: [planner, lead, ops, dev] });

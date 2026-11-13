@@ -86,6 +86,7 @@ import {
   SWARM_FEATURES,
 } from "../shared/swarm";
 import type {
+  Activity,
   AgentConfig,
   AgentRecord,
   AudienceEntry,
@@ -95,7 +96,12 @@ import type {
   SwarmRecord,
   Task,
 } from "../shared/models";
-import { agentQualifiedName, currentOccupant, mailboxMessageStatus } from "../shared/models";
+import {
+  agentQualifiedName,
+  choiceActionSchema,
+  currentOccupant,
+  mailboxMessageStatus,
+} from "../shared/models";
 
 const now = () => new Date().toISOString();
 const id = (prefix: string) => `${prefix}-${randomUUID()}`;
@@ -484,6 +490,32 @@ async function sendWithCopies(
   return { message: current(message), copies: copies.map(current), audience };
 }
 
+// Envelope attribute values are single-line, so a long question is cut.
+const QUESTION_ATTRIBUTE_LIMIT = 200;
+
+// What a human reply to a choice answers: the choice's question, and the id of the option it
+// picked. A reader that took the seat after the choice was raised learns what was asked without
+// reading the Task first.
+function choiceReply(
+  swarmId: string,
+  reply: Pick<Activity, "replyTo" | "data">,
+): { question: string; selectedOption: string | undefined } | null {
+  if (!reply.replyTo) return null;
+  const target = store
+    .read()
+    .activities.find((activity) => activity.swarmId === swarmId && activity.id === reply.replyTo);
+  const choice = choiceActionSchema.safeParse(target?.data.action);
+  if (!choice.success) return null;
+  const line = choice.data.prompt.replace(/\s+/g, " ").trim();
+  const question =
+    line.length > QUESTION_ATTRIBUTE_LIMIT
+      ? `${line.slice(0, QUESTION_ATTRIBUTE_LIMIT - 1)}…`
+      : line;
+  const selected = reply.data.selectedOption;
+  const selectedOption = choice.data.options.find((option) => option.id === selected)?.id;
+  return { question, selectedOption };
+}
+
 export function registerOperations(server: Pick<PluginServerContext, "handle">): void {
   registerTasks(server);
   // The board of one swarm, or of every swarm when the request names none, as before swarms.
@@ -781,6 +813,7 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
       });
       if (!owner) return { ...result, notificationWarning: ownerError };
       const activity = result;
+      const answered = choiceReply(swarmId, activity);
       const { message } = await sendWithCopies(
         {
           swarmId,
@@ -797,6 +830,8 @@ export function registerOperations(server: Pick<PluginServerContext, "handle">):
             "activity-kind": activity.kind,
             "reply-to": activity.replyTo,
             "response-profile": activity.responseProfile,
+            question: answered?.question,
+            "selected-option": answered?.selectedOption,
           },
         },
         context,
